@@ -1,6 +1,6 @@
-import { translate as localize } from './public/i18n.js';
+const defaultTranslate = (source, values = {}) => source.replace(/\{(\w+)\}/g, (_, key) => String(values[key] ?? ''));
 
-export function updateFailureDetail(error, translate = (source, values) => localize('id', source, values)) {
+export function updateFailureDetail(error, translate = defaultTranslate) {
   const text = [error?.code, error?.cause?.code, error?.message, error?.cause?.message].filter(Boolean).join(' ');
   if (error?.code === 'RELEASE_NOT_FOUND') return translate('Rilis publik belum tersedia atau repositori rilis tidak dapat diakses.');
   if (/ENOTFOUND|EAI_AGAIN|ENETUNREACH|ENETDOWN|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|ETIMEDOUT|ECONNRESET|UND_ERR_CONNECT_TIMEOUT|AbortError|TimeoutError/i.test(text))
@@ -14,7 +14,7 @@ export function updateFailureDetail(error, translate = (source, values) => local
   return translate('Layanan pembaruan sedang bermasalah. Coba lagi nanti.');
 }
 
-export function startUpdates({ app, updater, dialog, getWindow, beforeInstall, translate = (source, values) => localize('id', source, values), platform = process.platform, arch = process.arch, fetchRelease = fetch, openRelease = async () => {} }) {
+export function startUpdates({ app, updater, dialog, getWindow, beforeInstall, translate = defaultTranslate, platform = process.platform, arch = process.arch, fetchRelease = fetch, openRelease = async () => {} }) {
   const t = translate;
   const releasePage = 'https://github.com/iyansanjaya/lumilan-chat/releases/latest';
   async function checkMacRelease(manual) {

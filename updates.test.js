@@ -44,6 +44,7 @@ test('pesan kegagalan update membedakan internet, metadata, dan izin', () => {
   assert.match(updateFailureDetail(new Error('HttpError: 404 Not Found')), /Metadata pembaruan/);
   assert.match(updateFailureDetail(new Error('403 Forbidden')), /Akses/);
   assert.doesNotMatch(updateFailureDetail(new Error('HttpError: 404 Not Found')), /Koneksi internet/);
+  assert.match(updateFailureDetail({ code: 'ENOTFOUND' }, source => `Translated: ${source}`), /^Translated: /);
 });
 
 
