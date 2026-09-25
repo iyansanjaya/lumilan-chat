@@ -46,6 +46,12 @@ Hasilnya berada di `dist/`. `bun run dist` hanya membangun paket lokal dan **tid
 | macOS | `Lumilan Chat-<versi>.dmg` dan arsip ZIP untuk updater |
 | Linux | `Lumilan Chat-<versi>.AppImage` |
 
+### Build macOS dan Linux tanpa perangkat sendiri
+
+Setelah workflow tersedia di cabang `master` repo privat, buka tab **Actions** → **Build macOS and Linux** → **Run workflow**. Unduh paket dari bagian **Artifacts** pada run tersebut: `lumilan-chat-macos-x64` untuk **Mac Intel**, `lumilan-chat-macos-arm64` untuk **Mac Apple Silicon**, atau `lumilan-chat-linux-x64` untuk Linux x64. Masing-masing artefak macOS berisi DMG dan ZIP. Workflow menjalankan tes dan menyimpan paket di repo privat; tidak memerlukan `GH_TOKEN` dan tidak menerbitkannya ke repo rilis publik.
+
+Paket Mac Intel tetap memerlukan macOS 13 (Ventura) atau lebih baru karena aplikasi memakai Electron 44. Paket macOS dari workflow ini belum ditandatangani atau dinotariskan. Gunakan untuk memeriksa hasil build; siapkan sertifikat Apple dan proses notarization sebelum membagikannya sebagai rilis macOS. Uji AppImage di lingkungan Linux sebelum menerbitkannya.
+
 Nama berkas mengikuti versi dan arsitektur yang dipilih oleh electron-builder; lihat isi folder `dist` setelah build. Jika hanya ingin menjalankan aplikasi dari folder hasil kemasan tanpa membuat installer, gunakan `bun run pack`.
 
 **Saat merilis pembaruan**, naikkan nilai `version` di `package.json`, lalu sinkronkan lockfile sebelum build:

@@ -1,0 +1,65 @@
+name: Build macOS and Linux
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            platform: macos
+            arch: x64
+            files: |
+              dist/*.dmg
+              dist/*.zip
+          - os: macos-15
+            platform: macos
+            arch: arm64
+            files: |
+              dist/*.dmg
+              dist/*.zip
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+            files: dist/*.AppImage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - name: Verify runner architecture
+        shell: bash
+        run: test "$(node -p process.arch)" = "${{ matrix.arch }}"
+      - run: bun ci
+      - run: bun run test
+      - name: Install Linux build dependency
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libopenjp2-tools
+      - name: Build package
+        run: bun run dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Verify packages
+        shell: bash
+        run: |
+          if [[ "${{ matrix.platform }}" == "macos" ]]; then
+            compgen -G 'dist/*.dmg'
+            compgen -G 'dist/*.zip'
+          else
+            compgen -G 'dist/*.AppImage'
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lumilan-chat-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
