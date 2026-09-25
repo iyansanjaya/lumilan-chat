@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { multiaddr } from '@multiformats/multiaddr';
 import { LumilanPeer } from './peer.js';
 
 async function until(predicate, timeout = 5000) {
@@ -24,6 +25,10 @@ test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', a
     await c.start();
     a.rename('Andi');
     b.rename('Budi');
+    assert.equal(a.snapshot().peers.length, 0);
+    let refused = false;
+    await a.handleProfile({ abort: () => { refused = true; } }, { remotePeer: b.node.peerId, remoteAddr: multiaddr('/ip4/8.8.8.8/tcp/1234') });
+    assert.equal(refused, true);
     assert.equal(a.snapshot().peers.length, 0);
     a.discovered.set(b.id, b.addresses);
     await a.probePeer(b.id);
