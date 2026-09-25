@@ -17,6 +17,7 @@ test('pembaruan diperiksa, diunduh, dan hanya dipasang setelah pengguna memilih 
     dialog: { showMessageBox: async (_window, options) => { dialogs.push(options); return { response }; } },
     getWindow: () => ({}),
     beforeInstall: () => { quitting++; },
+    platform: 'win32',
   });
 
   assert.equal(updater.autoDownload, true);
