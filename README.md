@@ -4,11 +4,11 @@ Lumilan Chat adalah aplikasi pesan antarperangkat di jaringan lokal untuk Window
 
 ## Menjalankan aplikasi
 
-Siapkan Node.js 22 atau lebih baru dan npm. Jalankan dari folder Lumilan Chat:
+Siapkan Node.js 22 atau lebih baru dan bun. Jalankan dari folder Lumilan Chat:
 
 ```sh
-npm ci
-npm start
+bun ci
+bun start
 ```
 
 Jika Lumilan Chat yang terpasang sudah berjalan, keluar dahulu melalui menu tray. Lumilan Chat hanya mengizinkan satu instance pada satu perangkat.
@@ -24,7 +24,7 @@ Tidak ada langkah pemasangan atau persetujuan. Ruang umum mengirim ke semua pera
 
 ## Pembaruan aplikasi
 
-Lumilan Chat yang **sudah dipasang** memeriksa pembaruan saat mulai berjalan dan setiap enam jam. Jika versi baru selesai diunduh, Lumilan Chat menawarkan **Nanti** atau **Mulai ulang dan pasang**. Aplikasi tidak memasang pembaruan tanpa pilihan tersebut. Pemeriksaan manual tersedia melalui ikon tray → **Periksa pembaruan**. Saat dijalankan dengan `npm start`, pemeriksaan otomatis tidak aktif.
+Lumilan Chat yang **sudah dipasang** memeriksa pembaruan saat mulai berjalan dan setiap enam jam. Jika versi baru selesai diunduh, Lumilan Chat menawarkan **Nanti** atau **Mulai ulang dan pasang**. Aplikasi tidak memasang pembaruan tanpa pilihan tersebut. Pemeriksaan manual tersedia melalui ikon tray → **Periksa pembaruan**. Saat dijalankan dengan `bun start`, pemeriksaan otomatis tidak aktif.
 
 Paket pembaruan diambil dari [GitHub Releases Lumilan Chat](https://github.com/iyansanjaya/lumilan-chat/releases). Aplikasi hanya akan menemukan versi yang **sudah diterbitkan**, bukan draft. Chat dan penemuan perangkat tetap berjalan langsung melalui LAN; internet hanya diperlukan untuk mengambil pembaruan aplikasi.
 
@@ -33,12 +33,12 @@ Paket pembaruan diambil dari [GitHub Releases Lumilan Chat](https://github.com/i
 Jalankan proses build **di sistem operasi yang menjadi target**: Windows untuk installer Windows, macOS untuk DMG, dan Linux untuk AppImage. Dari folder Lumilan Chat:
 
 ```sh
-npm ci
-npm test
-npm run dist
+bun ci
+bun run test
+bun run dist
 ```
 
-Hasilnya berada di `dist/`. `npm run dist` hanya membangun paket lokal dan **tidak** mengunggahnya ke GitHub:
+Hasilnya berada di `dist/`. `bun run dist` hanya membangun paket lokal dan **tidak** mengunggahnya ke GitHub:
 
 | Sistem | Berkas hasil |
 | --- | --- |
@@ -46,20 +46,32 @@ Hasilnya berada di `dist/`. `npm run dist` hanya membangun paket lokal dan **tid
 | macOS | `Lumilan Chat-<versi>.dmg` dan arsip ZIP untuk updater |
 | Linux | `Lumilan Chat-<versi>.AppImage` |
 
-Nama berkas mengikuti versi dan arsitektur yang dipilih oleh electron-builder; lihat isi folder `dist` setelah build. Jika hanya ingin menjalankan aplikasi dari folder hasil kemasan tanpa membuat installer, gunakan `npm run pack`.
+Nama berkas mengikuti versi dan arsitektur yang dipilih oleh electron-builder; lihat isi folder `dist` setelah build. Jika hanya ingin menjalankan aplikasi dari folder hasil kemasan tanpa membuat installer, gunakan `bun run pack`.
 
 **Saat merilis pembaruan**, naikkan nilai `version` di `package.json`, lalu sinkronkan lockfile sebelum build:
 
 ```sh
-npm install --package-lock-only
-npm ci
-npm test
-npm run dist
+bun install --package-lock-only
+bun ci
+bun run test
+bun run dist
 ```
 
 Jika versi tidak dinaikkan, updater tidak akan mengenali paket sebagai pembaruan. Perubahan kode tidak otomatis memperbarui aplikasi yang sudah terpasang.
 
-Sebelum menerbitkan, pastikan kode sumber versi tersebut sudah ada di repo `iyansanjaya/lumilan-chat` dan buat tag `v<versi>` yang menunjuk ke commit itu. Jalankan `npm run release` pada **masing-masing sistem operasi target** dengan `GH_TOKEN` yang memiliki izin menulis rilis ke repo tersebut. Perintah itu mengunggah installer, arsip yang diperlukan updater, dan metadata seperti `latest.yml` ke **draft release**. Pastikan semua paket memiliki nomor versi yang sama, periksa isi draft, lalu terbitkan rilis di GitHub. Jangan memasukkan token ke kode atau README. Repo rilis harus dapat diakses oleh pengguna aplikasi; repo privat memerlukan autentikasi pada setiap perangkat dan tidak cocok untuk distribusi ini.
+Sebelum menerbitkan, simpan kode sumber dan tag `v<versi>` di repo privat `iyansanjaya/lumilan`. Jalankan `bun run release` pada **masing-masing sistem operasi target** dengan `GH_TOKEN` yang memiliki izin **Contents: Read and write** untuk repo rilis publik `iyansanjaya/lumilan-chat`. Repo rilis publik digunakan untuk installer dan metadata pembaruan. Perintah itu mengunggah installer, arsip yang diperlukan updater, dan metadata seperti `latest.yml` ke **draft release**. Pastikan semua paket memiliki nomor versi yang sama, periksa isi draft, lalu terbitkan rilis di GitHub.
+
+Jika menggunakan **Git Bash**, masukkan token di terminal yang sama sebelum menjalankan rilis:
+
+```bash
+read -rsp "GitHub token: " GH_TOKEN
+printf '\n'
+export GH_TOKEN
+bun run release
+unset GH_TOKEN
+```
+
+Token tidak ditampilkan saat diketik. Jangan memasukkan token ke kode, README, atau perintah yang tersimpan dalam riwayat shell. Repo rilis harus dapat diakses oleh pengguna aplikasi; repo privat memerlukan autentikasi pada setiap perangkat dan tidak cocok untuk distribusi ini.
 
 Installer 0.3.0 ini adalah versi pertama yang memiliki updater. Versi 0.2.0 dan lebih lama tetap perlu diperbarui **sekali secara manual**. Setelah itu, pembaruan yang diterbitkan di GitHub dapat diunduh dan dipasang dari aplikasi. **Jangan hapus folder data aplikasi**: identitas, daftar perangkat yang pernah ditemukan, dan riwayat tersimpan terpisah dari berkas aplikasi.
 
