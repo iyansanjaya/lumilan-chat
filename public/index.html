@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1e1f21">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Lumilan Chat — Pesan di jaringan lokal</title>
+  <link rel="preload" href="/fonts/PublicSans.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body class="show-list">
+  <div class="app-shell" id="app" hidden>
+    <header class="topbar">
+      <div class="topbar-brand"><span class="brand-icon" aria-hidden="true">L</span><strong>Lumilan Chat</strong></div>
+      <div class="topbar-current">Pesan</div>
+      <div class="topbar-account">
+        <span class="network-label"><span class="status-dot"></span> Jaringan lokal</span>
+        <button class="icon-button notification-toggle" id="notifications-button" type="button" aria-label="Pesan belum dibaca" title="Pesan belum dibaca"><span data-icon="Bell"></span><span class="top-unread" id="top-unread" hidden></span></button>
+        <button class="icon-button settings-toggle" id="settings-button" type="button" aria-label="Pengaturan aplikasi" title="Pengaturan aplikasi"><span data-icon="Settings"></span></button>
+        <span class="avatar my-avatar" id="my-avatar" aria-hidden="true">L</span>
+        <strong id="my-name">Anda</strong>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar" aria-label="Daftar percakapan">
+        <div class="sidebar-heading"><h2>Pesan</h2><span id="people-count" aria-label="Orang aktif">0 aktif</span></div>
+        <label class="search-box">
+          <span data-icon="Search"></span>
+          <input id="people-search" type="search" placeholder="Cari percakapan" aria-label="Cari percakapan">
+          <kbd>/</kbd>
+        </label>
+        <div class="filter-bar" aria-label="Filter percakapan">
+          <button class="filter active" type="button" data-filter="all" aria-pressed="true">Semua</button>
+          <button class="filter" type="button" data-filter="private" aria-pressed="false">Pribadi</button>
+          <button class="filter" type="button" data-filter="room" aria-pressed="false">Ruang</button>
+        </div>
+        <div class="sidebar-list">
+          <button class="thread-item room-item active" id="room-button" type="button">
+            <span class="room-avatar" aria-hidden="true"><span data-icon="Hashtag"></span></span>
+            <span class="item-copy"><strong>Ruang umum</strong><small>Perangkat aktif di LAN</small></span>
+            <span class="unread-badge" id="room-unread" hidden></span>
+          </button>
+          <div class="list-caption" id="people-caption">PESAN PRIBADI</div>
+          <div class="people-list" id="people-list"></div>
+        </div>
+        <div class="sidebar-footer"><span class="status-dot"></span><span>Perangkat di LAN · Koneksi terenkripsi</span><button class="mobile-account-action" id="mobile-settings-button" type="button">Pengaturan</button></div>
+      </aside>
+
+      <main class="conversation">
+        <header class="conversation-header">
+          <button class="icon-button back-button" id="back-button" type="button" aria-label="Kembali ke daftar"><span data-icon="ArrowLeft"></span></button>
+          <span class="header-avatar" id="header-avatar" aria-hidden="true"><span data-icon="Hashtag"></span></span>
+          <div class="header-copy"><h1 id="thread-title">Ruang umum</h1><p id="thread-subtitle">Percakapan untuk semua orang</p></div>
+          <div class="connection-badge" id="connection-badge"><span class="status-dot"></span><span id="connection-text">Terhubung</span></div>
+        </header>
+        <section class="messages" id="messages" aria-label="Pesan" aria-live="polite"></section>
+        <div class="composer-wrap">
+          <form class="composer" id="message-form">
+            <button class="attach-button" id="attach-button" type="button" title="Kirim file" aria-label="Kirim file">
+              <span data-icon="Paperclip"></span>
+            </button>
+            <input id="file-input" type="file" hidden>
+            <textarea id="message-input" rows="1" maxlength="4000" placeholder="Tulis pesan..." aria-label="Tulis pesan"></textarea>
+            <button class="send-button" id="send-button" type="submit" aria-label="Kirim pesan">
+              <span data-icon="Send"></span>
+            </button>
+          </form>
+          <div class="composer-hint"><span>Enter untuk kirim · Shift + Enter untuk baris baru</span><span>File maks. 20 MB</span></div>
+        </div>
+      </main>
+
+      <aside class="details" aria-label="Detail percakapan">
+        <div class="detail-intro"><span class="detail-avatar" id="detail-avatar" aria-hidden="true"><span data-icon="Hashtag"></span></span><div><h2 id="detail-title">Ruang umum</h2><p id="detail-subtitle">Seluruh jaringan</p></div></div>
+        <section class="detail-section"><h3>Ringkasan</h3><div class="summary-grid"><div><strong id="member-stat">0</strong><span>Orang aktif</span></div><div><strong id="message-stat">0</strong><span>Pesan</span></div></div></section>
+        <section class="detail-section"><div class="section-heading"><h3>File dibagikan</h3><span id="file-count">0</span></div><div id="recent-files" class="detail-list"></div></section>
+        <section class="detail-section"><h3>Orang aktif</h3><div id="active-members" class="detail-list"></div></section>
+        <div class="details-footer">Percakapan pribadi tersimpan di perangkat ini. Ruang Umum berlaku untuk sesi jaringan saat ini.</div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="join-screen" id="join-screen" hidden>
+    <div class="join-card">
+      <div class="join-brand"><span class="brand-icon" aria-hidden="true">L</span><strong>Lumilan Chat</strong></div>
+      <div class="join-content"><span class="join-eyebrow"><span class="status-dot"></span> JARINGAN LOKAL</span><h1 id="auth-title">Selamat datang di Lumilan Chat.</h1><p id="auth-description">Pilih nama yang akan terlihat oleh orang lain. Identitas perangkat dibuat otomatis dan disimpan di komputer ini.</p>
+        <form id="join-form">
+          <label for="join-name">Nama Anda</label><input id="join-name" name="name" type="text" maxlength="32" autocomplete="nickname" placeholder="Nama yang terlihat oleh orang lain" required>
+          <button class="primary-button" type="submit">Mulai menggunakan Lumilan Chat</button>
+        </form>
+      </div>
+      <div class="join-footer">Tanpa akun atau server. Perangkat Lumilan Chat di LAN dapat langsung mengirim pesan dan file.</div>
+    </div>
+  </div>
+  <dialog id="inbox-dialog" class="account-dialog inbox-dialog" aria-labelledby="inbox-title">
+    <div class="dialog-heading"><h2 id="inbox-title">Pesan belum dibaca</h2><button class="icon-button dialog-close" id="inbox-close" type="button" aria-label="Tutup"><span data-icon="X"></span></button></div>
+    <p id="inbox-empty">Semua pesan sudah dibaca.</p>
+    <div id="inbox-list" class="inbox-list"></div>
+  </dialog>
+  <dialog id="settings-dialog" class="account-dialog settings-dialog" aria-labelledby="settings-title">
+    <div class="dialog-heading"><h2 id="settings-title">Pengaturan</h2><button class="icon-button dialog-close" id="settings-close" type="button" aria-label="Tutup"><span data-icon="X"></span></button></div>
+    <section class="settings-section" aria-labelledby="profile-title">
+      <h3 id="profile-title">Profil saya</h3>
+      <form id="profile-form">
+        <div class="avatar-picker"><span class="avatar profile-avatar" id="profile-avatar" aria-hidden="true"></span><label for="avatar-input">Unggah foto profil</label><input id="avatar-input" type="file" accept="image/png,image/jpeg,image/webp"><button id="remove-avatar-button" type="button">Hapus foto</button></div>
+        <label for="profile-name">Nama</label><input id="profile-name" type="text" maxlength="32" required>
+        <label for="profile-status">Status</label><select id="profile-status"><option value="active">Aktif</option><option value="busy">Sibuk</option><option value="away">Pergi</option><option value="dnd">Jangan ganggu</option></select>
+        <label for="profile-about">Tentang saya</label><input id="profile-about" type="text" maxlength="100" placeholder="Tulis keterangan singkat">
+        <div class="dialog-actions"><button type="submit">Simpan profil</button></div>
+      </form>
+    </section>
+    <section class="settings-section" aria-labelledby="display-settings-title">
+      <h3 id="display-settings-title">Tampilan</h3>
+      <button class="secondary-action" id="theme-button" type="button"><span data-icon="Moon"></span><span id="theme-label">Ganti tema</span></button>
+    </section>
+    <section class="settings-section" aria-labelledby="notification-settings-title">
+      <h3 id="notification-settings-title">Notifikasi</h3>
+      <p id="notification-status">Pesan baru akan tampil melalui notifikasi sistem.</p>
+      <form id="notifications-form">
+        <label class="setting-row"><span><strong>Notifikasi desktop</strong><small>Tampilkan saat Anda berada di luar percakapan.</small></span><input id="notify-enabled" type="checkbox"></label>
+        <label class="setting-row"><span><strong>Pratinjau isi pesan</strong><small>Nama pengirim dan isi pesan dapat terlihat di layar terkunci.</small></span><input id="notify-preview" type="checkbox"></label>
+        <label class="setting-row"><span><strong>Tanpa suara</strong><small>Gunakan notifikasi senyap dari sistem operasi.</small></span><input id="notify-silent" type="checkbox"></label>
+        <label class="setting-row"><span><strong>Tetap berjalan di tray</strong><small>Terima pesan saat jendela Lumilan Chat ditutup.</small></span><input id="notify-background" type="checkbox"></label>
+        <div class="dialog-actions"><button id="test-notification-button" type="button">Uji notifikasi sistem</button><button type="submit">Simpan notifikasi</button></div>
+      </form>
+    </section>
+    <section class="settings-section" aria-labelledby="updates-title">
+      <h3 id="updates-title">Pembaruan aplikasi</h3>
+      <button class="secondary-action" id="check-updates-button" type="button">Periksa pembaruan</button>
+    </section>
+    <button class="quit-action" id="quit-button" type="button">Keluar dari Lumilan Chat</button>
+    <div class="app-info"><strong>Lumilan Chat <span id="app-version"></span></strong><span>Dikembangkan oleh <a href="https://iyansanjaya.com/" target="_blank" rel="noopener noreferrer">Iyan Sanjaya</a></span></div>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

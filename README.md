@@ -48,9 +48,39 @@ Hasilnya berada di `dist/`. `bun run dist` hanya membangun paket lokal dan **tid
 
 ### Build macOS dan Linux tanpa perangkat sendiri
 
-Setelah workflow tersedia di cabang `master` repo privat, buka tab **Actions** → **Build macOS and Linux** → **Run workflow**. Unduh paket dari bagian **Artifacts** pada run tersebut: `lumilan-chat-macos-x64` untuk **Mac Intel**, `lumilan-chat-macos-arm64` untuk **Mac Apple Silicon**, atau `lumilan-chat-linux-x64` untuk Linux x64. Masing-masing artefak macOS berisi DMG dan ZIP. Workflow menjalankan tes dan menyimpan paket di repo privat; tidak memerlukan `GH_TOKEN` dan tidak menerbitkannya ke repo rilis publik.
+Setelah workflow tersedia di cabang `master` repo privat, buka tab **Actions** → **Build macOS and Linux** → **Run workflow**. Unduh paket dari bagian **Artifacts** pada run tersebut: `lumilan-chat-macos-x64` untuk **Mac Intel**, `lumilan-chat-macos-arm64` untuk **Mac Apple Silicon**, atau `lumilan-chat-linux-x64` untuk Linux x64. Masing-masing artefak macOS berisi DMG dan ZIP. Workflow memeriksa arsitektur binary di kedua paket sebelum mengunggahnya. Workflow menjalankan tes dan menyimpan paket di repo privat; tidak memerlukan `GH_TOKEN` dan tidak menerbitkannya ke repo rilis publik.
 
-Paket Mac Intel tetap memerlukan macOS 13 (Ventura) atau lebih baru karena aplikasi memakai Electron 44. Paket macOS dari workflow ini belum ditandatangani atau dinotariskan. Gunakan untuk memeriksa hasil build; siapkan sertifikat Apple dan proses notarization sebelum membagikannya sebagai rilis macOS. Uji AppImage di lingkungan Linux sebelum menerbitkannya.
+Paket Mac Intel tetap memerlukan macOS 13 (Ventura) atau lebih baru karena aplikasi memakai Electron 44. Secara bawaan workflow menghasilkan paket macOS tanpa tanda tangan. Untuk rilis publik, jalankan ulang workflow dengan opsi **Sign and notarize macOS packages** setelah semua secret Apple tersedia. Uji AppImage di lingkungan Linux sebelum menerbitkannya.
+
+### Tanda tangan aplikasi macOS
+
+Tanda tangan digital menghubungkan aplikasi dengan identitas penerbit dan menunjukkan bahwa paket belum diubah. Notarization adalah pemeriksaan terpisah oleh Apple, lalu tiketnya ditempelkan pada aplikasi. Untuk DMG/ZIP yang didistribusikan langsung dan agar notifikasi native Electron di macOS berfungsi, gunakan sertifikat **Developer ID Application** dari Apple Developer Program. Sertifikat **Developer ID Installer** hanya diperlukan bila nanti membuat paket PKG. GH_TOKEN untuk GitHub Releases bukan sertifikat penandatanganan.
+
+Anda tidak perlu memiliki Mac sendiri untuk proses build: GitHub Actions memakai runner macOS Intel dan Apple Silicon. Yang tetap dibutuhkan adalah keanggotaan Apple Developer Program, sertifikat beserta private key dalam berkas `.p12`, dan kredensial notarization. Berkas `.cer` saja tidak cukup untuk menandatangani aplikasi.
+
+1. Buat sertifikat **Developer ID Application** di [Apple Developer Certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates). Simpan private key dengan aman dan ekspor sertifikat bersama key sebagai `.p12` dengan kata sandi. Cara termudah adalah memakai Keychain Access pada Mac yang dapat Anda akses sementara. Bila hanya ada Windows, CSR dan `.p12` juga dapat dibuat dengan OpenSSL; pastikan private key yang dipakai untuk CSR sama dengan yang dimasukkan ke `.p12`.
+2. Pada repo sumber **privat** `iyansanjaya/lumilan`, buka **Settings > Secrets and variables > Actions > New repository secret**. Tambahkan `MAC_CSC_LINK` (isi base64 dari berkas `.p12`), `MAC_CSC_KEY_PASSWORD` (kata sandi `.p12`), `APPLE_ID` (email Apple Account), `APPLE_APP_SPECIFIC_PASSWORD` (buat di pengaturan Apple Account, bukan kata sandi utama), dan `APPLE_TEAM_ID` (lihat Membership details pada Apple Developer). Jangan menaruh kelimanya di repo rilis publik atau di source code.
+3. Buka **Actions > Build macOS and Linux > Run workflow**, centang **Sign and notarize macOS packages**, lalu jalankan. Workflow akan gagal bila secret kosong, tanda tangan tidak valid, atau notarization tidak berhasil. Setelah sukses, unduh artefak Intel/Apple Silicon dan uji notifikasi di Mac masing-masing sebelum menerbitkan rilis.
+
+Jika tidak memiliki Mac, Git Bash di Windows biasanya sudah menyertakan OpenSSL. Jalankan perintah berikut di folder aman **di luar repo**. `openssl req` akan meminta kata sandi untuk private key dan data CSR; setelah CSR diunggah ke Apple Developer dan sertifikat `.cer` diunduh, salin `.cer` tersebut ke folder yang sama. Nama berkas `.cer` pada contoh perlu disesuaikan dengan hasil unduhan Apple.
+
+```bash
+openssl req -new -newkey rsa:2048 -sha256 -keyout developer-id.key -out developer-id.certSigningRequest
+openssl x509 -inform DER -in developer_id.cer -out developer-id.pem
+openssl pkcs12 -export -inkey developer-id.key -in developer-id.pem -out developer-id.p12
+```
+
+Perintah pertama dijalankan sebelum langkah membuat sertifikat di portal Apple; dua perintah terakhir dijalankan setelah `.cer` diunduh. `openssl pkcs12` meminta kata sandi ekspor baru: nilai itulah yang dipakai untuk `MAC_CSC_KEY_PASSWORD`.
+
+Di Windows, untuk menyalin isi `.p12` sebagai base64 ke clipboard tanpa mencetaknya di terminal, jalankan PowerShell dari folder berkas tersebut:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path -LiteralPath '.\developer-id.p12').Path)) | Set-Clipboard
+```
+
+Tempel hasilnya sebagai nilai `MAC_CSC_LINK`, lalu kosongkan clipboard. Simpan `.p12` dan private key di lokasi aman di luar repo. Tanda tangan Windows memakai sertifikat **Authenticode** yang berbeda. Untuk sertifikat publik baru, private key umumnya disimpan di token/HSM atau layanan signing sehingga tidak selalu tersedia sebagai berkas `.pfx`. Konfigurasinya mengikuti metode penyedia; `WIN_CSC_LINK` dan `WIN_CSC_KEY_PASSWORD` hanya berlaku bila penyedia memang memberikan berkas sertifikat yang dapat dipakai electron-builder. Periksa hasil build lewat PowerShell dengan `Get-AuthenticodeSignature 'dist\Lumilan Chat Setup <versi>.exe'`. Log `signing with signtool.exe` saja bukan bukti: status harus `Valid`. Lihat [persyaratan penyimpanan key CA/Browser Forum](https://cabforum.org/working-groups/code-signing/requirements/).
+
+Rujukan: [electron-builder v26 code signing](https://www.electron.build/v26/docs/features/code-signing/), [notarization macOS](https://www.electron.build/v26/docs/notarization/), dan [persyaratan notifikasi Electron](https://www.electronjs.org/docs/latest/tutorial/notifications).
 
 Nama berkas mengikuti versi dan arsitektur yang dipilih oleh electron-builder; lihat isi folder `dist` setelah build. Jika hanya ingin menjalankan aplikasi dari folder hasil kemasan tanpa membuat installer, gunakan `bun run pack`.
 
@@ -83,11 +113,15 @@ Installer 0.3.0 ini adalah versi pertama yang memiliki updater. Versi 0.2.0 dan 
 
 Paket macOS harus ditandatangani agar pembaruan otomatis dan notifikasi sistem berfungsi. Installer Windows lokal saat ini belum ditandatangani; sebelum membagikan pembaruan ke banyak pengguna, tandatangani rilis Windows dengan sertifikat yang sama untuk setiap versi. Build macOS dan Linux perlu diuji pada sistem masing-masing sebelum dibagikan. Jangan menerbitkan rilis yang belum diuji hanya karena draft-nya sudah terbentuk.
 
-## Notifikasi
+## Profil, notifikasi, dan ruang umum
 
-Pesan dan file baru dari perangkat di LAN menampilkan notifikasi sistem ketika percakapannya tidak sedang terbuka di jendela aktif. Klik notifikasi untuk membuka percakapan. Jumlah pesan belum dibaca tetap terlihat di Lumilan Chat jika layanan notifikasi sistem tidak tersedia.
+Ikon **lonceng** menampilkan percakapan yang memiliki pesan belum dibaca; pilih salah satunya untuk membuka chat. Ikon **roda gigi** membuka pengaturan profil, tampilan, notifikasi, dan pembaruan. Di profil, Anda dapat mengganti nama, mengunggah foto, menulis keterangan singkat yang muncul di bawah nama, dan memilih status Aktif, Sibuk, Pergi, atau Jangan ganggu. Status Jangan ganggu mematikan notifikasi desktop, tetapi pesan tetap diterima dan ditandai belum dibaca.
 
-Ikon lonceng membuka pengaturan notifikasi, pratinjau isi pesan, suara, dan perilaku tray. Pratinjau isi pesan mati secara bawaan agar isinya tidak muncul di layar terkunci. Ketika jendela ditutup, Lumilan Chat tetap berjalan di tray jika pengaturan tersebut aktif dan tray tersedia. Keluar dari aplikasi menghentikan penerimaan pesan.
+Pesan dan file baru menampilkan notifikasi bawaan sistem ketika percakapannya tidak sedang terbuka di jendela aktif. Suara mengikuti pengaturan notifikasi sistem operasi; opsi **Tanpa suara** membuatnya senyap. Gunakan **Uji notifikasi sistem** di pengaturan setelah memasang aplikasi. Izinkan notifikasi Lumilan Chat pada pengaturan perangkat, serta periksa Focus Assist/Jangan Ganggu sistem bila uji tidak terlihat atau terdengar. Pratinjau isi pesan mati secara bawaan agar isinya tidak muncul di layar terkunci. Ketika jendela ditutup, Lumilan Chat tetap berjalan di tray jika pengaturan tersebut aktif dan tray tersedia. Keluar dari aplikasi menghentikan penerimaan pesan.
+
+Daftar percakapan hanya menampilkan perangkat yang sedang terhubung. Percakapan pribadi lama tetap tersimpan secara lokal dan muncul kembali saat perangkat yang sama terhubung lagi. Ruang Umum berlaku untuk **sesi jaringan saat ini**: saat jaringan berubah atau aplikasi dimulai ulang, tampilannya dimulai kosong agar chat LAN lama tidak tercampur. Pesan lama masih tersimpan di data lokal aplikasi, tetapi tidak ditampilkan di Ruang Umum.
+
+Pengiriman file tetap dibatasi **20 MB per file**. Transport saat ini memuat seluruh file ke memori dan mengirimnya ke setiap penerima satu per satu; menghapus batas tanpa mengubahnya menjadi transfer streaming dapat membebani memori dan memperlama pengiriman, terutama di Ruang Umum. Tidak ada server pusat, tetapi setiap perangkat penerima tetap menyimpan salinan file.
 
 ## Data dan keamanan
 

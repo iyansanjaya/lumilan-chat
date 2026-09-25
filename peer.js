@@ -3,6 +3,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { isIP } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { createLibp2p } from 'libp2p';
 import { generateKeyPair, privateKeyFromProtobuf, privateKeyToProtobuf } from '@libp2p/crypto/keys';
 import { tcp } from '@libp2p/tcp';
@@ -17,6 +18,8 @@ const DATA = '/lumilan/data/1.0.0';
 const MAX_FILE = 20 * 1024 * 1024;
 const MAX_FRAME = 29 * 1024 * 1024;
 const MAX_TEXT = 4000;
+const MAX_AVATAR = 24 * 1024;
+const STATUSES = new Set(['active', 'busy', 'away', 'dnd']);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -28,6 +31,17 @@ const safeFileName = value => {
   return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name) ? `_${name}` : name;
 };
 const validId = value => typeof value === 'string' && /^[a-zA-Z0-9]{30,100}$/.test(value);
+const cleanAbout = value => typeof value === 'string' ? stripControls(value).trim().replace(/\s+/g, ' ').slice(0, 100) : '';
+const cleanStatus = value => STATUSES.has(value) ? value : 'active';
+const cleanAvatar = value => {
+  if (!value) return '';
+  if (typeof value !== 'string' || !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) return '';
+  const bytes = Buffer.from(value.slice(value.indexOf(',') + 1), 'base64');
+  return bytes.length > 0 && bytes.length <= MAX_AVATAR ? value : '';
+};
+const networkSignature = () => Object.entries(networkInterfaces())
+  .flatMap(([name, addresses]) => (addresses || []).filter(address => address.family === 'IPv4' && !address.internal)
+    .map(address => `${name}:${address.address}/${address.netmask}`)).sort().join('|');
 
 function localAddress(address) {
   const match = /^\/ip4\/(\d+\.\d+\.\d+\.\d+)\/tcp\/(\d+)\/p2p\/([a-zA-Z0-9]+)$/.exec(address);
@@ -71,30 +85,38 @@ async function writeStream(stream, value) {
 }
 
 export class LumilanPeer extends EventEmitter {
-  constructor({ dataDir, discovery = true, listen = '/ip4/0.0.0.0/tcp/0' }) {
+  constructor({ dataDir, discovery = true, listen = '/ip4/0.0.0.0/tcp/0', getNetwork = networkSignature }) {
     super();
     this.dataDir = dataDir;
     this.discovery = discovery;
     this.listen = listen;
+    this.getNetwork = getNetwork;
+    this.network = getNetwork();
+    this.roomSession = randomUUID();
     this.path = join(dataDir, 'state.json');
     this.keyPath = join(dataDir, 'identity.key');
     this.filesDir = join(dataDir, 'files');
     // ponytail: riwayat kecil disimpan sebagai satu JSON; pindah ke SQLite jika pemakaian bertahun-tahun membuatnya besar.
-    this.state = { name: '', trusted: [], messages: [], unread: {} };
+    this.state = { name: '', status: 'active', about: '', avatar: '', trusted: [], messages: [], unread: {} };
     this.node = null;
+    this.identity = null;
     this.discovered = new Map();
     this.probing = new Set();
   }
 
-  get id() { return this.node.peerId.toString(); }
+  get id() { return this.node?.peerId.toString() || this.identity; }
   get trusted() { return new Map(this.state.trusted.map(peer => [peer.id, peer])); }
-  get online() { return new Set(this.node.getConnections().filter(localPeer).map(connection => connection.remotePeer.toString()).filter(id => this.trusted.has(id))); }
-  get addresses() { return this.node.getMultiaddrs().map(address => address.toString()).filter(localAddress).slice(0, 12); }
+  get online() { return new Set((this.node?.getConnections() || []).filter(localPeer).map(connection => connection.remotePeer.toString()).filter(id => this.trusted.has(id))); }
+  get addresses() { return (this.node?.getMultiaddrs() || []).map(address => address.toString()).filter(localAddress).slice(0, 12); }
 
   async start() {
     mkdirSync(this.filesDir, { recursive: true, mode: 0o700 });
     if (existsSync(this.path)) this.state = JSON.parse(readFileSync(this.path, 'utf8'));
     this.state.unread ||= {};
+    delete this.state.unread.room;
+    this.state.status = cleanStatus(this.state.status);
+    this.state.about = cleanAbout(this.state.about);
+    this.state.avatar = cleanAvatar(this.state.avatar);
     let privateKey;
     if (existsSync(this.keyPath)) privateKey = privateKeyFromProtobuf(readFileSync(this.keyPath));
     else {
@@ -111,6 +133,7 @@ export class LumilanPeer extends EventEmitter {
       services: { identify: identify() },
       connectionManager: { maxConnections: 100, maxIncomingPendingConnections: 16 },
     });
+    this.identity = this.node.peerId.toString();
     await this.node.handle(PROFILE, (stream, connection) => this.handleProfile(stream, connection), { maxInboundStreams: 2 });
     await this.node.handle(DATA, (stream, connection) => this.handleData(stream, connection), { maxInboundStreams: 8 });
     this.node.addEventListener('peer:discovery', event => {
@@ -126,7 +149,7 @@ export class LumilanPeer extends EventEmitter {
     this.node.addEventListener('peer:connect', event => {
       const id = event.detail.toString();
       this.emit('change');
-      if (this.trusted.has(id)) this.sendTo(id, { type: 'hello', name: this.state.name }).catch(() => {});
+      if (this.trusted.has(id)) this.sendTo(id, { type: 'hello', ...this.profile() }).catch(() => {});
     });
     this.node.addEventListener('peer:disconnect', () => this.emit('change'));
     for (const peer of this.state.trusted) this.dialKnown(peer.id, peer.addresses || []).catch(() => {});
@@ -143,14 +166,33 @@ export class LumilanPeer extends EventEmitter {
     }
   }
 
-  async stop() { if (this.node) await this.node.stop(); }
+  async stop() { if (this.node) { await this.node.stop(); this.node = null; } }
+
+  async refreshNetwork() {
+    const network = this.getNetwork();
+    if (network === this.network) return false;
+    this.roomSession = randomUUID();
+    delete this.state.unread.room;
+    this.save();
+    await this.stop();
+    this.discovered.clear();
+    this.probing.clear();
+    await this.start();
+    this.network = network;
+    this.emit('change');
+    return true;
+  }
 
   snapshot() {
+    const online = this.online;
     return {
-      me: { id: this.id, name: this.state.name },
-      peers: this.state.trusted.map(peer => ({ id: peer.id, name: peer.name, online: this.online.has(peer.id) })),
-      messages: this.state.messages.slice(-1000),
-      unread: this.state.unread,
+      me: { id: this.id, name: this.state.name, status: this.state.status, about: this.state.about, avatar: this.state.avatar },
+      peers: this.state.trusted.filter(peer => online.has(peer.id)).map(peer => ({
+        id: peer.id, name: peer.name, online: true, status: cleanStatus(peer.status), about: cleanAbout(peer.about), avatar: cleanAvatar(peer.avatar),
+      })),
+      messages: this.state.messages.filter(message => message.to === null ? message.roomSession === this.roomSession
+        : online.has(message.from === this.id ? message.to : message.from)).slice(-1000),
+      unread: Object.fromEntries(Object.entries(this.state.unread).filter(([id]) => id === 'room' || online.has(id))),
     };
   }
 
@@ -160,7 +202,27 @@ export class LumilanPeer extends EventEmitter {
     this.state.name = name;
     this.save();
     for (const id of this.discovered.keys()) if (!this.trusted.has(id)) this.probePeer(id).catch(() => {});
-    for (const id of this.online) this.sendTo(id, { type: 'hello', name }).catch(() => {});
+    this.broadcastProfile();
+    return this.snapshot();
+  }
+
+  profile() { return { name: this.state.name, status: this.state.status, about: this.state.about, avatar: this.state.avatar }; }
+
+  broadcastProfile() {
+    if (!this.state.name) return;
+    for (const id of this.online) this.sendTo(id, { type: 'hello', ...this.profile() }).catch(() => {});
+  }
+
+  setProfile(value) {
+    if (!value || typeof value !== 'object' || !cleanName(value.name) || !STATUSES.has(value.status) ||
+        typeof value.about !== 'string' || value.about.length > 100 ||
+        typeof value.avatar !== 'string' || value.avatar && !cleanAvatar(value.avatar)) throw new Error('Profil tidak valid.');
+    this.state.name = cleanName(value.name);
+    this.state.status = value.status;
+    this.state.about = cleanAbout(value.about);
+    this.state.avatar = value.avatar;
+    this.save();
+    this.broadcastProfile();
     return this.snapshot();
   }
 
@@ -184,11 +246,11 @@ export class LumilanPeer extends EventEmitter {
   async profilePacket(id, payload, addresses = this.discovered.get(id) || []) {
     if (!validId(id) || id === this.id) throw new Error('Perangkat tidak valid.');
     const connection = this.node.getConnections().find(item => item.remotePeer.toString() === id && localPeer(item));
-    if (connection) return this.request(connection.remotePeer, PROFILE, payload, 4096);
+    if (connection) return this.request(connection.remotePeer, PROFILE, payload, 48 * 1024);
     let lastError;
     for (const address of addresses.slice(0, 12)) {
       if (!localAddress(address) || !address.endsWith(`/p2p/${id}`)) continue;
-      try { return await this.request(multiaddr(address), PROFILE, payload, 4096); }
+      try { return await this.request(multiaddr(address), PROFILE, payload, 48 * 1024); }
       catch (error) { lastError = error; }
     }
     throw new Error('Perangkat tidak dapat dihubungi di jaringan lokal.', { cause: lastError });
@@ -198,16 +260,20 @@ export class LumilanPeer extends EventEmitter {
     if (this.trusted.has(id) || this.probing.has(id) || !this.state.name) return;
     this.probing.add(id);
     try {
-      const response = await this.profilePacket(id, { type: 'profile', name: this.state.name, addresses: this.addresses });
+      const response = await this.profilePacket(id, { type: 'profile', ...this.profile(), addresses: this.addresses });
       const name = cleanName(response.name);
       if (!name) throw new Error('Nama perangkat tidak valid.');
-      this.rememberPeer(id, name, this.discovered.get(id));
+      this.rememberPeer(id, name, this.discovered.get(id), response);
     } finally { this.probing.delete(id); }
   }
 
-  rememberPeer(id, name, addresses = []) {
+  rememberPeer(id, name, addresses = [], profile = {}) {
     const previous = this.trusted.get(id);
-    const peer = { id, name: cleanName(name), addresses: addresses.length ? addresses : previous?.addresses || [] };
+    const peer = {
+      id, name: cleanName(name), addresses: addresses.length ? addresses : previous?.addresses || [],
+      status: cleanStatus(profile.status ?? previous?.status), about: cleanAbout(profile.about ?? previous?.about),
+      avatar: cleanAvatar(profile.avatar ?? previous?.avatar),
+    };
     this.state.trusted = this.state.trusted.filter(item => item.id !== id).concat(peer);
     this.save();
   }
@@ -225,14 +291,14 @@ export class LumilanPeer extends EventEmitter {
   async handleProfile(stream, connection) {
     if (!localPeer(connection)) { stream.abort(new Error('Perangkat di luar jaringan lokal.')); return; }
     try {
-      const data = await readStream(stream, 4096);
+      const data = await readStream(stream, 48 * 1024);
       const remoteId = connection.remotePeer.toString();
       const addresses = Array.isArray(data?.addresses) ? data.addresses.filter(address => typeof address === 'string' && localAddress(address) && address.endsWith('/p2p/' + remoteId)).slice(0, 12) : [];
       if (!this.state.name) throw new Error('Atur nama terlebih dahulu.');
       if (data?.type === 'profile') {
         const name = cleanName(data.name);
-        if (name) this.rememberPeer(remoteId, name, addresses);
-        await writeStream(stream, { ok: true, name: this.state.name });
+        if (name) this.rememberPeer(remoteId, name, addresses, data);
+        await writeStream(stream, { ok: true, ...this.profile() });
         return;
       }
       throw new Error('Jenis permintaan tidak dikenal.');
@@ -249,7 +315,7 @@ export class LumilanPeer extends EventEmitter {
       if (data?.type === 'hello') {
         const name = cleanName(data.name);
         if (!name) throw new Error('Nama tidak valid.');
-        this.rememberPeer(from, name);
+        this.rememberPeer(from, name, [], data);
       } else if (data?.type === 'message') this.receiveMessage(from, data.message);
       else if (data?.type === 'file') this.receiveFile(from, data);
       else throw new Error('Jenis paket tidak dikenal.');
@@ -262,7 +328,7 @@ export class LumilanPeer extends EventEmitter {
   receiveMessage(from, message) {
     if (!message || typeof message !== 'object' || typeof message.id !== 'string' || !/^[0-9a-f-]{36}$/.test(message.id) || typeof message.text !== 'string' || !message.text.trim() || message.text.length > MAX_TEXT || message.to !== null && message.to !== this.id) throw new Error('Pesan tidak valid.');
     if (this.state.messages.some(item => item.id === message.id)) return;
-    this.state.messages.push({ id: message.id, from, fromName: this.trusted.get(from).name, to: message.to, text: message.text, kind: 'text', at: Date.now() });
+    this.state.messages.push({ id: message.id, from, fromName: this.trusted.get(from).name, to: message.to, text: message.text, kind: 'text', at: Date.now(), roomSession: message.to === null ? this.roomSession : undefined });
     this.recordIncoming(this.state.messages.at(-1));
   }
 
@@ -276,7 +342,7 @@ export class LumilanPeer extends EventEmitter {
     if (existsSync(path)) {
       if (!timingSafeEqual(sha256(readFileSync(path)), sha256(buffer))) throw new Error('ID file sudah digunakan.');
     } else writeFileSync(path, buffer, { flag: 'wx', mode: 0o600 });
-    this.state.messages.push({ id: message.id, from, fromName: this.trusted.get(from).name, to: message.to, name: safeFileName(message.name), size: buffer.length, kind: 'file', at: Date.now() });
+    this.state.messages.push({ id: message.id, from, fromName: this.trusted.get(from).name, to: message.to, name: safeFileName(message.name), size: buffer.length, kind: 'file', at: Date.now(), roomSession: message.to === null ? this.roomSession : undefined });
     this.recordIncoming(this.state.messages.at(-1));
   }
 
@@ -294,7 +360,7 @@ export class LumilanPeer extends EventEmitter {
     const targets = to ? [to] : [...this.online];
     const results = await Promise.allSettled(targets.map(id => this.sendTo(id, { type: 'message', message })));
     if (to && results[0].status === 'rejected') throw results[0].reason;
-    this.state.messages.push(message);
+    this.state.messages.push({ ...message, roomSession: to === null ? this.roomSession : undefined });
     this.save();
     return { message, delivered: results.filter(result => result.status === 'fulfilled').length, failed: results.filter(result => result.status === 'rejected').length };
   }
@@ -315,7 +381,7 @@ export class LumilanPeer extends EventEmitter {
       catch (error) { if (to) throw error; failed++; }
     }
     writeFileSync(join(this.filesDir, message.id), buffer, { flag: 'wx', mode: 0o600 });
-    this.state.messages.push(message);
+    this.state.messages.push({ ...message, roomSession: to === null ? this.roomSession : undefined });
     this.save();
     return { message, delivered, failed };
   }

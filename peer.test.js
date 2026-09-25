@@ -16,7 +16,8 @@ async function until(predicate, timeout = 5000) {
 
 test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lumilan-peer-'));
-  const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  let network = 'rumah';
+  const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0', getNetwork: () => network });
   const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
   const c = new LumilanPeer({ dataDir: join(root, 'c'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
   try {
@@ -59,18 +60,37 @@ test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', a
     const file = await b.sendFile('../pesan.txt', Buffer.from('arsip'), a.id);
     assert.equal(file.delivered, 1);
     assert.equal(incomingA.length, 1);
-    assert.equal(a.snapshot().unread[b.id], 1);
+    assert.equal(a.state.unread[b.id], 1);
     assert.equal(a.file(file.message.id).name, 'pesan.txt');
     assert.equal(a.file(file.message.id).bytes.toString(), 'arsip');
     const id = a.id;
     await a.stop();
+    assert.equal(a.snapshot().me.id, id);
+    assert.equal(a.snapshot().peers.length, 0);
     await a.start();
     assert.equal(a.id, id);
-    assert.equal(a.snapshot().peers.find(peer => peer.id === b.id).name, 'Budi');
-    assert.equal(a.snapshot().unread[b.id], 1);
+    assert.equal(a.trusted.get(b.id).name, 'Budi');
+    assert.equal(a.state.unread[b.id], 1);
     await until(() => a.online.has(b.id) && b.online.has(a.id));
     assert.equal((await b.sendMessage('Ruang umum')).delivered, 1);
     assert.equal(a.snapshot().unread.room, 1);
+    const avatar = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9UudwAAAAASUVORK5CYII=';
+    b.setProfile({ name: 'Budi', status: 'busy', about: 'Sedang bekerja', avatar });
+    await until(() => a.trusted.get(b.id)?.status === 'busy');
+    assert.equal(a.snapshot().peers.find(peer => peer.id === b.id).about, 'Sedang bekerja');
+    assert.equal(a.snapshot().peers.find(peer => peer.id === b.id).avatar, avatar);
+    const oldRoomSession = a.roomSession;
+    network = 'kantor';
+    assert.equal(await a.refreshNetwork(), true);
+    assert.notEqual(a.roomSession, oldRoomSession);
+    assert.equal(a.snapshot().messages.some(message => message.to === null), false);
+    assert.equal(a.snapshot().unread.room, undefined);
+    const bId = b.id;
+    await b.stop();
+    await until(() => !a.online.has(bId));
+    assert.equal(a.snapshot().peers.some(peer => peer.id === bId), false);
+    assert.equal(a.snapshot().messages.some(message => message.to === bId || message.from === bId), false);
+    assert.equal(a.snapshot().unread[bId], undefined);
   } finally {
     await a.stop();
     await b.stop();

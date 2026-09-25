@@ -3,6 +3,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('lumilan', {
   state: () => ipcRenderer.invoke('lumilan:state'),
   rename: name => ipcRenderer.invoke('lumilan:rename', name),
+  setProfile: profile => ipcRenderer.invoke('lumilan:set-profile', profile),
+  checkUpdates: () => ipcRenderer.invoke('lumilan:check-updates'),
+  testNotification: () => ipcRenderer.invoke('lumilan:test-notification'),
   message: (text, to) => ipcRenderer.invoke('lumilan:message', text, to),
   file: (name, bytes, to) => ipcRenderer.invoke('lumilan:file', name, bytes, to),
   saveFile: id => ipcRenderer.invoke('lumilan:save-file', id),

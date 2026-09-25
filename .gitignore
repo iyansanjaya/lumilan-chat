@@ -7,3 +7,9 @@ data/
 .local-appdata/
 *.log
 .env
+
+# graphify - commit graph & laporan, ignore cache/path lokal mesin
+/graphify-out/*
+!/graphify-out/graph.json
+!/graphify-out/graph.html
+!/graphify-out/GRAPH_REPORT.md

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
-import { startUpdates } from './updates.js';
+import { startUpdates, updateFailureDetail } from './updates.js';
 
 test('pembaruan diperiksa, diunduh, dan hanya dipasang setelah pengguna memilih mulai ulang', async () => {
   const updater = new EventEmitter();
@@ -37,4 +37,11 @@ test('pembaruan diperiksa, diunduh, dan hanya dipasang setelah pengguna memilih 
   await check(true);
   assert.equal(quitting, 1);
   assert.equal(installed, 1);
+});
+
+test('pesan kegagalan update membedakan internet, metadata, dan izin', () => {
+  assert.match(updateFailureDetail({ code: 'ENOTFOUND' }), /internet/);
+  assert.match(updateFailureDetail(new Error('HttpError: 404 Not Found')), /Metadata pembaruan/);
+  assert.match(updateFailureDetail(new Error('403 Forbidden')), /Akses/);
+  assert.doesNotMatch(updateFailureDetail(new Error('HttpError: 404 Not Found')), /Koneksi internet/);
 });

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, Notification, protocol, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, Notification, protocol, shell, Tray } from 'electron';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -33,12 +33,14 @@ let settingsPath;
 let pendingThread;
 let checkUpdates = () => Promise.resolve();
 const activeNotifications = new Map();
-const lastNotified = new Map();
+let notificationError = '';
+let refreshingNetwork = false;
 
 function dismiss(thread) {
-  const key = thread || 'room';
-  activeNotifications.get(key)?.close();
-  activeNotifications.delete(key);
+  for (const [id, entry] of activeNotifications) if (entry.thread === thread) {
+    entry.notification.close();
+    activeNotifications.delete(id);
+  }
 }
 
 function reveal(thread) {
@@ -54,7 +56,7 @@ function reveal(thread) {
 }
 
 function updateBadge() {
-  const count = Object.values(peer.state.unread).reduce((sum, value) => sum + value, 0);
+  const count = Object.values(peer.snapshot().unread).reduce((sum, value) => sum + value, 0);
   if (process.platform !== 'win32') app.setBadgeCount(count);
   if (tray) tray.setToolTip(count ? `Lumilan Chat · ${count} belum dibaca` : 'Lumilan Chat');
   if (window && !window.isDestroyed()) window.setTitle(count ? `Lumilan Chat (${count})` : 'Lumilan Chat');
@@ -66,24 +68,72 @@ function notify(message) {
     peer.markRead(thread);
     return;
   }
-  if (!settings.enabled || !Notification.isSupported()) return;
+  if (!settings.enabled || peer.state.status === 'dnd') return;
+  if (!Notification.isSupported()) {
+    notificationError = 'Sistem operasi tidak menyediakan layanan notifikasi desktop.';
+    return;
+  }
   const key = thread || 'room';
-  const now = Date.now();
-  if (now - (lastNotified.get(key) || 0) < 2000) return;
-  lastNotified.set(key, now);
   const name = peer.trusted.get(message.from)?.name || 'Teman';
-  const body = settings.preview
-    ? message.kind === 'file' ? `${name}: ${message.name}` : `${name}: ${message.text.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').slice(0, 120)}`
+  const title = !settings.preview ? 'Lumilan Chat' : message.to === null ? 'Ruang umum - Lumilan Chat' : name;
+  const content = message.kind === 'file' ? `File: ${message.name}`
+    : message.text.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').slice(0, 120);
+  const body = settings.preview ? message.to === null ? `${name}: ${content}` : content
     : message.kind === 'file' ? 'File baru diterima' : 'Pesan baru diterima';
   try {
-    dismiss(thread);
-    const notification = new Notification({ id: `thread:${key}`, groupId: key, title: 'Lumilan Chat', body, silent: settings.silent });
-    activeNotifications.set(key, notification);
-    notification.on('click', () => reveal(thread));
-    notification.on('close', () => { if (activeNotifications.get(key) === notification) activeNotifications.delete(key); });
-    notification.on('failed', (_event, error) => { if (activeNotifications.get(key) === notification) activeNotifications.delete(key); console.warn('Notifikasi gagal:', error); });
+    const notification = new Notification({
+      id: message.id, groupId: key, title,
+      body, silent: settings.silent, urgency: 'normal',
+      ...(process.platform === 'darwin' && !settings.silent ? { sound: 'default' } : {}),
+    });
+    activeNotifications.set(message.id, { thread, notification });
+    if (activeNotifications.size > 100) activeNotifications.delete(activeNotifications.keys().next().value);
+    notification.on('show', () => { notificationError = ''; });
+    notification.on('click', () => { dismiss(thread); reveal(thread); });
+    notification.on('close', () => activeNotifications.delete(message.id));
+    notification.on('failed', (_event, error) => {
+      activeNotifications.delete(message.id);
+      notificationError = String(error || 'Notifikasi ditolak oleh sistem.');
+      console.warn('Notifikasi gagal:', notificationError);
+    });
     notification.show();
-  } catch (error) { console.warn('Notifikasi gagal:', error); }
+  } catch (error) {
+    notificationError = String(error.message || error);
+    console.warn('Notifikasi gagal:', error);
+  }
+}
+
+async function testNotification() {
+  if (!Notification.isSupported()) return { shown: false, error: 'Notifikasi desktop tidak tersedia pada sistem ini.' };
+  if (peer.state.status === 'dnd') return { shown: false, error: 'Status Jangan ganggu sedang aktif.' };
+  return new Promise(resolve => {
+    const notification = new Notification({
+      title: 'Lumilan Chat', body: 'Ini notifikasi uji. Suara mengikuti pengaturan perangkat.',
+      silent: settings.silent, urgency: 'normal',
+      ...(process.platform === 'darwin' && !settings.silent ? { sound: 'default' } : {}),
+    });
+    const timer = setTimeout(() => {
+      notificationError = 'Sistem tidak mengonfirmasi notifikasi. Periksa izin notifikasi aplikasi.';
+      resolve({ shown: false, error: notificationError });
+    }, 5000);
+    notification.once('show', () => {
+      clearTimeout(timer);
+      notificationError = '';
+      resolve({ shown: true });
+    });
+    notification.once('failed', (_event, error) => {
+      clearTimeout(timer);
+      notificationError = String(error || 'Notifikasi ditolak sistem.');
+      resolve({ shown: false, error: notificationError });
+    });
+    notification.on('click', () => reveal());
+    try { notification.show(); }
+    catch (error) {
+      clearTimeout(timer);
+      notificationError = String(error.message || error);
+      resolve({ shown: false, error: notificationError });
+    }
+  });
 }
 
 function assetPath(url) {
@@ -126,10 +176,17 @@ if (instanceLock) app.whenReady().then(async () => {
   settings = { enabled: settings.enabled !== false, preview: settings.preview === true, silent: settings.silent === true, background: settings.background !== false };
   peer = await new LumilanPeer({ dataDir }).start();
   peer.on('change', () => {
+    if (!peer.node) return;
     updateBadge();
     if (window && !window.isDestroyed()) window.webContents.send('lumilan:state', peer.snapshot());
   });
   peer.on('incoming', notify);
+  setInterval(() => {
+    if (quitting || refreshingNetwork) return;
+    refreshingNetwork = true;
+    peer.refreshNetwork().catch(error => console.warn('Perubahan jaringan gagal diproses:', error))
+      .finally(() => { refreshingNetwork = false; });
+  }, 5000).unref();
   if (process.platform === 'win32' && Notification.handleActivation) Notification.handleActivation(() => reveal());
   try {
     tray = new Tray(join(here, 'build', process.platform === 'win32' ? 'icon.ico' : process.platform === 'darwin' ? 'trayTemplate.png' : 'icon.png'));
@@ -145,6 +202,9 @@ if (instanceLock) app.whenReady().then(async () => {
 
   handler('state', () => peer.snapshot());
   handler('rename', name => peer.rename(name));
+  handler('set-profile', value => peer.setProfile(value));
+  handler('check-updates', () => checkUpdates(true));
+  handler('test-notification', testNotification);
   handler('message', (text, to) => peer.sendMessage(text, to));
   handler('file', (name, bytes, to) => peer.sendFile(name, bytes, to));
   handler('save-file', async id => {
@@ -158,7 +218,7 @@ if (instanceLock) app.whenReady().then(async () => {
     currentThread = thread;
     if (window?.isFocused()) { peer.markRead(thread); dismiss(thread); }
   });
-  handler('notification-settings', () => ({ ...settings, supported: Notification.isSupported(), tray: Boolean(tray), version: app.getVersion() }));
+  handler('notification-settings', () => ({ ...settings, supported: Notification.isSupported(), error: notificationError, tray: Boolean(tray), version: app.getVersion() }));
   handler('set-notification-settings', value => {
     if (!value || typeof value !== 'object' || !['enabled', 'preview', 'silent', 'background'].every(key => typeof value[key] === 'boolean')) throw new Error('Pengaturan tidak valid.');
     const next = { enabled: value.enabled, preview: value.preview, silent: value.silent, background: value.background };
@@ -166,7 +226,7 @@ if (instanceLock) app.whenReady().then(async () => {
     writeFileSync(temporary, JSON.stringify(next), { mode: 0o600 });
     renameSync(temporary, settingsPath);
     settings = next;
-    if (!settings.enabled) for (const key of activeNotifications.keys()) dismiss(key === 'room' ? null : key);
+    if (!settings.enabled) for (const { thread } of activeNotifications.values()) dismiss(thread);
     return { ...settings, supported: Notification.isSupported(), tray: Boolean(tray) };
   });
   handler('quit', () => app.quit());
@@ -188,7 +248,14 @@ if (instanceLock) app.whenReady().then(async () => {
     },
   });
   if (process.platform !== 'darwin') window.removeMenu();
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (url === 'https://iyansanjaya.com/') {
+      setImmediate(() => {
+        void shell.openExternal(url).catch(error => console.warn('Gagal membuka situs pengembang:', error));
+      });
+    }
+    return { action: 'deny' };
+  });
   updateBadge();
   window.webContents.on('will-navigate', (event, url) => { if (url !== mainUrl) event.preventDefault(); });
   window.webContents.on('did-finish-load', () => {
@@ -202,12 +269,12 @@ if (instanceLock) app.whenReady().then(async () => {
     if (!quitting && settings.background && tray) { event.preventDefault(); window.hide(); }
   });
   window.once('ready-to-show', () => window.show());
-  await window.loadURL(mainUrl);
   checkUpdates = startUpdates({
     app, updater: autoUpdater, dialog,
     getWindow: () => { reveal(); return window; },
     beforeInstall: () => { quitting = true; },
   });
+  await window.loadURL(mainUrl);
 }).catch(error => {
   console.error(error);
   dialog.showErrorBox('Lumilan Chat gagal dimulai', error.message);

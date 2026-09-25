@@ -1,3 +1,16 @@
+export function updateFailureDetail(error) {
+  const text = String(error?.code || '') + ' ' + String(error?.message || error || '');
+  if (/ENOTFOUND|EAI_AGAIN|ENETUNREACH|ENETDOWN|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|ETIMEDOUT|ECONNRESET/i.test(text))
+    return 'Koneksi internet tidak tersedia atau terputus. Periksa jaringan, lalu coba lagi.';
+  if (/\b404\b|not found/i.test(text))
+    return 'Metadata pembaruan belum tersedia di GitHub Releases. Periksa apakah rilis dan berkas pembaruan sudah diterbitkan.';
+  if (/\b401\b|\b403\b|unauthorized|forbidden/i.test(text))
+    return 'Akses ke rilis pembaruan ditolak. Periksa izin repositori rilis.';
+  if (/signature|code.?sign|notariz/i.test(text))
+    return 'Paket pembaruan tidak lolos pemeriksaan tanda tangan aplikasi.';
+  return 'Layanan pembaruan sedang bermasalah. Coba lagi nanti.';
+}
+
 export function startUpdates({ app, updater, dialog, getWindow, beforeInstall }) {
   let checking;
   let manualCheck = false;
@@ -41,13 +54,20 @@ export function startUpdates({ app, updater, dialog, getWindow, beforeInstall })
     checking = (async () => {
       try {
         const result = await updater.checkForUpdates();
-        result?.downloadPromise?.catch(error => { downloading = false; console.warn('Unduhan pembaruan gagal:', error); });
+        result?.downloadPromise?.catch(error => {
+          downloading = false;
+          console.warn('Unduhan pembaruan gagal:', error);
+          if (manual) void dialog.showMessageBox(getWindow(), {
+            type: 'warning', title: 'Unduhan pembaruan gagal', message: 'Pembaruan ditemukan, tetapi belum dapat diunduh.',
+            detail: updateFailureDetail(error),
+          });
+        });
       } catch (error) {
         console.warn('Pemeriksaan pembaruan gagal:', error);
         if (manual) await dialog.showMessageBox(getWindow(), {
           type: 'warning', title: 'Pembaruan Lumilan Chat',
           message: 'Pembaruan belum dapat diperiksa.',
-          detail: 'Periksa koneksi internet atau coba lagi nanti.',
+          detail: updateFailureDetail(error),
         });
       } finally { checking = undefined; manualCheck = false; }
     })();
