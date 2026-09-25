@@ -43,6 +43,20 @@ const networkSignature = () => Object.entries(networkInterfaces())
   .flatMap(([name, addresses]) => (addresses || []).filter(address => address.family === 'IPv4' && !address.internal)
     .map(address => `${name}:${address.address}/${address.netmask}`)).sort().join('|');
 
+function addressPriority(address) {
+  const ip = /^\/ip4\/([^/]+)/.exec(address)?.[1];
+  if (!ip) return 3;
+  if (ip.startsWith('127.')) return 2;
+  const number = ip.split('.').map(Number).reduce((value, byte) => (value * 256 + byte) >>> 0, 0);
+  for (const addresses of Object.values(networkInterfaces())) for (const local of addresses || []) {
+    if (local.family !== 'IPv4' || local.internal) continue;
+    const own = local.address.split('.').map(Number).reduce((value, byte) => (value * 256 + byte) >>> 0, 0);
+    const mask = local.netmask.split('.').map(Number).reduce((value, byte) => (value * 256 + byte) >>> 0, 0);
+    if ((number & mask) === (own & mask)) return 0;
+  }
+  return 1;
+}
+
 function localAddress(address) {
   const match = /^\/ip4\/(\d+\.\d+\.\d+\.\d+)\/tcp\/(\d+)\/p2p\/([a-zA-Z0-9]+)$/.exec(address);
   if (!match || isIP(match[1]) !== 4 || +match[2] < 1 || +match[2] > 65535) return false;
@@ -102,12 +116,13 @@ export class LumilanPeer extends EventEmitter {
     this.identity = null;
     this.discovered = new Map();
     this.probing = new Set();
+    this.dialing = new Set();
   }
 
   get id() { return this.node?.peerId.toString() || this.identity; }
   get trusted() { return new Map(this.state.trusted.map(peer => [peer.id, peer])); }
   get online() { return new Set((this.node?.getConnections() || []).filter(localPeer).map(connection => connection.remotePeer.toString()).filter(id => this.trusted.has(id))); }
-  get addresses() { return (this.node?.getMultiaddrs() || []).map(address => address.toString()).filter(localAddress).slice(0, 12); }
+  get addresses() { return (this.node?.getMultiaddrs() || []).map(address => address.toString()).filter(localAddress).filter(address => this.listen.includes('/127.') || !address.includes('/ip4/127.')).sort((a, b) => addressPriority(a) - addressPriority(b)).slice(0, 12); }
 
   async start() {
     mkdirSync(this.filesDir, { recursive: true, mode: 0o700 });
@@ -124,6 +139,7 @@ export class LumilanPeer extends EventEmitter {
       writeFileSync(this.keyPath, privateKeyToProtobuf(privateKey), { flag: 'wx', mode: 0o600 });
     }
     this.node = await createLibp2p({
+      start: false,
       privateKey,
       addresses: { listen: [this.listen] },
       transports: [tcp()],
@@ -139,7 +155,7 @@ export class LumilanPeer extends EventEmitter {
     this.node.addEventListener('peer:discovery', event => {
       const id = event.detail.id.toString();
       if (!validId(id) || id === this.id) return;
-      const addresses = event.detail.multiaddrs.map(address => address.toString()).map(address => address.endsWith(`/p2p/${id}`) ? address : `${address}/p2p/${id}`).filter(localAddress).slice(0, 12);
+      const addresses = event.detail.multiaddrs.map(address => address.toString()).map(address => address.endsWith(`/p2p/${id}`) ? address : `${address}/p2p/${id}`).filter(localAddress).filter(address => this.listen.includes('/127.') || !address.includes('/ip4/127.')).sort((a, b) => addressPriority(a) - addressPriority(b)).slice(0, 12);
       if (!addresses.length) return;
       if (this.discovered.size >= 64 && !this.discovered.has(id)) this.discovered.delete(this.discovered.keys().next().value);
       this.discovered.set(id, addresses);
@@ -150,19 +166,31 @@ export class LumilanPeer extends EventEmitter {
       const id = event.detail.toString();
       this.emit('change');
       if (this.trusted.has(id)) this.sendTo(id, { type: 'hello', ...this.profile() }).catch(() => {});
+      else if (this.discovered.has(id)) this.probePeer(id).catch(() => {});
     });
     this.node.addEventListener('peer:disconnect', () => this.emit('change'));
+    await this.node.start();
     for (const peer of this.state.trusted) this.dialKnown(peer.id, peer.addresses || []).catch(() => {});
     return this;
   }
 
   async dialKnown(id, addresses) {
-    if (this.online.has(id)) return;
-    for (const address of addresses) {
-      const target = address.endsWith(`/p2p/${id}`) ? address : `${address}/p2p/${id}`;
-      if (!localAddress(target)) continue;
-      try { await this.node.dial(multiaddr(target), { signal: AbortSignal.timeout(5000) }); return; }
-      catch { /* coba alamat berikutnya */ }
+    if (this.online.has(id) || this.dialing.has(id)) return;
+    this.dialing.add(id);
+    try {
+      const targets = addresses.map(address => address.endsWith(`/p2p/${id}`) ? address : `${address}/p2p/${id}`)
+        .filter(localAddress).sort((a, b) => addressPriority(a) - addressPriority(b)).slice(0, 12);
+      if (targets.length) await Promise.any(targets.map(target => this.node.dial(multiaddr(target), { signal: AbortSignal.timeout(5000) })));
+    } catch { /* alamat saat ini tidak dapat dihubungi; penemuan berikutnya akan mencoba lagi */ }
+    finally { this.dialing.delete(id); }
+  }
+
+  maintainConnections() {
+    if (!this.node || !this.state.name) return;
+    for (const [id, addresses] of this.discovered) {
+      if (this.online.has(id)) continue;
+      if (this.trusted.has(id)) this.dialKnown(id, addresses).catch(() => {});
+      else this.probePeer(id).catch(() => {});
     }
   }
 
@@ -177,6 +205,7 @@ export class LumilanPeer extends EventEmitter {
     await this.stop();
     this.discovered.clear();
     this.probing.clear();
+    this.dialing.clear();
     await this.start();
     this.network = network;
     this.emit('change');
@@ -185,13 +214,28 @@ export class LumilanPeer extends EventEmitter {
 
   snapshot() {
     const online = this.online;
+    const visibleMessages = this.state.messages.filter(message => message.to === null ? message.roomSession === this.roomSession
+      : online.has(message.from === this.id ? message.to : message.from));
+    const stats = {};
+    const recentFiles = {};
+    for (const message of visibleMessages) {
+      const key = message.to === null ? 'room' : message.from === this.id ? message.to : message.from;
+      const count = stats[key] ||= { messages: 0, files: 0 };
+      count.messages++;
+      if (message.kind === 'file') {
+        count.files++;
+        const list = recentFiles[key] ||= [];
+        list.push(message);
+        if (list.length > 5) list.shift();
+      }
+    }
     return {
+      stats, recentFiles, roomSession: this.roomSession,
       me: { id: this.id, name: this.state.name, status: this.state.status, about: this.state.about, avatar: this.state.avatar },
       peers: this.state.trusted.filter(peer => online.has(peer.id)).map(peer => ({
         id: peer.id, name: peer.name, online: true, status: cleanStatus(peer.status), about: cleanAbout(peer.about), avatar: cleanAvatar(peer.avatar),
       })),
-      messages: this.state.messages.filter(message => message.to === null ? message.roomSession === this.roomSession
-        : online.has(message.from === this.id ? message.to : message.from)).slice(-1000),
+      messages: visibleMessages.slice(-1000),
       unread: Object.fromEntries(Object.entries(this.state.unread).filter(([id]) => id === 'room' || online.has(id))),
     };
   }
@@ -247,13 +291,11 @@ export class LumilanPeer extends EventEmitter {
     if (!validId(id) || id === this.id) throw new Error('Perangkat tidak valid.');
     const connection = this.node.getConnections().find(item => item.remotePeer.toString() === id && localPeer(item));
     if (connection) return this.request(connection.remotePeer, PROFILE, payload, 48 * 1024);
-    let lastError;
-    for (const address of addresses.slice(0, 12)) {
-      if (!localAddress(address) || !address.endsWith(`/p2p/${id}`)) continue;
-      try { return await this.request(multiaddr(address), PROFILE, payload, 48 * 1024); }
-      catch (error) { lastError = error; }
-    }
-    throw new Error('Perangkat tidak dapat dihubungi di jaringan lokal.', { cause: lastError });
+    const targets = addresses.filter(address => localAddress(address) && address.endsWith(`/p2p/${id}`))
+      .sort((a, b) => addressPriority(a) - addressPriority(b)).slice(0, 12);
+    if (!targets.length) throw new Error('Perangkat tidak memiliki alamat LAN yang dapat dihubungi.');
+    try { return await Promise.any(targets.map(address => this.request(multiaddr(address), PROFILE, payload, 48 * 1024))); }
+    catch (error) { throw new Error('Perangkat tidak dapat dihubungi di jaringan lokal.', { cause: error }); }
   }
 
   async probePeer(id) {
@@ -384,6 +426,36 @@ export class LumilanPeer extends EventEmitter {
     this.state.messages.push({ ...message, roomSession: to === null ? this.roomSession : undefined });
     this.save();
     return { message, delivered, failed };
+  }
+
+  listMessages(thread = null, before = null) {
+    if (thread !== null && (!validId(thread) || !this.online.has(thread))) throw new Error('Percakapan tidak tersedia.');
+    if (before !== null && (typeof before !== 'string' || !/^[0-9a-f-]{36}$/.test(before))) throw new Error('Posisi pesan tidak valid.');
+    const end = before === null ? this.state.messages.length : this.state.messages.findIndex(message => message.id === before);
+    if (end < 0) throw new Error('Posisi pesan tidak ditemukan.');
+    const items = [];
+    for (let index = end - 1; index >= 0 && items.length < 100; index--) {
+      const message = this.state.messages[index];
+      if (thread === null ? message.to === null && message.roomSession === this.roomSession
+        : message.to === thread && message.from === this.id || message.from === thread && message.to === this.id) items.push(message);
+    }
+    return items.reverse();
+  }
+
+  listFiles(thread = null, offset = 0) {
+    if (thread !== null && (!validId(thread) || !this.online.has(thread))) throw new Error('Percakapan tidak tersedia.');
+    if (!Number.isInteger(offset) || offset < 0) throw new Error('Halaman file tidak valid.');
+    const items = [];
+    let total = 0;
+    for (let index = this.state.messages.length - 1; index >= 0; index--) {
+      const message = this.state.messages[index];
+      if (message.kind !== 'file' || !(thread === null
+        ? message.to === null && message.roomSession === this.roomSession
+        : message.to === thread && message.from === this.id || message.from === thread && message.to === this.id)) continue;
+      if (total >= offset && items.length < 50) items.push(message);
+      total++;
+    }
+    return { items, total };
   }
 
   file(id) {

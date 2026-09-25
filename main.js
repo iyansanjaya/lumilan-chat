@@ -1,9 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, Notification, protocol, shell, Tray } from 'electron';
 import { dirname, join, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import electronUpdater from 'electron-updater';
 import { LumilanPeer } from './peer.js';
+import { locales, translate } from './public/i18n.js';
 import { startUpdates } from './updates.js';
 
 const { autoUpdater } = electronUpdater;
@@ -35,6 +37,66 @@ let checkUpdates = () => Promise.resolve();
 const activeNotifications = new Map();
 let notificationError = '';
 let refreshingNetwork = false;
+const tr = (source, values) => translate(settings?.language || 'id', source, values);
+
+function startupPath() {
+  return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'autostart', 'lumilan-chat.desktop');
+}
+
+function startupExecutable() {
+  return process.platform === 'linux' ? process.env.APPIMAGE : process.execPath;
+}
+
+function desktopExec(path) {
+  if (/[\r\n]/.test(path)) throw new Error('Lokasi aplikasi tidak valid untuk autostart.');
+  return '"' + path.replace(/[\\"`$]/g, '\\$&').replace(/%/g, '%%') + '"';
+}
+
+function startupStatus() {
+  const supported = app.isPackaged && (process.platform === 'win32' || process.platform === 'darwin' ||
+    process.platform === 'linux' && Boolean(startupExecutable()));
+  if (!supported) return { supported: false, enabled: false };
+  try {
+    if (process.platform !== 'linux') {
+      const login = app.getLoginItemSettings();
+      return { supported: true, enabled: login.openAtLogin && login.enabled !== false };
+    }
+    const path = startupPath();
+    const contents = existsSync(path) ? readFileSync(path, 'utf8') : '';
+    return { supported: true, enabled: contents.includes('X-Lumilan-Chat=true') &&
+      contents.includes(`Exec=${desktopExec(startupExecutable())}`) };
+  } catch (error) {
+    console.warn('Status autostart tidak dapat dibaca:', error);
+    return { supported: false, enabled: false };
+  }
+}
+
+function setStartup(value) {
+  if (typeof value !== 'boolean' || !startupStatus().supported) throw new Error('Autostart tidak tersedia untuk paket aplikasi ini.');
+  if (process.platform !== 'linux') {
+    app.setLoginItemSettings({ openAtLogin: value });
+  } else {
+    const path = startupPath();
+    if (value) {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      writeFileSync(path, `[Desktop Entry]\nType=Application\nName=Lumilan Chat\nExec=${desktopExec(startupExecutable())}\nTerminal=false\nX-Lumilan-Chat=true\n`, { mode: 0o600 });
+    } else if (existsSync(path) && readFileSync(path, 'utf8').includes('X-Lumilan-Chat=true')) {
+      unlinkSync(path);
+    }
+  }
+  const result = startupStatus();
+  if (result.enabled !== value) throw new Error('Pengaturan autostart tidak berhasil diterapkan.');
+  return result;
+}
+
+function updateTrayMenu() {
+  tray?.setContextMenu(Menu.buildFromTemplate([
+    { label: tr('Buka Lumilan Chat'), click: () => reveal() },
+    { label: tr('Periksa pembaruan'), click: () => { reveal(); void checkUpdates(true); } },
+    { type: 'separator' },
+    { label: tr('Keluar'), click: () => app.quit() },
+  ]));
+}
 
 function dismiss(thread) {
   for (const [id, entry] of activeNotifications) if (entry.thread === thread) {
@@ -58,7 +120,7 @@ function reveal(thread) {
 function updateBadge() {
   const count = Object.values(peer.snapshot().unread).reduce((sum, value) => sum + value, 0);
   if (process.platform !== 'win32') app.setBadgeCount(count);
-  if (tray) tray.setToolTip(count ? `Lumilan Chat · ${count} belum dibaca` : 'Lumilan Chat');
+  if (tray) tray.setToolTip(count ? tr('Lumilan Chat · {count} belum dibaca', { count }) : 'Lumilan Chat');
   if (window && !window.isDestroyed()) window.setTitle(count ? `Lumilan Chat (${count})` : 'Lumilan Chat');
 }
 
@@ -74,12 +136,12 @@ function notify(message) {
     return;
   }
   const key = thread || 'room';
-  const name = peer.trusted.get(message.from)?.name || 'Teman';
-  const title = !settings.preview ? 'Lumilan Chat' : message.to === null ? 'Ruang umum - Lumilan Chat' : name;
-  const content = message.kind === 'file' ? `File: ${message.name}`
+  const name = peer.trusted.get(message.from)?.name || tr('Teman');
+  const title = !settings.preview ? 'Lumilan Chat' : message.to === null ? tr('Ruang umum - Lumilan Chat') : name;
+  const content = message.kind === 'file' ? tr('File: {name}', { name: message.name })
     : message.text.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').slice(0, 120);
-  const body = settings.preview ? message.to === null ? `${name}: ${content}` : content
-    : message.kind === 'file' ? 'File baru diterima' : 'Pesan baru diterima';
+  const body = settings.preview ? message.to === null ? tr('{name}: {content}', { name, content }) : content
+    : message.kind === 'file' ? tr('File baru diterima') : tr('Pesan baru diterima');
   try {
     const notification = new Notification({
       id: message.id, groupId: key, title,
@@ -108,7 +170,7 @@ async function testNotification() {
   if (peer.state.status === 'dnd') return { shown: false, error: 'Status Jangan ganggu sedang aktif.' };
   return new Promise(resolve => {
     const notification = new Notification({
-      title: 'Lumilan Chat', body: 'Ini notifikasi uji. Suara mengikuti pengaturan perangkat.',
+      title: 'Lumilan Chat', body: tr('Ini notifikasi uji. Suara mengikuti pengaturan perangkat.'),
       silent: settings.silent, urgency: 'normal',
       ...(process.platform === 'darwin' && !settings.silent ? { sound: 'default' } : {}),
     });
@@ -145,7 +207,7 @@ function assetPath(url) {
     if (relative !== 'createIcon.js' && !/^icons\/[A-Za-z]+\.js$/.test(relative)) return null;
     return join(iconDir, relative);
   }
-  if (!/^\/(index\.html|app\.css|app\.js|fonts\/PublicSans\.ttf)$/.test(path)) return null;
+  if (!/^\/(index\.html|app\.css|app\.js|i18n\.js|fonts\/PublicSans\.ttf)$/.test(path)) return null;
   const file = resolve(publicDir, `.${path}`);
   return file.startsWith(publicDir + sep) ? file : null;
 }
@@ -173,7 +235,7 @@ if (instanceLock) app.whenReady().then(async () => {
   try { settings = JSON.parse(readFileSync(settingsPath, 'utf8')); }
   catch { settings = {}; }
   if (!settings || typeof settings !== 'object') settings = {};
-  settings = { enabled: settings.enabled !== false, preview: settings.preview === true, silent: settings.silent === true, background: settings.background !== false };
+  settings = { enabled: settings.enabled !== false, preview: settings.preview === true, silent: settings.silent === true, background: settings.background !== false, language: locales[settings.language] ? settings.language : 'id' };
   peer = await new LumilanPeer({ dataDir }).start();
   peer.on('change', () => {
     if (!peer.node) return;
@@ -181,6 +243,7 @@ if (instanceLock) app.whenReady().then(async () => {
     if (window && !window.isDestroyed()) window.webContents.send('lumilan:state', peer.snapshot());
   });
   peer.on('incoming', notify);
+  setInterval(() => peer.maintainConnections(), 15_000).unref();
   setInterval(() => {
     if (quitting || refreshingNetwork) return;
     refreshingNetwork = true;
@@ -190,12 +253,7 @@ if (instanceLock) app.whenReady().then(async () => {
   if (process.platform === 'win32' && Notification.handleActivation) Notification.handleActivation(() => reveal());
   try {
     tray = new Tray(join(here, 'build', process.platform === 'win32' ? 'icon.ico' : process.platform === 'darwin' ? 'trayTemplate.png' : 'icon.png'));
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Buka Lumilan Chat', click: () => reveal() },
-      { label: 'Periksa pembaruan', click: () => { reveal(); void checkUpdates(true); } },
-      { type: 'separator' },
-      { label: 'Keluar', click: () => app.quit() },
-    ]));
+    updateTrayMenu();
     tray.on('click', () => reveal());
   } catch (error) { console.warn('Tray tidak tersedia:', error); }
   updateBadge();
@@ -207,6 +265,8 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('test-notification', testNotification);
   handler('message', (text, to) => peer.sendMessage(text, to));
   handler('file', (name, bytes, to) => peer.sendFile(name, bytes, to));
+  handler('list-files', (thread, offset) => peer.listFiles(thread, offset));
+  handler('list-messages', (thread, before) => peer.listMessages(thread, before));
   handler('save-file', async id => {
     const file = peer.file(id);
     const result = await dialog.showSaveDialog(window, { defaultPath: file.name, properties: ['createDirectory', 'showOverwriteConfirmation'] });
@@ -219,9 +279,21 @@ if (instanceLock) app.whenReady().then(async () => {
     if (window?.isFocused()) { peer.markRead(thread); dismiss(thread); }
   });
   handler('notification-settings', () => ({ ...settings, supported: Notification.isSupported(), error: notificationError, tray: Boolean(tray), version: app.getVersion() }));
+  handler('startup-settings', startupStatus);
+  handler('set-language', value => {
+    if (!locales[value]) throw new Error('Bahasa tidak didukung.');
+    settings.language = value;
+    const temporary = `${settingsPath}.tmp`;
+    writeFileSync(temporary, JSON.stringify(settings), { mode: 0o600 });
+    renameSync(temporary, settingsPath);
+    updateTrayMenu();
+    updateBadge();
+    return value;
+  });
+  handler('set-startup', setStartup);
   handler('set-notification-settings', value => {
     if (!value || typeof value !== 'object' || !['enabled', 'preview', 'silent', 'background'].every(key => typeof value[key] === 'boolean')) throw new Error('Pengaturan tidak valid.');
-    const next = { enabled: value.enabled, preview: value.preview, silent: value.silent, background: value.background };
+    const next = { enabled: value.enabled, preview: value.preview, silent: value.silent, background: value.background, language: settings.language };
     const temporary = `${settingsPath}.tmp`;
     writeFileSync(temporary, JSON.stringify(next), { mode: 0o600 });
     renameSync(temporary, settingsPath);
@@ -273,6 +345,8 @@ if (instanceLock) app.whenReady().then(async () => {
     app, updater: autoUpdater, dialog,
     getWindow: () => { reveal(); return window; },
     beforeInstall: () => { quitting = true; },
+    translate: tr,
+    openRelease: url => shell.openExternal(url),
   });
   await window.loadURL(mainUrl);
 }).catch(error => {

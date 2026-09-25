@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer, connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { multiaddr } from '@multiformats/multiaddr';
@@ -95,6 +96,84 @@ test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', a
     await a.stop();
     await b.stop();
     await c.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('isi pesan tidak tampak pada lalu lintas TCP antara dua peer', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-noise-'));
+  const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const captured = [];
+  let proxy;
+  try {
+    await a.start();
+    await b.start();
+    a.rename('Andi');
+    b.rename('Budi');
+    const port = Number(b.addresses[0].match(/\/tcp\/(\d+)/)[1]);
+    proxy = createServer(client => {
+      const upstream = connect(port, '127.0.0.1');
+      client.on('data', chunk => { captured.push(Buffer.from(chunk)); upstream.write(chunk); });
+      upstream.on('data', chunk => { captured.push(Buffer.from(chunk)); client.write(chunk); });
+      client.on('error', () => {});
+      upstream.on('error', () => {});
+      client.on('close', () => upstream.destroy());
+      upstream.on('close', () => client.destroy());
+    });
+    await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+    const address = `/ip4/127.0.0.1/tcp/${proxy.address().port}/p2p/${b.id}`;
+    const wrongId = b.id.slice(0, -1) + (b.id.endsWith('1') ? '2' : '1');
+    await assert.rejects(a.node.dial(multiaddr(`/ip4/127.0.0.1/tcp/${proxy.address().port}/p2p/${wrongId}`), {
+      signal: AbortSignal.timeout(3000),
+    }));
+    a.discovered.set(b.id, [address]);
+    await a.probePeer(b.id);
+    const secret = `pesan-rahasia-${Date.now()}-untuk-budi`;
+    await a.sendMessage(secret, b.id);
+    assert.equal(b.snapshot().messages.at(-1).text, secret);
+    assert.ok(captured.length > 0);
+    assert.equal(Buffer.concat(captured).includes(Buffer.from(secret)), false);
+    const fileSecret = Buffer.from(`berkas-rahasia-${Date.now()}-untuk-budi`);
+    const sent = await a.sendFile('privat.txt', fileSecret, b.id);
+    assert.deepEqual(b.file(sent.message.id).bytes, fileSecret);
+    assert.equal(Buffer.concat(captured).includes(Buffer.from(fileSecret.toString('base64'))), false);
+  } finally {
+    await a.stop();
+    await b.stop();
+    if (proxy) await new Promise(resolve => proxy.close(resolve));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('ringkasan menghitung riwayat penuh dan daftar file memakai halaman 50 item', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-history-'));
+  const peer = new LumilanPeer({ dataDir: root, discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  try {
+    await peer.start();
+    peer.rename('Andi');
+    for (let index = 0; index < 1060; index++) peer.state.messages.push({
+      id: `${index.toString(16).padStart(8, '0')}-0000-0000-0000-000000000000`, from: peer.id, fromName: 'Andi', to: null,
+      kind: index % 10 === 0 ? 'file' : 'text', name: `file-${index}.txt`, size: 1,
+      text: 'Halo', roomSession: peer.roomSession, at: Date.now(),
+    });
+    const snapshot = peer.snapshot();
+    assert.equal(snapshot.stats.room.messages, 1060);
+    assert.equal(snapshot.stats.room.files, 106);
+    assert.equal(snapshot.messages.length, 1000);
+    const older = peer.listMessages(null, snapshot.messages[0].id);
+    assert.equal(older.length, 60);
+    assert.equal(older[0].id, peer.state.messages[0].id);
+    assert.equal(peer.listMessages(null, older[0].id).length, 0);
+    assert.equal(snapshot.recentFiles.room.length, 5);
+    assert.equal(peer.listFiles(null, 0).items.length, 50);
+    assert.equal(peer.listFiles(null, 50).items.length, 50);
+    assert.equal(peer.listFiles(null, 100).items.length, 6);
+    assert.equal(peer.listFiles(null, 0).total, 106);
+  } finally {
+    await peer.stop();
     rmSync(root, { recursive: true, force: true });
   }
 });

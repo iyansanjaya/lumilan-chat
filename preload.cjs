@@ -9,8 +9,13 @@ contextBridge.exposeInMainWorld('lumilan', {
   message: (text, to) => ipcRenderer.invoke('lumilan:message', text, to),
   file: (name, bytes, to) => ipcRenderer.invoke('lumilan:file', name, bytes, to),
   saveFile: id => ipcRenderer.invoke('lumilan:save-file', id),
+  listFiles: (thread, offset) => ipcRenderer.invoke('lumilan:list-files', thread, offset),
+  listMessages: (thread, before) => ipcRenderer.invoke('lumilan:list-messages', thread, before),
   currentThread: thread => ipcRenderer.invoke('lumilan:current-thread', thread),
   notificationSettings: () => ipcRenderer.invoke('lumilan:notification-settings'),
+  startupSettings: () => ipcRenderer.invoke('lumilan:startup-settings'),
+  setStartup: enabled => ipcRenderer.invoke('lumilan:set-startup', enabled),
+  setLanguage: language => ipcRenderer.invoke('lumilan:set-language', language),
   setNotificationSettings: value => ipcRenderer.invoke('lumilan:set-notification-settings', value),
   quit: () => ipcRenderer.invoke('lumilan:quit'),
   onOpenThread: callback => {
