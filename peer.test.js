@@ -124,24 +124,22 @@ test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', a
     assert.equal(a.trusted.get(b.id).name, 'Budi');
     assert.equal(a.state.unread[b.id], 1);
     await until(() => a.online.has(b.id) && b.online.has(a.id));
-    assert.equal((await b.sendMessage('Ruang umum')).delivered, 1);
-    assert.equal(a.snapshot().unread.room, 1);
+    assert.equal((await b.sendAnnouncement('Pengumuman')).delivered, 1);
+    assert.equal(a.snapshot().unread.announcements, 1);
     const avatar = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9UudwAAAAASUVORK5CYII=';
     b.setProfile({ name: 'Budi', status: 'busy', about: 'Sedang bekerja', avatar });
     await until(() => a.trusted.get(b.id)?.status === 'busy');
     assert.equal(a.snapshot().peers.find(peer => peer.id === b.id).about, 'Sedang bekerja');
     assert.equal(a.snapshot().peers.find(peer => peer.id === b.id).avatar, avatar);
-    const oldRoomSession = a.roomSession;
     network = 'kantor';
     assert.equal(await a.refreshNetwork(), true);
-    assert.notEqual(a.roomSession, oldRoomSession);
-    assert.equal(a.snapshot().messages.some(message => message.to === null), false);
-    assert.equal(a.snapshot().unread.room, undefined);
+    assert.equal(a.snapshot().messages.some(message => message.kind === 'announcement'), true);
+    assert.equal(a.snapshot().unread.announcements, 1);
     const bId = b.id;
     await b.stop();
     await until(() => !a.online.has(bId));
     assert.equal(a.snapshot().peers.some(peer => peer.id === bId), false);
-    assert.equal(a.snapshot().messages.some(message => message.to === bId || message.from === bId), false);
+    assert.equal(a.snapshot().messages.some(message => message.to === bId || message.from === bId && message.kind !== 'announcement'), false);
     assert.equal(a.snapshot().unread[bId], undefined);
   } finally {
     await a.stop();
@@ -303,30 +301,110 @@ test('transfer bertahap memverifikasi batas 100 MB, persetujuan, batal, dan poto
 
 test('ringkasan menghitung riwayat penuh dan daftar file memakai halaman 50 item', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lumilan-history-'));
-  const peer = new LumilanPeer({ dataDir: root, discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const peer = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const other = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
   try {
     await peer.start();
+    await other.start();
     peer.rename('Andi');
+    other.rename('Budi');
+    await peer.connectAddress(other.addresses[0]);
     for (let index = 0; index < 1060; index++) peer.state.messages.push({
-      id: `${index.toString(16).padStart(8, '0')}-0000-0000-0000-000000000000`, from: peer.id, fromName: 'Andi', to: null,
+      id: `${index.toString(16).padStart(8, '0')}-0000-0000-0000-000000000000`, from: peer.id, fromName: 'Andi', to: other.id,
       kind: index % 10 === 0 ? 'file' : 'text', name: `file-${index}.txt`, size: 1,
-      text: 'Halo', roomSession: peer.roomSession, at: Date.now(),
+      text: 'Halo', at: Date.now(),
     });
     const snapshot = peer.snapshot();
-    assert.equal(snapshot.stats.room.messages, 1060);
-    assert.equal(snapshot.stats.room.files, 106);
+    assert.equal(snapshot.stats[other.id].messages, 1060);
+    assert.equal(snapshot.stats[other.id].files, 106);
     assert.equal(snapshot.messages.length, 1000);
-    const older = peer.listMessages(null, snapshot.messages[0].id);
+    const older = peer.listMessages(other.id, snapshot.messages[0].id);
     assert.equal(older.length, 60);
     assert.equal(older[0].id, peer.state.messages[0].id);
-    assert.equal(peer.listMessages(null, older[0].id).length, 0);
-    assert.equal(snapshot.recentFiles.room.length, 5);
-    assert.equal(peer.listFiles(null, 0).items.length, 50);
-    assert.equal(peer.listFiles(null, 50).items.length, 50);
-    assert.equal(peer.listFiles(null, 100).items.length, 6);
-    assert.equal(peer.listFiles(null, 0).total, 106);
+    assert.equal(peer.listMessages(other.id, older[0].id).length, 0);
+    assert.equal(snapshot.recentFiles[other.id].length, 5);
+    assert.equal(peer.listFiles(other.id, 0).items.length, 50);
+    assert.equal(peer.listFiles(other.id, 50).items.length, 50);
+    assert.equal(peer.listFiles(other.id, 100).items.length, 6);
+    assert.equal(peer.listFiles(other.id, 0).total, 106);
   } finally {
     await peer.stop();
+    await other.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-rooms-'));
+  const peers = ['Andi', 'Budi', 'Citra'].map((name, index) => new LumilanPeer({
+    dataDir: join(root, String(index)), discovery: false, listen: '/ip4/127.0.0.1/tcp/0',
+  }));
+  const [a, b, c] = peers;
+  try {
+    for (const [index, peer] of peers.entries()) { await peer.start(); peer.rename(['Andi', 'Budi', 'Citra'][index]); }
+    await a.connectAddress(b.addresses[0]);
+    await a.connectAddress(c.addresses[0]);
+    await b.connectAddress(c.addresses[0]);
+    assert.equal(a.online.has(b.id) && b.online.has(c.id), true);
+    await assert.rejects(a.connectAddress(`/ip4/8.8.8.8/tcp/40754/p2p/${b.id}`), /Kode perangkat tidak valid/);
+
+    const { id } = await a.createRoom('Proyek', [b.id, c.id]);
+    assert.equal(b.room(id).pending, true);
+    assert.equal(c.room(id).pending, true);
+    await b.acceptRoom(id);
+    assert.equal((await a.sendRoomMessage('Hanya Budi', id)).delivered, 1);
+    assert.equal(c.state.messages.some(message => message.roomId === id), false);
+    await c.acceptRoom(id);
+    await until(() => b.room(id).members.includes(c.id));
+    assert.equal((await b.sendRoomMessage('Semua anggota', id)).delivered, 2);
+    assert.equal(c.listMessages(`room:${id}`).at(-1).text, 'Semua anggota');
+
+    await a.updateRoom(id, [c.id]);
+    assert.equal(b.room(id), undefined);
+    await assert.rejects(b.sendRoomMessage('Ditolak', id), /Pesan Ruang tidak valid/);
+    await assert.rejects(b.sendTo(c.id, { type: 'room-message', message: {
+      id: randomUUID(), roomId: id, to: null, kind: 'text', text: 'Ditolak',
+    } }), /Pesan Ruang ditolak/);
+
+    assert.equal((await a.sendAnnouncement('Rapat pagi')).delivered, 2);
+    c.setAnnouncements(false);
+    await until(() => a.trusted.get(c.id)?.announcements === false);
+    assert.equal((await a.sendAnnouncement('Rapat siang')).delivered, 1);
+    assert.equal(c.state.messages.filter(message => message.kind === 'announcement').length, 1);
+    b.muteAnnouncementsFrom(a.id, true);
+    assert.deepEqual((await a.sendAnnouncement('Rapat sore')).delivered, 0);
+    assert.equal(b.state.messages.filter(message => message.kind === 'announcement').length, 2);
+    b.muteAnnouncementsFrom(a.id, false);
+    for (let index = 0; index < 8; index++) assert.equal((await a.sendAnnouncement(`Info ${index}`)).delivered, 1);
+    assert.deepEqual((await a.sendAnnouncement('Terlalu sering')).delivered, 0);
+    assert.equal(b.state.messages.filter(message => message.kind === 'announcement').length, 10);
+    await assert.rejects(a.sendTo(b.id, { type: 'message', message: {
+      id: randomUUID(), to: null, kind: 'text', text: 'Ruang Umum lama',
+    } }), /Pesan tidak valid/);
+    const declined = await a.createRoom('Undangan', [b.id]);
+    await b.declineRoom(declined.id);
+    await until(() => !a.room(declined.id).invited.includes(b.id));
+    assert.equal(b.room(declined.id), undefined);
+    const canceled = await a.createRoom('Dibatalkan', [b.id]);
+    await a.updateRoom(canceled.id, []);
+    assert.equal(b.room(canceled.id), undefined);
+
+    await c.stop();
+    await until(() => !a.online.has(c.id));
+    await assert.rejects(a.sendRoomMessage('Tidak diantrekan', id), /Tidak ada anggota Ruang yang online/);
+    assert.equal(a.state.messages.some(message => message.text === 'Tidak diantrekan'), false);
+    await a.deleteRoom(id);
+    await c.start();
+    await until(() => c.room(id) === undefined);
+    const later = await a.createRoom('Keluar', [b.id]);
+    await b.acceptRoom(later.id);
+    await a.stop();
+    await b.leaveRoom(later.id);
+    assert.equal(b.room(later.id), undefined);
+    await a.start();
+    await until(() => !a.room(later.id).members.includes(b.id));
+  } finally {
+    for (const peer of peers) await peer.stop();
     rmSync(root, { recursive: true, force: true });
   }
 });

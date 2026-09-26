@@ -127,7 +127,7 @@ function updateBadge() {
 }
 
 function notify(message) {
-  const thread = message.to === null ? null : message.from;
+  const thread = message.roomId ? `room:${message.roomId}` : message.kind === 'announcement' ? 'announcements' : message.from;
   if (window?.isFocused() && !window.webContents.isLoading() && currentThread === thread) {
     peer.markRead(thread);
     return;
@@ -137,9 +137,9 @@ function notify(message) {
     notificationError = 'Sistem operasi tidak menyediakan layanan notifikasi desktop.';
     return;
   }
-  const key = thread || 'room';
+  const key = thread;
   const name = peer.trusted.get(message.from)?.name || tr('Teman');
-  const title = !settings.preview ? 'Lumilan Chat' : message.to === null ? tr('Ruang umum - Lumilan Chat') : name;
+  const title = !settings.preview ? 'Lumilan Chat' : message.roomId ? peer.room(message.roomId)?.name || tr('Ruang') : message.kind === 'announcement' ? tr('Pengumuman') : name;
   const content = message.kind === 'file' ? tr('File: {name}', { name: message.name })
     : message.text.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').slice(0, 120);
   const body = settings.preview ? message.to === null ? tr('{name}: {content}', { name, content }) : content
@@ -209,6 +209,7 @@ function assetPath(url) {
     if (relative !== 'createIcon.js' && !/^icons\/[A-Za-z]+\.js$/.test(relative)) return null;
     return join(iconDir, relative);
   }
+  if (path === '/brand-icon.png') return join(here, 'build', 'icon.png');
   if (!/^\/(index\.html|app\.css|app\.js|i18n\.js|fonts\/PublicSans\.ttf)$/.test(path)) return null;
   const file = resolve(publicDir, `.${path}`);
   return file.startsWith(publicDir + sep) ? file : null;
@@ -277,6 +278,17 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('check-updates', () => checkUpdates(true));
   handler('test-notification', testNotification);
   handler('message', (text, to) => peer.sendMessage(text, to));
+  handler('room-message', (text, id) => peer.sendRoomMessage(text, id));
+  handler('announcement', text => peer.sendAnnouncement(text));
+  handler('create-room', (name, members) => peer.createRoom(name, members));
+  handler('update-room', (id, members) => peer.updateRoom(id, members));
+  handler('accept-room', id => peer.acceptRoom(id));
+  handler('decline-room', id => peer.declineRoom(id));
+  handler('leave-room', id => peer.leaveRoom(id));
+  handler('delete-room', id => peer.deleteRoom(id));
+  handler('connect-address', value => peer.connectAddress(value));
+  handler('set-announcements', enabled => peer.setAnnouncements(enabled));
+  handler('mute-announcements-from', (id, muted) => peer.muteAnnouncementsFrom(id, muted));
   handler('file', async (path, to) => {
     if (activeUpload) throw new Error('Pengiriman file lain masih berlangsung.');
     const controller = new AbortController();
@@ -297,9 +309,10 @@ if (instanceLock) app.whenReady().then(async () => {
     return !result.canceled;
   });
   handler('current-thread', thread => {
-    if (thread !== null && (typeof thread !== 'string' || !/^[a-zA-Z0-9]{30,100}$/.test(thread))) throw new Error('Percakapan tidak valid.');
+    if (thread !== null && thread !== 'announcements' && !peer.online.has(thread) &&
+        !(typeof thread === 'string' && thread.startsWith('room:') && peer.room(thread.slice(5)))) throw new Error('Percakapan tidak valid.');
     currentThread = thread;
-    if (window?.isFocused()) { peer.markRead(thread); dismiss(thread); }
+    if (window?.isFocused() && thread !== null) { peer.markRead(thread); dismiss(thread); }
   });
   handler('notification-settings', () => ({ ...settings, supported: Notification.isSupported(), error: notificationError, tray: Boolean(tray), version: app.getVersion(), platform: process.platform }));
   handler('startup-settings', startupStatus);
@@ -360,7 +373,7 @@ if (instanceLock) app.whenReady().then(async () => {
       pendingThread = undefined;
     }
   });
-  window.on('focus', () => { peer.markRead(currentThread); dismiss(currentThread); });
+  window.on('focus', () => { if (currentThread !== null) peer.markRead(currentThread); dismiss(currentThread); });
   window.on('close', event => {
     if (!quitting && settings.background && tray) { event.preventDefault(); window.hide(); }
   });

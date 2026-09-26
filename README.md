@@ -2,7 +2,7 @@
 
 **English** · [Bahasa Indonesia](README.id.md)
 
-A cross-device chat app for Windows, macOS, and Linux. Discover people on your local network, send direct or general room messages, and share files in direct messages without accounts or a chat server.
+A cross-device chat app for Windows, macOS, and Linux. Discover people on your local network, send direct messages, create invitation-only Rooms, and send Announcements without accounts or a chat server.
 
 [![Trakteer](https://raw.githubusercontent.com/iyansanjaya/lumilan-chat/refs/heads/master/build/trakteer.svg)](https://trakteer.id/iyansanjaya/tip) [![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/iyansanjaya)
 
@@ -23,7 +23,9 @@ Packages may currently be unsigned. Windows or macOS may show a publisher warnin
 
 1. Install and open Lumilan Chat on devices connected to the same LAN or Wi-Fi network.
 2. Enter your name. Other connected devices appear in the direct message list.
-3. Select a person for a direct conversation, or open the **General room** to message active devices in the current network session.
+3. Select a person for a direct conversation, use **Create Room** to invite selected devices, or send an **Announcement** to available devices that allow announcements.
+
+For a routed local subnet where devices do not appear automatically, open **Connect a device** on the destination, copy its device code, and paste it on the other device. Both sides must be reachable over TCP port **40754**. A code includes the private IPv4 address, port, and authenticated device ID. The app has no internet relay or global chat service.
 
 Files can only be sent in direct messages, up to **100 MB per file**, and require recipient approval. Both devices need enough free space; failed transfers do not resume automatically. If the recipient uses an older version, the limit is **20 MB**. The initial UI language follows the device region: Indonesia → Bahasa Indonesia, Malaysia → Bahasa Melayu, Spain → Español, and other regions → English. You can also choose a language manually in Settings. Chat history and files remain on each device. Devices that are offline do not receive messages sent while they are disconnected.
 
@@ -31,7 +33,7 @@ Files can only be sent in direct messages, up to **100 MB per file**, and requir
 
 Direct device connections use **libp2p Noise** to encrypt traffic and authenticate device identities. Profile names are chosen by users; there is no verification of a person's identity. Data stored on the device is **not encrypted**. Use trusted networks and enable disk encryption if needed.
 
-Automatic discovery uses mDNS on the LAN. Firewalls, VLANs, and VPNs can prevent discovery. Discovery across VPN subnets is not supported yet.
+Automatic discovery uses mDNS on the LAN and usually stays on one link. Routed private IPv4 subnets can use a device code when the network permits direct TCP; firewalls and VLAN isolation can still block access. VPN address ranges such as 100.64.0.0/10 are not supported. Rooms require invitation acceptance, and the creator manages members; offline members learn membership changes after reconnecting to the creator. Announcements can be disabled in Settings. Older clients cannot use Rooms or Announcements.
 
 ## Updates and help
 
