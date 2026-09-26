@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer, connect } from 'node:net';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -66,8 +67,8 @@ test('mDNS mengirim pada setiap antarmuka LAN, bukan adaptor VPN saja', async ()
 test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lumilan-peer-'));
   let network = 'rumah';
-  const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0', getNetwork: () => network });
-  const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0', getNetwork: () => network, acceptFile: async () => true });
+  const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0', acceptFile: async () => true });
   const c = new LumilanPeer({ dataDir: join(root, 'c'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
   try {
     await a.start();
@@ -112,6 +113,8 @@ test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', a
     assert.equal(a.state.unread[b.id], 1);
     assert.equal(a.file(file.message.id).name, 'pesan.txt');
     assert.equal(a.file(file.message.id).bytes.toString(), 'arsip');
+    await assert.rejects(b.sendFile('umum.txt', Buffer.from('arsip')), /pesan pribadi/);
+    await assert.rejects(a.receiveFile(b.id, { message: { ...file.message, to: null }, bytes: 'YXJzaXA=' }), /File tidak valid/);
     const id = a.id;
     await a.stop();
     assert.equal(a.snapshot().me.id, id);
@@ -152,7 +155,7 @@ test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', a
 test('isi pesan tidak tampak pada lalu lintas TCP antara dua peer', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lumilan-noise-'));
   const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
-  const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0', acceptFile: async () => true });
   const captured = [];
   let proxy;
   try {
@@ -191,6 +194,108 @@ test('isi pesan tidak tampak pada lalu lintas TCP antara dua peer', async () => 
     await a.stop();
     await b.stop();
     if (proxy) await new Promise(resolve => proxy.close(resolve));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('transfer bertahap memverifikasi batas 100 MB, persetujuan, batal, dan potongan rusak', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-chunks-'));
+  let accept = true;
+  const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0', acceptFile: async () => accept });
+  try {
+    await a.start();
+    await b.start();
+    a.rename('Andi');
+    b.rename('Budi');
+    a.discovered.set(b.id, b.addresses);
+    await a.probePeer(b.id);
+    assert.equal(a.trusted.get(b.id).fileChunks, true);
+
+    const source = join(root, 'contoh.bin');
+    const contents = Buffer.alloc(1024 * 1024 + 17, 0x6b);
+    writeFileSync(source, contents);
+    const progress = [];
+    const sent = await a.sendFilePath(source, b.id, { onProgress: bytes => progress.push(bytes) });
+    assert.equal(sent.delivered, 1);
+    assert.equal(progress.at(-1), contents.length);
+    assert.ok(progress.length >= 3);
+    assert.deepEqual(readFileSync(b.filePath(sent.message.id).path), contents);
+    assert.equal(a.filePath(sent.message.id).name, 'contoh.bin');
+
+    accept = false;
+    await assert.rejects(a.sendFilePath(source, b.id), /Penerima menolak file/);
+    await assert.rejects(a.sendFile('lama.bin', Buffer.from('arsip'), b.id), /Penerima menolak file/);
+    assert.equal(b.state.messages.filter(message => message.kind === 'file').length, 1);
+    accept = true;
+
+    let answerOffer;
+    b.acceptFile = () => new Promise(resolve => { answerOffer = resolve; });
+    const pendingId = randomUUID();
+    const pending = a.sendTo(b.id, { type: 'file-start', message: { id: pendingId, to: b.id, name: 'menunggu.bin', size: 4 } });
+    await until(() => Boolean(answerOffer));
+    await assert.rejects(a.sendTo(b.id, { type: 'file-start', message: { id: randomUUID(), to: b.id, name: 'lain.bin', size: 4 } }), /sedang menerima file lain/);
+    answerOffer(false);
+    await assert.rejects(pending, /Penerima menolak file/);
+    b.acceptFile = async () => accept;
+
+    const controller = new AbortController();
+    await assert.rejects(a.sendFilePath(source, b.id, {
+      signal: controller.signal,
+      onProgress: bytes => { if (bytes >= 512 * 1024) controller.abort(new Error('Pengiriman dibatalkan.')); },
+    }), /dibatalkan/);
+    assert.equal(b.incomingFiles.size, 0);
+
+    const badId = randomUUID();
+    await a.sendTo(b.id, { type: 'file-start', message: { id: badId, to: b.id, name: 'rusak.bin', size: 4 } });
+    await assert.rejects(a.sendTo(b.id, { type: 'file-chunk', id: badId, offset: 1, bytes: 'YWJjZA==' }), /Potongan file tidak valid/);
+    assert.equal(b.incomingFiles.size, 0);
+    const wrongHashId = randomUUID();
+    await a.sendTo(b.id, { type: 'file-start', message: { id: wrongHashId, to: b.id, name: 'hash-rusak.bin', size: 4 } });
+    await a.sendTo(b.id, { type: 'file-chunk', id: wrongHashId, offset: 0, bytes: 'YWJjZA==' });
+    await assert.rejects(a.sendTo(b.id, { type: 'file-end', id: wrongHashId, sha256: '0'.repeat(64) }), /File tidak lengkap atau rusak/);
+    assert.equal(b.incomingFiles.size, 0);
+    assert.equal(readdirSync(b.filesDir).filter(name => name.endsWith('.part')).length, 0);
+    assert.equal(readdirSync(a.filesDir).filter(name => name.endsWith('.part')).length, 0);
+
+    const interruptedId = randomUUID();
+    await a.sendTo(b.id, { type: 'file-start', message: { id: interruptedId, to: b.id, name: 'terputus.bin', size: 4 } });
+    await a.sendTo(b.id, { type: 'file-chunk', id: interruptedId, offset: 0, bytes: 'YWI=' });
+    assert.equal(b.incomingFiles.size, 1);
+    await b.stop();
+    assert.equal(readdirSync(b.filesDir).filter(name => name.endsWith('.part')).length, 0);
+    await b.start();
+    await until(() => a.online.has(b.id) && b.online.has(a.id));
+
+    const tooLarge = join(root, 'terlalu-besar.bin');
+    writeFileSync(tooLarge, '');
+    truncateSync(tooLarge, 100 * 1024 * 1024 + 1);
+    await assert.rejects(a.sendFilePath(tooLarge, b.id), /1 B–100 MB/);
+
+    a.rememberPeer(b.id, 'Budi', [], { fileChunks: false });
+    const compatible = await a.sendFilePath(source, b.id);
+    assert.deepEqual(readFileSync(b.filePath(compatible.message.id).path), contents);
+    const originalProfilePacket = a.profilePacket.bind(a);
+    a.profilePacket = async () => ({ ok: true, name: 'Budi', fileChunks: false });
+    const legacyLarge = join(root, 'klien-lama-21MB.bin');
+    writeFileSync(legacyLarge, '');
+    truncateSync(legacyLarge, 21 * 1024 * 1024);
+    await assert.rejects(a.sendFilePath(legacyLarge, b.id), /Perbarui Lumilan Chat/);
+    a.profilePacket = originalProfilePacket;
+    a.rememberPeer(b.id, 'Budi', [], { fileChunks: true });
+
+    const limit = join(root, 'batas-100MB.bin');
+    writeFileSync(limit, '');
+    truncateSync(limit, 100 * 1024 * 1024);
+    const exact = await a.sendFilePath(limit, b.id);
+    assert.equal(statSync(b.filePath(exact.message.id).path).size, 100 * 1024 * 1024);
+    const expected = createHash('sha256');
+    for (let index = 0; index < 100; index++) expected.update(Buffer.alloc(1024 * 1024));
+    assert.equal(exact.message.sha256, expected.digest('hex'));
+    assert.equal(b.state.messages.at(-1).sha256, exact.message.sha256);
+  } finally {
+    await a.stop();
+    await b.stop();
     rmSync(root, { recursive: true, force: true });
   }
 });

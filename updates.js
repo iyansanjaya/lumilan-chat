@@ -34,16 +34,17 @@ export function startUpdates({ app, updater, dialog, getWindow, beforeInstall, t
       const published = parse(latest);
       if (!installed || !published) throw new Error('Versi rilis tidak valid.');
       const newer = published.some((part, index) => part > installed[index] && published.slice(0, index).every((previous, offset) => previous === installed[offset]));
-      if (!manual || !newer) {
-        if (manual) await dialog.showMessageBox(getWindow(), { type: 'info', title: t('Pembaruan Lumilan Chat'), message: t('Lumilan Chat {version} sudah versi terbaru.', { version: app.getVersion() }) });
-        return;
-      }
       const name = arch === 'arm64' ? 'Apple Silicon' : 'Intel';
       const assets = Array.isArray(release.assets) ? release.assets : [];
-      const hasPackage = assets.some(asset => /\.dmg$/i.test(asset.name) && (arch === 'arm64' ? /arm64|universal/i.test(asset.name) : /x64|intel|universal/i.test(asset.name)));
+      const hasPackage = assets.some(asset => /\.dmg$/i.test(asset.name) && (arch === 'arm64' ? /arm64|universal/i.test(asset.name) : !/arm64/i.test(asset.name)));
+      if (!manual) return;
+      if (!newer && hasPackage) {
+        await dialog.showMessageBox(getWindow(), { type: 'info', title: t('Pembaruan Lumilan Chat'), message: t('Lumilan Chat {version} sudah versi terbaru.', { version: app.getVersion() }) });
+        return;
+      }
       const { response: action } = await dialog.showMessageBox(getWindow(), {
         type: 'info', title: t('Pembaruan Lumilan Chat'),
-        message: hasPackage ? t('Lumilan Chat {version} tersedia.', { version: latest }) : t('Lumilan Chat {version} tersedia, tetapi paket macOS {arch} belum diterbitkan.', { version: latest, arch: name }),
+        message: hasPackage ? t('Lumilan Chat {version} tersedia.', { version: latest }) : t('Paket macOS {arch} belum diterbitkan untuk rilis {version}.', { version: latest, arch: name }),
         detail: hasPackage ? t('Unduh dan pasang paket macOS secara manual dari halaman rilis.') : t('Periksa kembali setelah paket macOS diterbitkan.'),
         buttons: [t('Tutup'), t('Buka halaman rilis')], defaultId: hasPackage ? 1 : 0, cancelId: 0,
       });

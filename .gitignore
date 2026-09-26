@@ -7,6 +7,7 @@ data/
 .local-appdata/
 *.log
 .env
+.bun-task-temp/
 
 # graphify - commit graph & laporan, ignore cache/path lokal mesin
 /graphify-out/*

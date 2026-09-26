@@ -49,7 +49,7 @@ test('pesan kegagalan update membedakan internet, metadata, dan izin', () => {
 });
 
 
-test('macOS Intel memeriksa rilis publik saat metadata updater tidak ada', async () => {
+test('macOS Intel melaporkan paket yang belum tersedia, meski versi sama', async () => {
   const dialogs = [];
   let updaterCalls = 0;
   const updater = new EventEmitter();
@@ -61,7 +61,7 @@ test('macOS Intel memeriksa rilis publik saat metadata updater tidak ada', async
     getWindow: () => ({}), beforeInstall: () => {}, platform: 'darwin', arch: 'x64', fetchRelease,
   });
   await check(true);
-  assert.match(dialogs.at(-1).message, /versi terbaru/);
+  assert.match(dialogs.at(-1).message, /Paket macOS Intel belum diterbitkan/);
   assert.equal(updaterCalls, 0);
 });
 
@@ -74,5 +74,18 @@ test('macOS menyebut paket Intel yang belum terbit', async () => {
     fetchRelease: async () => ({ ok: true, json: async () => ({ tag_name: 'v0.4.1', assets: [{ name: 'Lumilan-Chat-Setup-0.4.1.exe' }] }) }),
   });
   await check(true);
-  assert.match(dialogs.at(-1).message, /paket macOS Intel belum diterbitkan/);
+  assert.match(dialogs.at(-1).message, /Paket macOS Intel belum diterbitkan/);
+});
+
+test('macOS Intel mengenali DMG tanpa sufiks arsitektur', async () => {
+  const dialogs = [];
+  const check = startUpdates({
+    app: { isPackaged: true, getVersion: () => '0.4.0' }, updater: new EventEmitter(),
+    dialog: { showMessageBox: async (_window, options) => { dialogs.push(options); return { response: 0 }; } },
+    getWindow: () => ({}), beforeInstall: () => {}, platform: 'darwin', arch: 'x64',
+    fetchRelease: async () => ({ ok: true, json: async () => ({ tag_name: 'v0.4.1', assets: [{ name: 'Lumilan Chat-0.4.1.dmg' }] }) }),
+  });
+  await check(true);
+  assert.equal(dialogs.at(-1).message, 'Lumilan Chat 0.4.1 tersedia.');
+  assert.match(dialogs.at(-1).detail, /Unduh dan pasang/);
 });

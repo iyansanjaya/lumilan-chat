@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('lumilan', {
   state: () => ipcRenderer.invoke('lumilan:state'),
@@ -7,7 +7,13 @@ contextBridge.exposeInMainWorld('lumilan', {
   checkUpdates: () => ipcRenderer.invoke('lumilan:check-updates'),
   testNotification: () => ipcRenderer.invoke('lumilan:test-notification'),
   message: (text, to) => ipcRenderer.invoke('lumilan:message', text, to),
-  file: (name, bytes, to) => ipcRenderer.invoke('lumilan:file', name, bytes, to),
+  file: (file, to) => ipcRenderer.invoke('lumilan:file', webUtils.getPathForFile(file), to),
+  cancelFile: () => ipcRenderer.invoke('lumilan:cancel-file'),
+  onFileProgress: callback => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('lumilan:file-progress', listener);
+    return () => ipcRenderer.removeListener('lumilan:file-progress', listener);
+  },
   saveFile: id => ipcRenderer.invoke('lumilan:save-file', id),
   listFiles: (thread, offset) => ipcRenderer.invoke('lumilan:list-files', thread, offset),
   listMessages: (thread, before) => ipcRenderer.invoke('lumilan:list-messages', thread, before),

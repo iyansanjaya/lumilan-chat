@@ -3,6 +3,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFile } from 'node:fs/promises';
 import electronUpdater from 'electron-updater';
 import { LumilanPeer } from './peer.js';
 import { locales, translate } from './public/i18n.js';
@@ -34,6 +35,7 @@ let settings;
 let settingsPath;
 let pendingThread;
 let checkUpdates = () => Promise.resolve();
+let activeUpload;
 const activeNotifications = new Map();
 let notificationError = '';
 let refreshingNetwork = false;
@@ -236,7 +238,17 @@ if (instanceLock) app.whenReady().then(async () => {
   catch { settings = {}; }
   if (!settings || typeof settings !== 'object') settings = {};
   settings = { enabled: settings.enabled !== false, preview: settings.preview === true, silent: settings.silent === true, background: settings.background !== false, language: locales[settings.language] ? settings.language : 'id' };
-  peer = await new LumilanPeer({ dataDir }).start();
+  peer = await new LumilanPeer({ dataDir, acceptFile: async ({ fromName, name, size }) => {
+    if (!window || window.isDestroyed()) return false;
+    if (!window.isVisible()) window.show();
+    const { response } = await dialog.showMessageBox(window, {
+      type: 'question', title: tr('File masuk'),
+      message: tr('Terima file {name} ({size} MB) dari {sender}?', { name, size: (size / 1024 / 1024).toFixed(1), sender: fromName }),
+      detail: tr('File akan disimpan di data Lumilan Chat pada perangkat ini.'),
+      buttons: [tr('Tolak'), tr('Terima file')], defaultId: 0, cancelId: 0, noLink: true,
+    });
+    return response === 1;
+  } }).start();
   peer.on('change', () => {
     if (!peer.node) return;
     updateBadge();
@@ -264,13 +276,23 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('check-updates', () => checkUpdates(true));
   handler('test-notification', testNotification);
   handler('message', (text, to) => peer.sendMessage(text, to));
-  handler('file', (name, bytes, to) => peer.sendFile(name, bytes, to));
+  handler('file', async (path, to) => {
+    if (activeUpload) throw new Error('Pengiriman file lain masih berlangsung.');
+    const controller = new AbortController();
+    activeUpload = controller;
+    try {
+      return await peer.sendFilePath(path, to, { signal: controller.signal, onProgress: (sent, total) => {
+        if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-progress', { sent, total });
+      } });
+    } finally { activeUpload = undefined; }
+  });
+  handler('cancel-file', () => { activeUpload?.abort(new Error('Pengiriman dibatalkan.')); return true; });
   handler('list-files', (thread, offset) => peer.listFiles(thread, offset));
   handler('list-messages', (thread, before) => peer.listMessages(thread, before));
   handler('save-file', async id => {
-    const file = peer.file(id);
+    const file = peer.filePath(id);
     const result = await dialog.showSaveDialog(window, { defaultPath: file.name, properties: ['createDirectory', 'showOverwriteConfirmation'] });
-    if (!result.canceled && result.filePath) writeFileSync(result.filePath, file.bytes);
+    if (!result.canceled && result.filePath) await copyFile(file.path, result.filePath);
     return !result.canceled;
   });
   handler('current-thread', thread => {
@@ -278,7 +300,7 @@ if (instanceLock) app.whenReady().then(async () => {
     currentThread = thread;
     if (window?.isFocused()) { peer.markRead(thread); dismiss(thread); }
   });
-  handler('notification-settings', () => ({ ...settings, supported: Notification.isSupported(), error: notificationError, tray: Boolean(tray), version: app.getVersion() }));
+  handler('notification-settings', () => ({ ...settings, supported: Notification.isSupported(), error: notificationError, tray: Boolean(tray), version: app.getVersion(), platform: process.platform }));
   handler('startup-settings', startupStatus);
   handler('set-language', value => {
     if (!locales[value]) throw new Error('Bahasa tidak didukung.');

@@ -1,6 +1,6 @@
 # Lumilan Chat
 
-Aplikasi chat antarperangkat untuk Windows, macOS, dan Linux. Temukan pengguna lain di jaringan lokal, kirim pesan pribadi atau ke Ruang Umum, dan bagikan file langsung antardevice tanpa akun atau server chat.
+Aplikasi chat antarperangkat untuk Windows, macOS, dan Linux. Temukan pengguna lain di jaringan lokal, kirim pesan pribadi atau ke Ruang Umum, dan bagikan file lewat pesan pribadi tanpa akun atau server chat.
 
 ## Unduh
 
@@ -18,10 +18,10 @@ Paket saat ini dapat tersedia tanpa tanda tangan digital. Windows atau macOS mun
 ## Mulai menggunakan
 
 1. Pasang dan buka Lumilan Chat pada perangkat yang terhubung ke LAN atau Wi-Fi yang sama.
-2. Isi nama Anda. Perangkat lain yang aktif akan muncul otomatis.
+2. Isi nama Anda. Semua perangkat lain yang terhubung akan muncul di daftar pesan pribadi.
 3. Pilih orang untuk chat pribadi atau buka **Ruang Umum** untuk mengirim pesan ke perangkat aktif pada sesi jaringan ini.
 
-File dibatasi **20 MB per kiriman**. Antarmuka tersedia dalam Bahasa Indonesia, English, Bahasa Melayu, dan Español. Riwayat chat dan file disimpan di perangkat masing-masing. Perangkat yang sedang offline tidak menerima pesan yang dikirim saat mereka tidak terhubung.
+File hanya dapat dikirim lewat pesan pribadi, dibatasi **100 MB per kiriman**, dan memerlukan persetujuan penerima. Kedua perangkat memerlukan ruang kosong yang cukup; transfer yang gagal tidak dilanjutkan otomatis. Jika penerima masih memakai versi lama, batasnya **20 MB**. Antarmuka tersedia dalam Bahasa Indonesia, English, Bahasa Melayu, dan Español. Riwayat chat dan file disimpan di perangkat masing-masing. Perangkat yang sedang offline tidak menerima pesan yang dikirim saat mereka tidak terhubung.
 
 ## Privasi dan batasan jaringan
 
@@ -31,8 +31,10 @@ Penemuan perangkat otomatis memakai mDNS di LAN. Firewall, VLAN, atau VPN dapat 
 
 ## Pembaruan dan bantuan
 
-Aplikasi yang telah dipasang dapat memeriksa pembaruan dari halaman Releases. Anda juga dapat memilih **Periksa pembaruan** dari Pengaturan. Fitur pembaruan pada macOS memerlukan paket yang ditandatangani.
+Aplikasi yang telah dipasang dapat memeriksa pembaruan dari halaman Releases melalui **Pengaturan → Periksa pembaruan**. Pada macOS, aplikasi saat ini memeriksa rilis dan mengarahkan Anda untuk mengunduh serta memasang DMG secara manual. Pemasangan otomatis macOS memerlukan paket bertanda tangan dan metadata pembaruan yang diterbitkan bersama rilis.
+
+Jika **Uji notifikasi sistem** tidak terlihat, periksa izin notifikasi Lumilan Chat dan Jangan Ganggu di pengaturan Windows, macOS, atau desktop Linux. Hasil uji yang menyatakan sistem menerima notifikasi tidak menjamin pemberitahuan tampil di layar.
 
 Dikembangkan oleh [Iyan Sanjaya](https://iyansanjaya.com/).
 
-Dukung pengembangan Lumilan Chat melalui [situs Iyan Sanjaya](https://iyansanjaya.com/).
+Ikon **Dukung Aplikasi** di header menjelaskan cara membantu pengembangan Lumilan Chat dalam jumlah berapa pun. Tautannya saat ini menuju [situs Iyan Sanjaya](https://iyansanjaya.com/); halaman donasi khusus belum tersedia.

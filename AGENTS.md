@@ -14,6 +14,12 @@
 3. Jalankan **Actions → Build macOS and Linux → Run workflow** dari repo publik. Workflow mengambil source lengkap dari repo privat, menjalankan tes, membangun paket, memeriksa UI dalam `app.asar`, lalu mengunggah artefak. Opsi penandatanganan macOS tetap tidak dicentang sampai secret Apple tersedia.
 4. Periksa hasil Mac Intel, Mac Apple Silicon, dan Linux sebelum mendistribusikan. Build lokal atau tes Windows tidak membuktikan DMG macOS berfungsi.
 
+## Pengiriman file
+
+- File hanya dikirim melalui pesan pribadi. Batasnya 100 MB (100 × 1024 × 1024 byte) untuk dua klien yang mendukung transfer bertahap; klien lama tetap memakai batas kompatibilitas 20 MB.
+- Jangan memuat seluruh file 100 MB ke renderer, IPC, atau satu paket jaringan. Pertahankan persetujuan penerima, verifikasi SHA-256, pemeriksaan ruang disk, dan pembersihan file sementara saat transfer gagal atau dibatalkan.
+- Saat mengubah alur file, uji ukuran tepat 100 MB dan di atas batas, penolakan, pembatalan, kerusakan data, transfer terputus, serta kompatibilitas klien lama. Jalankan tes dan periksa isi paket sebelum distribusi.
+
 ## Akses repo privat dari workflow publik
 
 - Secret `PRIVATE_SOURCE_TOKEN` harus dibuat pada **repo publik**: **Settings → Secrets and variables → Actions → New repository secret**. Jangan menaruh nilainya di repo privat, kode, file `.env`, log, atau chat.
