@@ -37,7 +37,25 @@ jobs:
             files: dist/*.AppImage
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Verify private source access
+        shell: bash
+        env:
+          PRIVATE_SOURCE_TOKEN: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_SOURCE_TOKEN" || { echo "Missing Actions secret PRIVATE_SOURCE_TOKEN" >&2; exit 1; }
       - uses: actions/checkout@v7
+        with:
+          repository: iyansanjaya/lumilan
+          ref: master
+          token: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
+          persist-credentials: false
+      - name: Verify complete source
+        shell: bash
+        run: |
+          test -s public/index.html
+          test -s public/app.css
+          test -s public/app.js
+          test -s public/i18n.js
+          echo "Private source commit: $(git rev-parse --short HEAD)"
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -77,6 +95,8 @@ jobs:
             --config.mac.hardenedRuntime=true \
             --config.mac.entitlements=build/entitlements.mac.plist \
             --config.mac.entitlementsInherit=build/entitlements.mac.plist
+      - name: Verify packaged interface
+        run: node scripts/verify-ui-package.cjs
       - name: Verify packages
         shell: bash
         run: |
