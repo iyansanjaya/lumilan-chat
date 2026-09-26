@@ -1,6 +1,6 @@
 # Lumilan Chat
 
-**English** · [Bahasa Indonesia](README.public.id.md)
+**English** · [Bahasa Indonesia](README.id.md)
 
 A cross-device chat app for Windows, macOS, and Linux. Discover people on your local network, send direct or general room messages, and share files in direct messages without accounts or a chat server.
 

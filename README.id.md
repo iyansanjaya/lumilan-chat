@@ -1,6 +1,6 @@
 # Lumilan Chat
 
-[English](README.public.md) · **Bahasa Indonesia**
+[English](README.md) · **Bahasa Indonesia**
 
 Aplikasi chat antarperangkat untuk Windows, macOS, dan Linux. Temukan pengguna lain di jaringan lokal, kirim pesan pribadi atau ke Ruang Umum, dan bagikan file lewat pesan pribadi tanpa akun atau server chat.
 
