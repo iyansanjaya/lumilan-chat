@@ -2,16 +2,15 @@ import { EventEmitter } from 'node:events';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { isIP } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { createLibp2p } from 'libp2p';
 import { generateKeyPair, privateKeyFromProtobuf, privateKeyToProtobuf } from '@libp2p/crypto/keys';
 import { tcp } from '@libp2p/tcp';
-import { mdns } from '@libp2p/mdns';
 import { noise } from '@libp2p/noise';
 import { yamux } from '@libp2p/yamux';
 import { identify } from '@libp2p/identify';
 import { multiaddr } from '@multiformats/multiaddr';
+import { LanDiscovery, lanIPv4 } from './discovery.js';
 
 const PROFILE = '/lumilan/profile/1.0.0';
 const DATA = '/lumilan/data/1.0.0';
@@ -59,9 +58,7 @@ function addressPriority(address) {
 
 function localAddress(address) {
   const match = /^\/ip4\/(\d+\.\d+\.\d+\.\d+)\/tcp\/(\d+)\/p2p\/([a-zA-Z0-9]+)$/.exec(address);
-  if (!match || isIP(match[1]) !== 4 || +match[2] < 1 || +match[2] > 65535) return false;
-  const [a, b] = match[1].split('.').map(Number);
-  return a === 10 || a === 127 || a === 192 && b === 168 || a === 172 && b >= 16 && b <= 31;
+  return Boolean(match && lanIPv4(match[1]) && +match[2] >= 1 && +match[2] <= 65535);
 }
 
 function localPeer(connection) {
@@ -145,7 +142,7 @@ export class LumilanPeer extends EventEmitter {
       transports: [tcp()],
       streamMuxers: [yamux()],
       connectionEncrypters: [noise()],
-      peerDiscovery: this.discovery ? [mdns({ interval: 15_000 })] : [],
+      peerDiscovery: this.discovery ? [components => new LanDiscovery(components)] : [],
       services: { identify: identify() },
       connectionManager: { maxConnections: 100, maxIncomingPendingConnections: 16 },
     });

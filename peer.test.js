@@ -2,9 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, connect } from 'node:net';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { generateKeyPair } from '@libp2p/crypto/keys';
+import { peerIdFromPrivateKey } from '@libp2p/peer-id';
 import { multiaddr } from '@multiformats/multiaddr';
+import { LanDiscovery, lanInterfaces } from './discovery.js';
 import { LumilanPeer } from './peer.js';
 
 async function until(predicate, timeout = 5000) {
@@ -14,6 +18,50 @@ async function until(predicate, timeout = 5000) {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
 }
+
+test('mDNS mengirim pada setiap antarmuka LAN, bukan adaptor VPN saja', async () => {
+  const interfaces = lanInterfaces({
+    Tailscale: [{ family: 'IPv4', address: '100.91.124.75', internal: false }],
+    VirtualBox: [{ family: 'IPv4', address: '192.168.56.1', internal: false }],
+    WiFi: [{ family: 'IPv4', address: '192.168.1.9', internal: false }],
+  });
+  assert.deepEqual(interfaces, ['192.168.56.1', '192.168.1.9']);
+  const id = peerIdFromPrivateKey(await generateKeyPair('Ed25519')).toString();
+  const sockets = [];
+  const discovery = new LanDiscovery({ addressManager: { getAddresses: () => [
+    multiaddr(`/ip4/192.168.56.1/tcp/1234/p2p/${id}`),
+    multiaddr(`/ip4/192.168.1.9/tcp/1234/p2p/${id}`),
+    multiaddr(`/ip4/100.91.124.75/tcp/1234/p2p/${id}`),
+  ] } }, () => interfaces, options => {
+    const socket = Object.assign(new EventEmitter(), {
+      interface: options.interface, bind: options.bind, queries: [], responses: [],
+      query(packet) { this.queries.push(packet); },
+      respond(packet) { this.responses.push(packet); },
+      destroy(callback) { callback(); },
+    });
+    sockets.push(socket);
+    return socket;
+  });
+  try {
+    discovery.start();
+    assert.deepEqual(sockets.map(socket => socket.interface), interfaces);
+    assert.ok(sockets.every(socket => socket.bind === '0.0.0.0'));
+    for (const socket of sockets) socket.emit('ready');
+    assert.ok(sockets.every(socket => socket.queries.length === 1));
+    sockets[1].emit('query', { questions: [{ name: '_p2p._udp.local', type: 'PTR' }] });
+    assert.equal(sockets[1].responses[0].filter(answer => answer.type === 'TXT').length, 1);
+    assert.match(sockets[1].responses[0][1].data, /\/ip4\/192\.168\.1\.9\/tcp\//);
+    const response = sockets[1].responses[0];
+    let discovered;
+    discovery.addEventListener('peer', event => { discovered = event.detail; });
+    discovery.receive({ answers: response.map(answer => ({
+      ...answer, name: answer.type === 'TXT' ? 'remote._p2p._udp.local' : answer.name,
+      data: answer.type === 'TXT' ? [Buffer.from(answer.data)] : 'remote._p2p._udp.local',
+    })) });
+    assert.equal(discovered.id.toString(), id);
+    assert.equal(discovered.multiaddrs.length, 1);
+  } finally { await discovery.stop(); }
+});
 
 test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lumilan-peer-'));

@@ -14,7 +14,7 @@ const asar = platform === 'darwin'
   ? join('dist', directory, 'Lumilan Chat.app', 'Contents', 'Resources', 'app.asar')
   : join('dist', directory, 'resources', 'app.asar');
 const files = new Set(listPackage(asar).map(path => path.replaceAll('\\', '/').replace(/^\/+/, '')));
-for (const file of ['main.js', 'public/index.html', 'public/app.css', 'public/app.js', 'public/i18n.js', 'public/fonts/PublicSans.ttf']) {
+for (const file of ['main.js', 'peer.js', 'discovery.js', 'public/index.html', 'public/app.css', 'public/app.js', 'public/i18n.js', 'public/fonts/PublicSans.ttf']) {
   if (!files.has(file)) throw new Error(`Missing ${file} in ${asar}`);
 }
 console.log(`Verified UI in ${asar}`);

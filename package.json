@@ -1,6 +1,6 @@
 {
   "name": "lumilan-chat",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Pesan langsung antarperangkat di jaringan lokal",
   "author": "Iyan Sanjaya",
   "private": true,
@@ -25,6 +25,7 @@
       "updates.js",
       "preload.cjs",
       "peer.js",
+      "discovery.js",
       "public/**/*",
       "build/icon.ico",
       "build/icon.png",
@@ -60,7 +61,6 @@
   "dependencies": {
     "@libp2p/crypto": "5.1.23",
     "@libp2p/identify": "4.1.14",
-    "@libp2p/mdns": "12.0.32",
     "@libp2p/noise": "17.0.3",
     "@libp2p/peer-id": "6.0.15",
     "@libp2p/tcp": "11.0.28",
@@ -68,6 +68,7 @@
     "@multiformats/multiaddr": "13.0.3",
     "electron-updater": "^6.8.9",
     "libp2p": "3.3.11",
+    "multicast-dns": "7.2.5",
     "reicon": "1.2.4"
   },
   "devDependencies": {
