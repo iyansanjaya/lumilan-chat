@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { copyFile } from 'node:fs/promises';
 import electronUpdater from 'electron-updater';
 import { LumilanPeer } from './peer.js';
-import { locales, translate } from './public/i18n.js';
+import { languageForRegion, languageSettings, locales, translate } from './public/i18n.js';
 import { startUpdates } from './updates.js';
 
 const { autoUpdater } = electronUpdater;
@@ -237,7 +237,8 @@ if (instanceLock) app.whenReady().then(async () => {
   try { settings = JSON.parse(readFileSync(settingsPath, 'utf8')); }
   catch { settings = {}; }
   if (!settings || typeof settings !== 'object') settings = {};
-  settings = { enabled: settings.enabled !== false, preview: settings.preview === true, silent: settings.silent === true, background: settings.background !== false, language: locales[settings.language] ? settings.language : 'id' };
+  settings = { enabled: settings.enabled !== false, preview: settings.preview === true, silent: settings.silent === true, background: settings.background !== false,
+    ...languageSettings(settings, app.getLocaleCountryCode()) };
   peer = await new LumilanPeer({ dataDir, acceptFile: async ({ fromName, name, size }) => {
     if (!window || window.isDestroyed()) return false;
     if (!window.isVisible()) window.show();
@@ -303,19 +304,20 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('notification-settings', () => ({ ...settings, supported: Notification.isSupported(), error: notificationError, tray: Boolean(tray), version: app.getVersion(), platform: process.platform }));
   handler('startup-settings', startupStatus);
   handler('set-language', value => {
-    if (!locales[value]) throw new Error('Bahasa tidak didukung.');
-    settings.language = value;
+    if (value !== 'auto' && !Object.hasOwn(locales, value)) throw new Error('Bahasa tidak didukung.');
+    const next = { ...settings, languageMode: value === 'auto' ? 'auto' : 'manual', language: value === 'auto' ? languageForRegion(app.getLocaleCountryCode()) : value };
     const temporary = `${settingsPath}.tmp`;
-    writeFileSync(temporary, JSON.stringify(settings), { mode: 0o600 });
+    writeFileSync(temporary, JSON.stringify(next), { mode: 0o600 });
     renameSync(temporary, settingsPath);
+    settings = next;
     updateTrayMenu();
     updateBadge();
-    return value;
+    return { language: settings.language, languageMode: settings.languageMode };
   });
   handler('set-startup', setStartup);
   handler('set-notification-settings', value => {
     if (!value || typeof value !== 'object' || !['enabled', 'preview', 'silent', 'background'].every(key => typeof value[key] === 'boolean')) throw new Error('Pengaturan tidak valid.');
-    const next = { enabled: value.enabled, preview: value.preview, silent: value.silent, background: value.background, language: settings.language };
+    const next = { enabled: value.enabled, preview: value.preview, silent: value.silent, background: value.background, language: settings.language, languageMode: settings.languageMode };
     const temporary = `${settingsPath}.tmp`;
     writeFileSync(temporary, JSON.stringify(next), { mode: 0o600 });
     renameSync(temporary, settingsPath);
@@ -343,9 +345,9 @@ if (instanceLock) app.whenReady().then(async () => {
   });
   if (process.platform !== 'darwin') window.removeMenu();
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url === 'https://iyansanjaya.com/') {
+    if (['https://iyansanjaya.com/', 'https://trakteer.id/iyansanjaya/tip', 'https://ko-fi.com/iyansanjaya', 'https://github.com/iyansanjaya/lumilan-chat/issues'].includes(url)) {
       setImmediate(() => {
-        void shell.openExternal(url).catch(error => console.warn('Gagal membuka situs pengembang:', error));
+        void shell.openExternal(url).catch(error => console.warn('Gagal membuka tautan eksternal:', error));
       });
     }
     return { action: 'deny' };
