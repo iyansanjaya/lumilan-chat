@@ -29,6 +29,8 @@ For a routed local subnet where devices do not appear automatically, open **Conn
 
 Files can only be sent in direct messages, up to **100 MB per file**, and require recipient approval. Both devices need enough free space; failed transfers do not resume automatically. If the recipient uses an older version, the limit is **20 MB**. The initial UI language follows the device region: Indonesia → Bahasa Indonesia, Malaysia → Bahasa Melayu, Spain → Español, and other regions → English. You can also choose a language manually in Settings. Chat history and files remain on each device. Devices that are offline do not receive messages sent while they are disconnected.
 
+The creator can delete a Conversation Room through **Manage / Delete Room**; members can choose **Leave Room**. An Announcement Room can be deleted from **Conversation options** and created again when needed. Use **Archive conversation** to hide a direct chat, Room, or Announcement. In the **Archive** filter, you can read and restore conversations; **Permanently delete history** removes messages and files from Lumilan Chat data on this device. History from deleted or left Rooms remains in Archive until deleted there. Downloaded copies, backups, and data on other devices are unaffected.
+
 ## Privacy and network limits
 
 Direct device connections use **libp2p Noise** to encrypt traffic and authenticate device identities. Profile names are chosen by users; there is no verification of a person's identity. Data stored on the device is **not encrypted**. Use trusted networks and enable disk encryption if needed.

@@ -281,12 +281,16 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('room-message', (text, id) => peer.sendRoomMessage(text, id));
   handler('announcement', text => peer.sendAnnouncement(text));
   handler('create-announcement-room', () => peer.createAnnouncementRoom());
+  handler('delete-announcement-room', () => peer.deleteAnnouncementRoom());
   handler('create-room', (name, members) => peer.createRoom(name, members));
   handler('update-room', (id, members) => peer.updateRoom(id, members));
   handler('accept-room', id => peer.acceptRoom(id));
   handler('decline-room', id => peer.declineRoom(id));
   handler('leave-room', id => peer.leaveRoom(id));
   handler('delete-room', id => peer.deleteRoom(id));
+  handler('archive-thread', id => peer.archiveThread(id));
+  handler('restore-thread', id => peer.restoreThread(id));
+  handler('delete-archived-history', id => peer.deleteArchivedHistory(id));
   handler('connect-address', value => peer.connectAddress(value));
   handler('set-announcements', enabled => peer.setAnnouncements(enabled));
   handler('mute-announcements-from', (id, muted) => peer.muteAnnouncementsFrom(id, muted));
@@ -310,7 +314,7 @@ if (instanceLock) app.whenReady().then(async () => {
     return !result.canceled;
   });
   handler('current-thread', thread => {
-    if (thread !== null && thread !== 'announcements' && !peer.online.has(thread) &&
+    if (thread !== null && thread !== 'announcements' && !Object.hasOwn(peer.state.archivedThreads, thread) && !peer.online.has(thread) &&
         !(typeof thread === 'string' && thread.startsWith('room:') && peer.room(thread.slice(5)))) throw new Error('Percakapan tidak valid.');
     currentThread = thread;
     if (window?.isFocused() && thread !== null) { peer.markRead(thread); dismiss(thread); }

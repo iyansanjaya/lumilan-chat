@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer, connect } from 'node:net';
 import { EventEmitter } from 'node:events';
@@ -336,6 +336,51 @@ test('ringkasan menghitung riwayat penuh dan daftar file memakai halaman 50 item
   }
 });
 
+test('arsip menyimpan percakapan offline dan penghapusan permanen membersihkan file lokal', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-archive-'));
+  const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0', acceptFile: async () => true });
+  const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  try {
+    await a.start();
+    await b.start();
+    a.rename('Andi');
+    b.rename('Budi');
+    await a.connectAddress(b.addresses[0]);
+    await b.sendMessage('Simpan dahulu', a.id);
+    const file = await b.sendFile('dokumen.txt', Buffer.from('isi dokumen'), a.id);
+    await assert.rejects(a.deleteArchivedHistory(b.id), /Arsip tidak ditemukan/);
+    a.archiveThread(b.id);
+    assert.equal(a.snapshot().archivedThreads[0].id, b.id);
+    await assert.rejects(a.sendMessage('Tidak boleh dikirim', b.id), /Pulihkan percakapan/);
+    await assert.rejects(a.sendFile('tidak.txt', Buffer.from('isi'), b.id), /Pulihkan percakapan/);
+    await b.stop();
+    await a.stop();
+    await a.start();
+    assert.equal(a.snapshot().messages.length, 2);
+    assert.equal(a.listMessages(b.id).length, 2);
+    assert.equal(a.listFiles(b.id).total, 1);
+    assert.equal(existsSync(a.filePath(file.message.id).path), true);
+    assert.equal(await a.deleteArchivedHistory(b.id), 2);
+    assert.equal(a.snapshot().stats[b.id], undefined);
+    assert.equal(a.listFiles(b.id).total, 0);
+    assert.equal(existsSync(join(a.filesDir, file.message.id)), false);
+    assert.deepEqual(a.state.pendingFileDeletes, []);
+    a.restoreThread(b.id);
+    assert.equal(a.snapshot().archivedThreads.length, 0);
+    await a.stop();
+    const legacy = JSON.parse(readFileSync(a.path, 'utf8'));
+    delete legacy.archivedThreads;
+    delete legacy.pendingFileDeletes;
+    writeFileSync(a.path, JSON.stringify(legacy));
+    await a.start();
+    assert.deepEqual(a.snapshot().archivedThreads, []);
+  } finally {
+    await a.stop();
+    await b.stop();
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
 test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lumilan-rooms-'));
   const peers = ['Andi', 'Budi', 'Citra'].map((name, index) => new LumilanPeer({
@@ -358,8 +403,13 @@ test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async ()
     assert.equal(c.state.messages.some(message => message.roomId === id), false);
     await c.acceptRoom(id);
     await until(() => b.room(id).members.includes(c.id));
+    a.archiveThread(`room:${id}`);
+    assert.equal(a.snapshot().archivedThreads.some(item => item.id === `room:${id}`), true);
+    await assert.rejects(a.sendRoomMessage('Tidak boleh dikirim', id), /Pulihkan percakapan/);
     assert.equal((await b.sendRoomMessage('Semua anggota', id)).delivered, 2);
     assert.equal(c.listMessages(`room:${id}`).at(-1).text, 'Semua anggota');
+    assert.equal(a.snapshot().archivedThreads.some(item => item.id === `room:${id}`), true);
+    a.restoreThread(`room:${id}`);
 
     await a.updateRoom(id, [c.id]);
     assert.equal(b.room(id), undefined);
@@ -373,6 +423,9 @@ test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async ()
     a.createAnnouncementRoom();
     assert.equal(a.snapshot().announcementRoomCreated, true);
     assert.throws(() => a.createAnnouncementRoom(), /sudah dibuat/);
+    a.archiveThread('announcements');
+    await assert.rejects(a.sendAnnouncement('Tidak boleh dikirim'), /Pulihkan percakapan/);
+    a.restoreThread('announcements');
     assert.equal((await a.sendAnnouncement('Rapat pagi')).delivered, 2);
     assert.equal(b.snapshot().announcementRoomCreated, false);
     await assert.rejects(b.sendAnnouncement('Tanpa Ruang'), /Buat Ruang Pengumuman/);
@@ -403,8 +456,14 @@ test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async ()
     await assert.rejects(a.sendRoomMessage('Tidak diantrekan', id), /Tidak ada anggota Ruang yang online/);
     assert.equal(a.state.messages.some(message => message.text === 'Tidak diantrekan'), false);
     await a.deleteRoom(id);
+    assert.equal(a.snapshot().archivedThreads.some(item => item.id === `room:${id}`), true);
+    assert.equal(a.listMessages(`room:${id}`).length > 0, true);
+    assert.throws(() => a.restoreThread(`room:${id}`), /Ruang sudah dihapus/);
+    await a.deleteArchivedHistory(`room:${id}`);
+    assert.equal(a.snapshot().archivedThreads.some(item => item.id === `room:${id}`), false);
     await c.start();
     await until(() => c.room(id) === undefined);
+    assert.equal(c.snapshot().archivedThreads.some(item => item.id === `room:${id}`), true);
     const later = await a.createRoom('Keluar', [b.id]);
     await b.acceptRoom(later.id);
     await a.stop();
@@ -412,6 +471,12 @@ test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async ()
     assert.equal(b.room(later.id), undefined);
     await a.start();
     assert.equal(a.snapshot().announcementRoomCreated, true);
+    a.deleteAnnouncementRoom();
+    assert.equal(a.snapshot().announcementRoomCreated, false);
+    assert.equal(a.snapshot().archivedThreads.some(item => item.id === 'announcements'), true);
+    await assert.rejects(a.sendAnnouncement('Setelah dihapus'), /Buat Ruang Pengumuman/);
+    a.createAnnouncementRoom();
+    assert.equal(a.snapshot().archivedThreads.some(item => item.id === 'announcements'), false);
     await until(() => !a.room(later.id).members.includes(b.id));
   } finally {
     for (const peer of peers) await peer.stop();

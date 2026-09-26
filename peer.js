@@ -132,7 +132,7 @@ export class LumilanPeer extends EventEmitter {
     this.keyPath = join(dataDir, 'identity.key');
     this.filesDir = join(dataDir, 'files');
     // ponytail: riwayat kecil disimpan sebagai satu JSON; pindah ke SQLite jika pemakaian bertahun-tahun membuatnya besar.
-    this.state = { name: '', status: 'active', about: '', avatar: '', trusted: [], rooms: [], declinedRooms: [], leftRooms: [], roomTombstones: [], messages: [], unread: {}, announcementsEnabled: true, announcementRoomCreated: false, mutedAnnouncements: [] };
+    this.state = { name: '', status: 'active', about: '', avatar: '', trusted: [], rooms: [], declinedRooms: [], leftRooms: [], roomTombstones: [], archivedThreads: {}, pendingFileDeletes: [], messages: [], unread: {}, announcementsEnabled: true, announcementRoomCreated: false, mutedAnnouncements: [] };
     this.node = null;
     this.identity = null;
     this.discovered = new Map();
@@ -160,6 +160,9 @@ export class LumilanPeer extends EventEmitter {
     this.state.declinedRooms ||= [];
     this.state.leftRooms ||= [];
     this.state.roomTombstones ||= [];
+    if (!this.state.archivedThreads || typeof this.state.archivedThreads !== 'object' || Array.isArray(this.state.archivedThreads)) this.state.archivedThreads = {};
+    this.state.pendingFileDeletes = Array.isArray(this.state.pendingFileDeletes) ? this.state.pendingFileDeletes.filter(validRoomId) : [];
+    await this.cleanupDeletedFiles();
     this.state.announcementsEnabled = this.state.announcementsEnabled !== false;
     this.state.announcementRoomCreated = this.state.announcementRoomCreated === true;
     this.state.mutedAnnouncements ||= [];
@@ -266,8 +269,9 @@ export class LumilanPeer extends EventEmitter {
 
   snapshot() {
     const online = this.online;
-    const visibleMessages = this.state.messages.filter(message => message.roomId ? this.state.rooms.some(room => room.id === message.roomId && !room.pending)
-      : message.kind === 'announcement' ? true : message.to && online.has(message.from === this.id ? message.to : message.from));
+    const visibleMessages = this.state.messages.filter(message => Object.hasOwn(this.state.archivedThreads, messageKey(message, this.id)) ||
+      (message.roomId ? this.state.rooms.some(room => room.id === message.roomId && !room.pending)
+        : message.kind === 'announcement' ? true : message.to && online.has(message.from === this.id ? message.to : message.from)));
     const stats = {};
     const recentFiles = {};
     for (const message of visibleMessages) {
@@ -289,6 +293,7 @@ export class LumilanPeer extends EventEmitter {
         members: room.members, onlineMembers: room.members.filter(id => id === this.id || online.has(id)),
         invited: room.owner === this.id ? room.invited : undefined })),
       contacts: this.state.trusted.map(peer => ({ id: peer.id, name: peer.name })),
+      archivedThreads: Object.entries(this.state.archivedThreads).map(([id, name]) => ({ id, name })),
       announcementsEnabled: this.state.announcementsEnabled,
       announcementRoomCreated: this.state.announcementRoomCreated,
       mutedAnnouncements: this.state.mutedAnnouncements,
@@ -296,7 +301,7 @@ export class LumilanPeer extends EventEmitter {
         id: peer.id, name: peer.name, online: true, status: cleanStatus(peer.status), about: cleanAbout(peer.about), avatar: cleanAvatar(peer.avatar), announcements: peer.announcements === true,
       })),
       messages: visibleMessages.slice(-1000),
-      unread: Object.fromEntries(Object.entries(this.state.unread).filter(([id]) => id === 'announcements' ||
+      unread: Object.fromEntries(Object.entries(this.state.unread).filter(([id]) => Object.hasOwn(this.state.archivedThreads, id) || id === 'announcements' ||
         id.startsWith('room:') && this.state.rooms.some(room => roomKey(room.id) === id && !room.pending) || online.has(id))),
     };
   }
@@ -332,6 +337,14 @@ export class LumilanPeer extends EventEmitter {
   }
 
   save() { saveJson(this.path, this.state); this.emit('change'); }
+
+  async cleanupDeletedFiles() {
+    if (!this.state.pendingFileDeletes.length) return true;
+    const results = await Promise.allSettled(this.state.pendingFileDeletes.map(id => unlink(join(this.filesDir, id))));
+    this.state.pendingFileDeletes = this.state.pendingFileDeletes.filter((_id, index) => results[index].status === 'rejected' && results[index].reason?.code !== 'ENOENT');
+    this.save();
+    return this.state.pendingFileDeletes.length === 0;
+  }
 
   markRead(thread) {
     const key = thread;
@@ -382,7 +395,52 @@ export class LumilanPeer extends EventEmitter {
     this.save();
   }
 
+  archiveThread(thread) {
+    let name;
+    if (thread === 'announcements') {
+      if (!this.state.announcementRoomCreated && !this.state.messages.some(message => message.kind === 'announcement')) throw new Error('Percakapan tidak tersedia.');
+      name = 'Ruang Pengumuman';
+    } else if (typeof thread === 'string' && thread.startsWith('room:')) {
+      const room = this.room(thread.slice(5));
+      if (!room || room.pending) throw new Error('Percakapan tidak tersedia.');
+      name = room.name;
+    } else {
+      if (!validId(thread) || !this.trusted.has(thread)) throw new Error('Percakapan tidak tersedia.');
+      name = this.trusted.get(thread).name;
+    }
+    this.state.archivedThreads[thread] = name;
+    this.save();
+  }
+
+  requireWritableThread(thread) {
+    if (Object.hasOwn(this.state.archivedThreads, thread)) throw new Error('Pulihkan percakapan dari Arsip sebelum mengirim.');
+  }
+
+  restoreThread(thread) {
+    if (typeof thread !== 'string' || !Object.hasOwn(this.state.archivedThreads, thread)) throw new Error('Percakapan belum diarsipkan.');
+    if (thread.startsWith('room:') && !this.room(thread.slice(5))) throw new Error('Ruang sudah dihapus. Riwayat hanya dapat dihapus.');
+    delete this.state.archivedThreads[thread];
+    this.save();
+  }
+
+  async deleteArchivedHistory(thread) {
+    if (typeof thread !== 'string' || !Object.hasOwn(this.state.archivedThreads, thread)) throw new Error('Arsip tidak ditemukan.');
+    const removed = this.state.messages.filter(message => inThread(message, thread, this.id));
+    this.state.messages = this.state.messages.filter(message => !inThread(message, thread, this.id));
+    delete this.state.unread[thread];
+    if (thread.startsWith('room:') && !this.room(thread.slice(5)) || thread === 'announcements' && !this.state.announcementRoomCreated) delete this.state.archivedThreads[thread];
+    const files = removed.filter(message => message.kind === 'file' && validRoomId(message.id)).map(message => message.id);
+    this.state.pendingFileDeletes = [...new Set([...this.state.pendingFileDeletes, ...files])];
+    this.save();
+    if (!await this.cleanupDeletedFiles()) throw new Error('Riwayat dihapus, tetapi sebagian file lokal belum dapat dibersihkan. Coba mulai ulang aplikasi.');
+    return removed.length;
+  }
+
   room(id) { return this.state.rooms.find(room => room.id === id); }
+
+  archiveRemovedRoom(room) {
+    if (this.state.messages.some(message => message.roomId === room.id)) this.state.archivedThreads[roomKey(room.id)] = room.name;
+  }
 
   async syncRoomsWith(id) {
     if (!this.online.has(id)) return;
@@ -459,6 +517,7 @@ export class LumilanPeer extends EventEmitter {
     const room = this.room(id);
     if (!room || room.owner === this.id) throw new Error('Pembuat Ruang tidak dapat keluar.');
     this.state.leftRooms.push({ id, owner: room.owner });
+    this.archiveRemovedRoom(room);
     this.state.rooms = this.state.rooms.filter(item => item.id !== id);
     delete this.state.unread[roomKey(id)];
     this.save();
@@ -470,6 +529,7 @@ export class LumilanPeer extends EventEmitter {
     if (!room || room.owner !== this.id) throw new Error('Ruang tidak ditemukan.');
     const tombstone = { id, version: room.version + 1, members: [...new Set([...room.members, ...room.invited, ...Object.keys(room.removed || {})])] };
     this.state.roomTombstones.push(tombstone);
+    this.archiveRemovedRoom(room);
     this.state.rooms = this.state.rooms.filter(item => item !== room);
     delete this.state.unread[roomKey(id)];
     this.save();
@@ -487,8 +547,16 @@ export class LumilanPeer extends EventEmitter {
   createAnnouncementRoom() {
     if (this.state.announcementRoomCreated) throw new Error('Ruang Pengumuman sudah dibuat.');
     this.state.announcementRoomCreated = true;
+    delete this.state.archivedThreads.announcements;
     this.save();
     return true;
+  }
+
+  deleteAnnouncementRoom() {
+    if (!this.state.announcementRoomCreated) throw new Error('Ruang Pengumuman tidak ditemukan.');
+    this.state.announcementRoomCreated = false;
+    if (this.state.messages.some(message => message.kind === 'announcement')) this.state.archivedThreads.announcements = 'Ruang Pengumuman';
+    this.save();
   }
 
   muteAnnouncementsFrom(id, muted) {
@@ -627,6 +695,7 @@ export class LumilanPeer extends EventEmitter {
   receiveRoomRemove(from, id, version) {
     const room = this.room(id);
     if (!room || room.owner !== from || !Number.isSafeInteger(version) || version <= room.version) throw new Error('Perubahan Ruang tidak valid.');
+    this.archiveRemovedRoom(room);
     this.state.rooms = this.state.rooms.filter(item => item !== room);
     delete this.state.unread[roomKey(id)];
     this.save();
@@ -793,6 +862,7 @@ export class LumilanPeer extends EventEmitter {
   }
 
   async sendMessage(text, to) {
+    this.requireWritableThread(to);
     if (typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('Pesan harus berisi 1–4000 karakter.');
     if (!validId(to) || !this.trusted.has(to)) throw new Error('Penerima tidak dikenal.');
     if (!this.online.has(to)) throw new Error('Penerima sedang offline.');
@@ -806,6 +876,7 @@ export class LumilanPeer extends EventEmitter {
   async sendRoomMessage(text, id) {
     const room = this.room(id);
     if (!room || room.pending || !room.members.includes(this.id) || typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('Pesan Ruang tidak valid.');
+    this.requireWritableThread(roomKey(id));
     const targets = room.members.filter(peer => peer !== this.id && this.online.has(peer));
     if (!targets.length) throw new Error('Tidak ada anggota Ruang yang online.');
     const message = { id: randomUUID(), roomId: id, version: room.version, from: this.id, fromName: this.state.name, to: null, text: text.trim(), kind: 'text', at: Date.now() };
@@ -817,6 +888,7 @@ export class LumilanPeer extends EventEmitter {
 
   async sendAnnouncement(text) {
     if (!this.state.announcementRoomCreated) throw new Error('Buat Ruang Pengumuman sebelum mengirim.');
+    this.requireWritableThread('announcements');
     if (typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('Pengumuman harus berisi 1–4000 karakter.');
     const targets = [...this.online].filter(id => this.trusted.get(id)?.announcements);
     if (!targets.length) throw new Error('Tidak ada penerima Pengumuman yang online.');
@@ -829,6 +901,7 @@ export class LumilanPeer extends EventEmitter {
 
   async sendFile(name, bytes, to = null, { signal } = {}) {
     if (to === null) throw new Error('File hanya dapat dikirim melalui pesan pribadi.');
+    this.requireWritableThread(to);
     if (signal?.aborted) throw signal.reason || new Error('Pengiriman dibatalkan.');
     const buffer = Buffer.from(bytes);
     const filename = safeFileName(name);
@@ -852,6 +925,7 @@ export class LumilanPeer extends EventEmitter {
   }
 
   async sendFilePath(path, to, { signal, onProgress } = {}) {
+    this.requireWritableThread(to);
     if (typeof path !== 'string' || !path || !validId(to) || !this.trusted.has(to)) throw new Error('Penerima atau file tidak valid.');
     if (!this.online.has(to)) throw new Error('Penerima sedang offline.');
     const source = await stat(path);
@@ -912,7 +986,7 @@ export class LumilanPeer extends EventEmitter {
   }
 
   listMessages(thread, before = null) {
-    if (thread !== 'announcements' && !(typeof thread === 'string' && thread.startsWith('room:') && this.room(thread.slice(5)) && !this.room(thread.slice(5)).pending) &&
+    if (thread !== 'announcements' && !Object.hasOwn(this.state.archivedThreads, thread) && !(typeof thread === 'string' && thread.startsWith('room:') && this.room(thread.slice(5)) && !this.room(thread.slice(5)).pending) &&
         (!validId(thread) || !this.online.has(thread))) throw new Error('Percakapan tidak tersedia.');
     if (before !== null && (typeof before !== 'string' || !/^[0-9a-f-]{36}$/.test(before))) throw new Error('Posisi pesan tidak valid.');
     const end = before === null ? this.state.messages.length : this.state.messages.findIndex(message => message.id === before);
@@ -926,7 +1000,7 @@ export class LumilanPeer extends EventEmitter {
   }
 
   listFiles(thread, offset = 0) {
-    if (!validId(thread) || !this.online.has(thread)) throw new Error('Percakapan tidak tersedia.');
+    if (!validId(thread) || !this.online.has(thread) && !Object.hasOwn(this.state.archivedThreads, thread)) throw new Error('Percakapan tidak tersedia.');
     if (!Number.isInteger(offset) || offset < 0) throw new Error('Halaman file tidak valid.');
     const items = [];
     let total = 0;

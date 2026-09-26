@@ -29,6 +29,8 @@ Untuk subnet lokal yang saling memiliki rute tetapi perangkatnya tidak muncul ot
 
 File hanya dapat dikirim lewat pesan pribadi, dibatasi **100 MB per kiriman**, dan memerlukan persetujuan penerima. Kedua perangkat memerlukan ruang kosong yang cukup; transfer yang gagal tidak dilanjutkan otomatis. Jika penerima masih memakai versi lama, batasnya **20 MB**. Bahasa awal mengikuti wilayah perangkat: Indonesia → Bahasa Indonesia, Malaysia → Bahasa Melayu, Spanyol → Español, dan wilayah lain → English. Bahasa juga dapat dipilih manual di Pengaturan. Riwayat chat dan file disimpan di perangkat masing-masing. Perangkat yang sedang offline tidak menerima pesan yang dikirim saat mereka tidak terhubung.
 
+Pembuat Ruang Percakapan dapat menghapus Ruang melalui **Kelola / Hapus Ruang**; anggota dapat memilih **Keluar Ruang**. Ruang Pengumuman dapat dihapus dari **Opsi percakapan** dan dibuat lagi jika ingin mengirim. Gunakan **Arsipkan percakapan** untuk menyembunyikan chat pribadi, Ruang, atau Pengumuman. Di filter **Arsip**, percakapan dapat dibaca dan dipulihkan; **Hapus riwayat permanen** menghapus pesan dan file dalam data Lumilan Chat pada perangkat ini. Riwayat Ruang yang dihapus atau ditinggalkan tetap tersedia di Arsip sampai dihapus di sana. Salinan yang telah diunduh, cadangan, dan data pada perangkat lain tidak ikut terhapus.
+
 ## Privasi dan batasan jaringan
 
 Koneksi langsung antarperangkat memakai **libp2p Noise** untuk mengenkripsi lalu lintas dan mengautentikasi identitas perangkat. Nama profil dipilih sendiri oleh pengguna; verifikasi identitas orang belum tersedia. Data yang tersimpan di perangkat **belum terenkripsi**. Gunakan jaringan yang Anda percayai dan aktifkan enkripsi disk jika diperlukan.
