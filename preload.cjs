@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('lumilan', {
   message: (text, to) => ipcRenderer.invoke('lumilan:message', text, to),
   roomMessage: (text, id) => ipcRenderer.invoke('lumilan:room-message', text, id),
   announcement: text => ipcRenderer.invoke('lumilan:announcement', text),
+  createAnnouncementRoom: () => ipcRenderer.invoke('lumilan:create-announcement-room'),
   createRoom: (name, members) => ipcRenderer.invoke('lumilan:create-room', name, members),
   updateRoom: (id, members) => ipcRenderer.invoke('lumilan:update-room', id, members),
   acceptRoom: id => ipcRenderer.invoke('lumilan:accept-room', id),

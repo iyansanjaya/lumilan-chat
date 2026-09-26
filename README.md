@@ -23,7 +23,7 @@ Packages may currently be unsigned. Windows or macOS may show a publisher warnin
 
 1. Install and open Lumilan Chat on devices connected to the same LAN or Wi-Fi network.
 2. Enter your name. Other connected devices appear in the direct message list.
-3. Select a person for a direct conversation, use **Create Room** to invite selected devices, or send an **Announcement** to available devices that allow announcements.
+3. Select a person for a direct conversation. Use **Create Room** to make an invitation-only Conversation Room or an Announcement Room. Your Announcement Room appears after creation and broadcasts to all active devices that allow announcements. Recipients see it when a message arrives.
 
 For a routed local subnet where devices do not appear automatically, open **Connect a device** on the destination, copy its device code, and paste it on the other device. Both sides must be reachable over TCP port **40754**. A code includes the private IPv4 address, port, and authenticated device ID. The app has no internet relay or global chat service.
 
@@ -33,7 +33,7 @@ Files can only be sent in direct messages, up to **100 MB per file**, and requir
 
 Direct device connections use **libp2p Noise** to encrypt traffic and authenticate device identities. Profile names are chosen by users; there is no verification of a person's identity. Data stored on the device is **not encrypted**. Use trusted networks and enable disk encryption if needed.
 
-Automatic discovery uses mDNS on the LAN and usually stays on one link. Routed private IPv4 subnets can use a device code when the network permits direct TCP; firewalls and VLAN isolation can still block access. VPN address ranges such as 100.64.0.0/10 are not supported. Rooms require invitation acceptance, and the creator manages members; offline members learn membership changes after reconnecting to the creator. Announcements can be disabled in Settings. Older clients cannot use Rooms or Announcements.
+Automatic discovery uses mDNS on the LAN and usually stays on one link. Routed private IPv4 subnets can use a device code when the network permits direct TCP; firewalls and VLAN isolation can still block access. VPN address ranges such as 100.64.0.0/10 are not supported. Conversation Rooms require invitation acceptance, and the creator manages members; offline members learn membership changes after reconnecting to the creator. Recipients can read Announcements without creating a room, but must create their own Announcement Room before sending. Announcements can be disabled in Settings. Older clients cannot use Rooms or Announcements.
 
 ## Updates and help
 

@@ -132,7 +132,7 @@ export class LumilanPeer extends EventEmitter {
     this.keyPath = join(dataDir, 'identity.key');
     this.filesDir = join(dataDir, 'files');
     // ponytail: riwayat kecil disimpan sebagai satu JSON; pindah ke SQLite jika pemakaian bertahun-tahun membuatnya besar.
-    this.state = { name: '', status: 'active', about: '', avatar: '', trusted: [], rooms: [], declinedRooms: [], leftRooms: [], roomTombstones: [], messages: [], unread: {}, announcementsEnabled: true, mutedAnnouncements: [] };
+    this.state = { name: '', status: 'active', about: '', avatar: '', trusted: [], rooms: [], declinedRooms: [], leftRooms: [], roomTombstones: [], messages: [], unread: {}, announcementsEnabled: true, announcementRoomCreated: false, mutedAnnouncements: [] };
     this.node = null;
     this.identity = null;
     this.discovered = new Map();
@@ -161,6 +161,7 @@ export class LumilanPeer extends EventEmitter {
     this.state.leftRooms ||= [];
     this.state.roomTombstones ||= [];
     this.state.announcementsEnabled = this.state.announcementsEnabled !== false;
+    this.state.announcementRoomCreated = this.state.announcementRoomCreated === true;
     this.state.mutedAnnouncements ||= [];
     this.state.status = cleanStatus(this.state.status);
     this.state.about = cleanAbout(this.state.about);
@@ -289,6 +290,7 @@ export class LumilanPeer extends EventEmitter {
         invited: room.owner === this.id ? room.invited : undefined })),
       contacts: this.state.trusted.map(peer => ({ id: peer.id, name: peer.name })),
       announcementsEnabled: this.state.announcementsEnabled,
+      announcementRoomCreated: this.state.announcementRoomCreated,
       mutedAnnouncements: this.state.mutedAnnouncements,
       peers: this.state.trusted.filter(peer => online.has(peer.id)).map(peer => ({
         id: peer.id, name: peer.name, online: true, status: cleanStatus(peer.status), about: cleanAbout(peer.about), avatar: cleanAvatar(peer.avatar), announcements: peer.announcements === true,
@@ -480,6 +482,13 @@ export class LumilanPeer extends EventEmitter {
     this.state.announcementsEnabled = enabled;
     this.save();
     this.broadcastProfile();
+  }
+
+  createAnnouncementRoom() {
+    if (this.state.announcementRoomCreated) throw new Error('Ruang Pengumuman sudah dibuat.');
+    this.state.announcementRoomCreated = true;
+    this.save();
+    return true;
   }
 
   muteAnnouncementsFrom(id, muted) {
@@ -807,6 +816,7 @@ export class LumilanPeer extends EventEmitter {
   }
 
   async sendAnnouncement(text) {
+    if (!this.state.announcementRoomCreated) throw new Error('Buat Ruang Pengumuman sebelum mengirim.');
     if (typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('Pengumuman harus berisi 1–4000 karakter.');
     const targets = [...this.online].filter(id => this.trusted.get(id)?.announcements);
     if (!targets.length) throw new Error('Tidak ada penerima Pengumuman yang online.');

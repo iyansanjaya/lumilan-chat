@@ -280,6 +280,7 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('message', (text, to) => peer.sendMessage(text, to));
   handler('room-message', (text, id) => peer.sendRoomMessage(text, id));
   handler('announcement', text => peer.sendAnnouncement(text));
+  handler('create-announcement-room', () => peer.createAnnouncementRoom());
   handler('create-room', (name, members) => peer.createRoom(name, members));
   handler('update-room', (id, members) => peer.updateRoom(id, members));
   handler('accept-room', id => peer.acceptRoom(id));

@@ -124,6 +124,8 @@ test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', a
     assert.equal(a.trusted.get(b.id).name, 'Budi');
     assert.equal(a.state.unread[b.id], 1);
     await until(() => a.online.has(b.id) && b.online.has(a.id));
+    assert.equal(b.snapshot().announcementRoomCreated, false);
+    b.createAnnouncementRoom();
     assert.equal((await b.sendAnnouncement('Pengumuman')).delivered, 1);
     assert.equal(a.snapshot().unread.announcements, 1);
     const avatar = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9UudwAAAAASUVORK5CYII=';
@@ -366,7 +368,14 @@ test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async ()
       id: randomUUID(), roomId: id, to: null, kind: 'text', text: 'Ditolak',
     } }), /Pesan Ruang ditolak/);
 
+    assert.equal(a.snapshot().announcementRoomCreated, false);
+    await assert.rejects(a.sendAnnouncement('Rapat pagi'), /Buat Ruang Pengumuman/);
+    a.createAnnouncementRoom();
+    assert.equal(a.snapshot().announcementRoomCreated, true);
+    assert.throws(() => a.createAnnouncementRoom(), /sudah dibuat/);
     assert.equal((await a.sendAnnouncement('Rapat pagi')).delivered, 2);
+    assert.equal(b.snapshot().announcementRoomCreated, false);
+    await assert.rejects(b.sendAnnouncement('Tanpa Ruang'), /Buat Ruang Pengumuman/);
     c.setAnnouncements(false);
     await until(() => a.trusted.get(c.id)?.announcements === false);
     assert.equal((await a.sendAnnouncement('Rapat siang')).delivered, 1);
@@ -402,6 +411,7 @@ test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async ()
     await b.leaveRoom(later.id);
     assert.equal(b.room(later.id), undefined);
     await a.start();
+    assert.equal(a.snapshot().announcementRoomCreated, true);
     await until(() => !a.room(later.id).members.includes(b.id));
   } finally {
     for (const peer of peers) await peer.stop();

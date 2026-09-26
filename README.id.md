@@ -23,7 +23,7 @@ Paket saat ini dapat tersedia tanpa tanda tangan digital. Windows atau macOS mun
 
 1. Pasang dan buka Lumilan Chat pada perangkat yang terhubung ke LAN atau Wi-Fi yang sama.
 2. Isi nama Anda. Semua perangkat lain yang terhubung akan muncul di daftar pesan pribadi.
-3. Pilih orang untuk chat pribadi, gunakan **Buat Ruang** untuk mengundang perangkat tertentu, atau kirim **Pengumuman** ke perangkat tersedia yang mengizinkannya.
+3. Pilih orang untuk chat pribadi. Gunakan **Buat Ruang** untuk membuat Ruang Percakapan berundangan atau Ruang Pengumuman. Ruang Pengumuman Anda baru muncul setelah dibuat dan menyiarkan ke semua perangkat aktif yang mengizinkannya. Penerima melihatnya setelah mendapat pesan.
 
 Untuk subnet lokal yang saling memiliki rute tetapi perangkatnya tidak muncul otomatis, buka **Hubungkan perangkat** pada perangkat tujuan, salin kode perangkatnya, lalu tempel pada perangkat lain. Keduanya harus dapat terhubung lewat TCP port **40754**. Kode memuat alamat IPv4 privat, port, dan ID perangkat yang diautentikasi. Aplikasi tidak memakai relay internet atau layanan chat global.
 
@@ -33,7 +33,7 @@ File hanya dapat dikirim lewat pesan pribadi, dibatasi **100 MB per kiriman**, d
 
 Koneksi langsung antarperangkat memakai **libp2p Noise** untuk mengenkripsi lalu lintas dan mengautentikasi identitas perangkat. Nama profil dipilih sendiri oleh pengguna; verifikasi identitas orang belum tersedia. Data yang tersimpan di perangkat **belum terenkripsi**. Gunakan jaringan yang Anda percayai dan aktifkan enkripsi disk jika diperlukan.
 
-Penemuan perangkat otomatis memakai mDNS di LAN dan biasanya tetap pada satu jaringan. Subnet IPv4 privat yang saling memiliki rute dapat memakai kode perangkat bila jaringan mengizinkan TCP langsung; firewall dan isolasi VLAN tetap dapat menghalangi akses. Rentang alamat VPN seperti 100.64.0.0/10 belum didukung. Ruang memerlukan penerimaan undangan dan pembuatnya mengelola anggota; anggota offline baru mengetahui perubahan setelah terhubung kembali ke pembuat Ruang. Pengumuman dapat dimatikan di Pengaturan. Klien versi lama belum mendukung Ruang atau Pengumuman.
+Penemuan perangkat otomatis memakai mDNS di LAN dan biasanya tetap pada satu jaringan. Subnet IPv4 privat yang saling memiliki rute dapat memakai kode perangkat bila jaringan mengizinkan TCP langsung; firewall dan isolasi VLAN tetap dapat menghalangi akses. Rentang alamat VPN seperti 100.64.0.0/10 belum didukung. Ruang Percakapan memerlukan penerimaan undangan dan pembuatnya mengelola anggota; anggota offline baru mengetahui perubahan setelah terhubung kembali ke pembuat Ruang. Penerima dapat membaca Pengumuman tanpa membuat ruang sendiri, tetapi harus membuat Ruang Pengumuman sebelum mengirim. Pengumuman dapat dimatikan di Pengaturan. Klien versi lama belum mendukung Ruang atau Pengumuman.
 
 ## Pembaruan dan bantuan
 
