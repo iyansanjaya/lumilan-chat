@@ -450,6 +450,11 @@ test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async ()
     const canceled = await a.createRoom('Dibatalkan', [b.id]);
     await a.updateRoom(canceled.id, []);
     assert.equal(b.room(canceled.id), undefined);
+    a.archiveThread(`room:${canceled.id}`);
+    assert.equal(await a.deleteArchivedHistory(`room:${canceled.id}`), 0);
+    assert.equal(a.snapshot().archivedThreads.some(item => item.id === `room:${canceled.id}`), true);
+    await a.deleteRoom(canceled.id);
+    assert.equal(a.snapshot().archivedThreads.some(item => item.id === `room:${canceled.id}`), false);
 
     await c.stop();
     await until(() => !a.online.has(c.id));

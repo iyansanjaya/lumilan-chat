@@ -439,7 +439,9 @@ export class LumilanPeer extends EventEmitter {
   room(id) { return this.state.rooms.find(room => room.id === id); }
 
   archiveRemovedRoom(room) {
-    if (this.state.messages.some(message => message.roomId === room.id)) this.state.archivedThreads[roomKey(room.id)] = room.name;
+    const key = roomKey(room.id);
+    if (this.state.messages.some(message => message.roomId === room.id)) this.state.archivedThreads[key] = room.name;
+    else delete this.state.archivedThreads[key];
   }
 
   async syncRoomsWith(id) {
