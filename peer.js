@@ -428,7 +428,8 @@ export class LumilanPeer extends EventEmitter {
     const removed = this.state.messages.filter(message => inThread(message, thread, this.id));
     this.state.messages = this.state.messages.filter(message => !inThread(message, thread, this.id));
     delete this.state.unread[thread];
-    if (thread.startsWith('room:') && !this.room(thread.slice(5)) || thread === 'announcements' && !this.state.announcementRoomCreated) delete this.state.archivedThreads[thread];
+    if (thread === 'announcements') this.state.announcementRoomCreated = false;
+    if (thread === 'announcements' || (thread.startsWith('room:') && !this.room(thread.slice(5)))) delete this.state.archivedThreads[thread];
     const files = removed.filter(message => message.kind === 'file' && validRoomId(message.id)).map(message => message.id);
     this.state.pendingFileDeletes = [...new Set([...this.state.pendingFileDeletes, ...files])];
     this.save();

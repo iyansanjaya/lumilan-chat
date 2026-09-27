@@ -483,6 +483,18 @@ test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async ()
     a.createAnnouncementRoom();
     assert.equal(a.snapshot().archivedThreads.some(item => item.id === 'announcements'), false);
     await until(() => !a.room(later.id).members.includes(b.id));
+    a.archiveThread('announcements');
+    assert.equal(await a.deleteArchivedHistory('announcements') > 0, true);
+    assert.equal(a.snapshot().announcementRoomCreated, false);
+    assert.equal(a.snapshot().archivedThreads.some(item => item.id === 'announcements'), false);
+    a.createAnnouncementRoom();
+    a.archiveThread('announcements');
+    assert.equal(await a.deleteArchivedHistory('announcements'), 0);
+    assert.equal(a.snapshot().announcementRoomCreated, false);
+    await a.stop();
+    await a.start();
+    assert.equal(a.snapshot().announcementRoomCreated, false);
+    assert.equal(a.snapshot().archivedThreads.some(item => item.id === 'announcements'), false);
   } finally {
     for (const peer of peers) await peer.stop();
     rmSync(root, { recursive: true, force: true });
