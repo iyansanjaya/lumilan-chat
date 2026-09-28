@@ -12,6 +12,8 @@ test('bahasa otomatis mengikuti wilayah, sedangkan pilihan manual tetap berlaku'
   assert.deepEqual(languageSettings({ languageMode: 'manual', language: 'es' }, 'ID'), { languageMode: 'manual', language: 'es' });
   assert.deepEqual(languageSettings({ languageMode: 'manual', language: 'zh-Hant' }, 'CN'), { languageMode: 'manual', language: 'zh-Hant' });
   assert.deepEqual(languageSettings({ language: 'toString' }, 'ID'), { languageMode: 'auto', language: 'id' });
+  assert.equal(translate('id', 'Catatan pribadi'), 'Catatan pribadi');
+  assert.equal(translate('id', '{count} pesan dipilih', { count: 2 }), '2 pesan dipilih');
   for (const language of ['ja', 'ko', 'zh-Hans', 'zh-Hant']) {
     assert.notEqual(translate(language, 'Buat Ruang'), 'Create Room');
     assert.ok(translate(language, '{name} sedang mengetik', { name: 'Aki' }).includes('Aki'));

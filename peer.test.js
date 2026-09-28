@@ -146,6 +146,7 @@ test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', a
     await b.stop();
     await until(() => !a.online.has(bId));
     assert.equal(a.snapshot().peers.some(peer => peer.id === bId), false);
+    assert.equal(a.snapshot().contacts.find(peer => peer.id === bId).avatar, avatar);
     assert.equal(a.snapshot().messages.some(message => message.to === bId || message.from === bId && message.kind !== 'announcement'), false);
     assert.equal(a.snapshot().unread[bId], undefined);
   } finally {
@@ -487,6 +488,49 @@ test('arsip menyimpan percakapan offline dan penghapusan permanen membersihkan f
   } finally {
     await a.stop();
     await b.stop();
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test('catatan pribadi tetap ada, balasan tersinkron, dan penghapusan pesan hanya lokal', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-message-actions-'));
+  const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0', acceptFile: async () => true });
+  const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  try {
+    await a.start(); await b.start();
+    a.rename('Andi'); b.rename('Budi');
+    const note = a.saveNote('Ingat rapat').message;
+    const noteReply = a.saveNote('Pukul sembilan', note.id).message;
+    assert.equal(noteReply.replyTo, note.id);
+    assert.equal(a.snapshot().stats.notes.messages, 2);
+    assert.equal(a.listMessages('notes').length, 2);
+    assert.equal(b.snapshot().stats.notes, undefined);
+    await a.connectAddress(b.addresses[0]);
+    const first = (await b.sendMessage('Halo', a.id)).message;
+    const reply = (await a.sendMessage('Ya', b.id, first.id)).message;
+    assert.equal(b.listMessages(a.id).at(-1).replyTo, first.id);
+    await assert.rejects(a.sendMessage('Salah', b.id, note.id), /tidak ditemukan/);
+    const { id } = await a.createRoom('Diskusi', [b.id]);
+    await b.acceptRoom(id);
+    const roomFirst = (await b.sendRoomMessage('Topik', id)).message;
+    await a.sendRoomMessage('Jawaban', id, roomFirst.id);
+    assert.equal(b.listMessages(`room:${id}`).at(-1).replyTo, roomFirst.id);
+    await assert.rejects(a.deleteMessages('notes', [first.id]), /tidak ditemukan/);
+    assert.equal(await a.deleteMessages(b.id, [first.id, reply.id]), 2);
+    assert.equal(a.listMessages(b.id).length, 0);
+    assert.equal(b.listMessages(a.id).length, 2);
+    const file = await b.sendFile('catatan.txt', Buffer.from('lampiran'), a.id);
+    assert.equal(existsSync(join(a.filesDir, file.message.id)), true);
+    assert.equal(await a.deleteMessages(b.id, [file.message.id]), 1);
+    assert.equal(existsSync(join(a.filesDir, file.message.id)), false);
+    assert.equal(existsSync(join(b.filesDir, file.message.id)), true);
+    assert.equal(await a.deleteMessages('notes', [note.id]), 1);
+    assert.equal(a.snapshot().stats.notes.messages, 1);
+    await a.stop(); await a.start();
+    assert.equal(a.listMessages('notes')[0].replyTo, note.id);
+    assert.equal(a.snapshot().stats.notes.messages, 1);
+  } finally {
+    await a.stop(); await b.stop();
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

@@ -280,10 +280,11 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('set-profile', value => peer.setProfile(value));
   handler('check-updates', () => checkUpdates(true));
   handler('test-notification', testNotification);
-  handler('message', (text, to) => peer.sendMessage(text, to));
-  handler('room-message', (text, id) => peer.sendRoomMessage(text, id));
+  handler('message', (text, to, replyTo) => peer.sendMessage(text, to, replyTo));
+  handler('room-message', (text, id, replyTo) => peer.sendRoomMessage(text, id, replyTo));
+  handler('note', (text, replyTo) => peer.saveNote(text, replyTo));
   handler('typing', (thread, active) => peer.sendTyping(thread, active));
-  handler('announcement', text => peer.sendAnnouncement(text));
+  handler('announcement', (text, replyTo) => peer.sendAnnouncement(text, replyTo));
   handler('create-announcement-room', () => peer.createAnnouncementRoom());
   handler('delete-announcement-room', () => peer.deleteAnnouncementRoom());
   handler('create-room', (name, members) => peer.createRoom(name, members));
@@ -297,6 +298,11 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('delete-archived-history', async id => {
     deletingHistory++;
     try { await Promise.allSettled([...previewRequests]); return await peer.deleteArchivedHistory(id); }
+    finally { deletingHistory--; }
+  });
+  handler('delete-messages', async (thread, ids) => {
+    deletingHistory++;
+    try { await Promise.allSettled([...previewRequests]); return await peer.deleteMessages(thread, ids); }
     finally { deletingHistory--; }
   });
   handler('connect-address', value => peer.connectAddress(value));
