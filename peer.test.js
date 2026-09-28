@@ -87,6 +87,11 @@ test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', a
     assert.equal(b.snapshot().peers[0].name, 'Andi');
     assert.equal(a.online.has(b.id), true);
     assert.equal(b.online.has(a.id), true);
+    await a.sendTyping(b.id, true);
+    assert.deepEqual(b.snapshot().typing, [{ from: a.id, thread: a.id }]);
+    assert.equal(b.state.messages.length, 0);
+    await a.sendTyping(b.id, false);
+    assert.deepEqual(b.snapshot().typing, []);
 
     c.discovered.set(a.id, a.addresses);
     c.rename('Citra');
@@ -198,7 +203,7 @@ test('isi pesan tidak tampak pada lalu lintas TCP antara dua peer', async () => 
   }
 });
 
-test('transfer bertahap memverifikasi batas 100 MB, persetujuan, batal, dan potongan rusak', async () => {
+test('transfer bertahap memverifikasi batas 500 MB, kompatibilitas, persetujuan, batal, dan potongan rusak', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lumilan-chunks-'));
   let accept = true;
   const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
@@ -211,6 +216,7 @@ test('transfer bertahap memverifikasi batas 100 MB, persetujuan, batal, dan poto
     a.discovered.set(b.id, b.addresses);
     await a.probePeer(b.id);
     assert.equal(a.trusted.get(b.id).fileChunks, true);
+    assert.equal(a.trusted.get(b.id).maxFileSize, 500 * 1024 * 1024);
 
     const source = join(root, 'contoh.bin');
     const contents = Buffer.alloc(1024 * 1024 + 17, 0x6b);
@@ -269,8 +275,11 @@ test('transfer bertahap memverifikasi batas 100 MB, persetujuan, batal, dan poto
 
     const tooLarge = join(root, 'terlalu-besar.bin');
     writeFileSync(tooLarge, '');
-    truncateSync(tooLarge, 100 * 1024 * 1024 + 1);
-    await assert.rejects(a.sendFilePath(tooLarge, b.id), /1 B–100 MB/);
+    truncateSync(tooLarge, 500 * 1024 * 1024 + 1);
+    await assert.rejects(a.sendFilePath(tooLarge, b.id), /1 B–500 MB/);
+    await assert.rejects(a.sendTo(b.id, { type: 'file-start', message: {
+      id: randomUUID(), to: b.id, name: 'terlalu-besar.bin', size: 500 * 1024 * 1024 + 1,
+    } }), /melebihi 500 MB/);
 
     a.rememberPeer(b.id, 'Budi', [], { fileChunks: false });
     const compatible = await a.sendFilePath(source, b.id);
@@ -282,15 +291,23 @@ test('transfer bertahap memverifikasi batas 100 MB, persetujuan, batal, dan poto
     truncateSync(legacyLarge, 21 * 1024 * 1024);
     await assert.rejects(a.sendFilePath(legacyLarge, b.id), /Perbarui Lumilan Chat/);
     a.profilePacket = originalProfilePacket;
-    a.rememberPeer(b.id, 'Budi', [], { fileChunks: true });
+    a.rememberPeer(b.id, 'Budi', [], { fileChunks: true, roomFiles: true });
+    assert.equal(a.trusted.get(b.id).maxFileSize, 100 * 1024 * 1024);
+    delete a.state.trusted.find(peer => peer.id === b.id).maxFileSize;
+    a.profilePacket = async () => ({ ok: true, name: 'Budi', fileChunks: true, roomFiles: true });
+    truncateSync(legacyLarge, 100 * 1024 * 1024 + 1);
+    await assert.rejects(a.sendFilePath(legacyLarge, b.id), /di atas 100 MB/);
+    a.profilePacket = originalProfilePacket;
+    a.rememberPeer(b.id, 'Budi', [], b.profile());
 
-    const limit = join(root, 'batas-100MB.bin');
+    const limit = join(root, 'batas-500MB.bin');
     writeFileSync(limit, '');
-    truncateSync(limit, 100 * 1024 * 1024);
+    truncateSync(limit, 500 * 1024 * 1024);
     const exact = await a.sendFilePath(limit, b.id);
-    assert.equal(statSync(b.filePath(exact.message.id).path).size, 100 * 1024 * 1024);
+    assert.equal(statSync(b.filePath(exact.message.id).path).size, 500 * 1024 * 1024);
     const expected = createHash('sha256');
-    for (let index = 0; index < 100; index++) expected.update(Buffer.alloc(1024 * 1024));
+    const zeros = Buffer.alloc(1024 * 1024);
+    for (let index = 0; index < 500; index++) expected.update(zeros);
     assert.equal(exact.message.sha256, expected.digest('hex'));
     assert.equal(b.state.messages.at(-1).sha256, exact.message.sha256);
   } finally {
@@ -300,6 +317,92 @@ test('transfer bertahap memverifikasi batas 100 MB, persetujuan, batal, dan poto
   }
 });
 
+
+test('file Ruang dikirim hanya ke anggota aktif dengan persetujuan dan dibersihkan bersama riwayat', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-room-file-'));
+  let acceptB = true;
+  const peers = ['Andi', 'Budi', 'Citra'].map((name, index) => new LumilanPeer({
+    dataDir: join(root, String(index)), discovery: false, listen: '/ip4/127.0.0.1/tcp/0',
+    acceptFile: async () => index === 1 ? acceptB : true,
+  }));
+  const [a, b, c] = peers;
+  try {
+    for (const [index, peer] of peers.entries()) { await peer.start(); peer.rename(['Andi', 'Budi', 'Citra'][index]); }
+    await a.connectAddress(b.addresses[0]);
+    await a.connectAddress(c.addresses[0]);
+    const { id } = await a.createRoom('Berkas Proyek', [b.id, c.id]);
+    await b.acceptRoom(id);
+    await c.acceptRoom(id);
+    await until(() => b.room(id)?.members.length === 3 && c.room(id)?.members.length === 3);
+    const source = join(root, 'laporan.gif');
+    const contents = Buffer.alloc(512 * 1024 + 17, 0x67);
+    writeFileSync(source, contents);
+    const progress = [];
+    const sent = await a.sendFilePath(source, `room:${id}`, { onProgress: (done, total) => progress.push([done, total]) });
+    assert.equal(sent.delivered, 2);
+    assert.equal(sent.failed, 0);
+    assert.deepEqual(progress.at(-1), [contents.length * 2, contents.length * 2]);
+    assert.equal(a.state.messages.filter(message => message.id === sent.message.id).length, 1);
+    for (const peer of [b, c]) {
+      assert.deepEqual(readFileSync(peer.filePath(sent.message.id).path), contents);
+      assert.equal(peer.listFiles(`room:${id}`).total, 1);
+      assert.equal(peer.snapshot().unread[`room:${id}`], 1);
+    }
+    assert.deepEqual(a.listFiles(`room:${id}`).items.map(file => file.id), [sent.message.id]);
+
+    acceptB = false;
+    const partial = await a.sendFilePath(source, `room:${id}`);
+    assert.equal(partial.delivered, 1);
+    assert.equal(partial.failed, 1);
+    assert.equal(b.state.messages.some(message => message.id === partial.message.id), false);
+    assert.equal(c.state.messages.some(message => message.id === partial.message.id), true);
+    acceptB = true;
+    a.state.trusted.find(peer => peer.id === c.id).roomFiles = false;
+    const incompatible = await a.sendFilePath(source, `room:${id}`);
+    assert.equal(incompatible.delivered, 1);
+    assert.equal(incompatible.failed, 1);
+    assert.equal(c.state.messages.some(message => message.id === incompatible.message.id), false);
+    a.state.trusted.find(peer => peer.id === c.id).roomFiles = true;
+    a.state.trusted.find(peer => peer.id === c.id).maxFileSize = 512 * 1024;
+    const olderRoomPeer = await a.sendFilePath(source, `room:${id}`);
+    assert.equal(olderRoomPeer.delivered, 1);
+    assert.equal(olderRoomPeer.failed, 1);
+    assert.equal(c.state.messages.some(message => message.id === olderRoomPeer.message.id), false);
+    a.state.trusted.find(peer => peer.id === c.id).maxFileSize = 500 * 1024 * 1024;
+
+    const controller = new AbortController();
+    const sendTo = a.sendTo.bind(a);
+    a.sendTo = async (target, packet, options) => {
+      const result = await sendTo(target, packet, options);
+      if (target === b.id && packet.type === 'file-end') controller.abort(new Error('Pengiriman dibatalkan.'));
+      return result;
+    };
+    const stopped = await a.sendFilePath(source, `room:${id}`, { signal: controller.signal });
+    a.sendTo = sendTo;
+    assert.equal(stopped.delivered, 1);
+    assert.equal(stopped.failed, 1);
+    assert.equal(stopped.canceled, true);
+    assert.equal(b.state.messages.some(message => message.id === stopped.message.id), true);
+    assert.equal(c.state.messages.some(message => message.id === stopped.message.id), false);
+
+    a.archiveThread(`room:${id}`);
+    await assert.rejects(a.sendFilePath(source, `room:${id}`), /Pulihkan percakapan/);
+    a.restoreThread(`room:${id}`);
+    await assert.rejects(a.sendFilePath(source, 'announcements'), /Penerima atau Ruang tidak valid/);
+    await a.updateRoom(id, [b.id]);
+    await assert.rejects(c.sendTo(a.id, { type: 'file-start', message: {
+      id: randomUUID(), roomId: id, version: c.room(id)?.version || 1, to: null, name: 'ilegal.gif', size: 4,
+    } }), /File tidak valid/);
+    await a.deleteRoom(id);
+    await until(() => !b.room(id));
+    assert.equal(b.listFiles(`room:${id}`).total, 4);
+    await b.deleteArchivedHistory(`room:${id}`);
+    assert.equal(existsSync(join(b.filesDir, sent.message.id)), false);
+  } finally {
+    await Promise.all(peers.map(peer => peer.stop()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('ringkasan menghitung riwayat penuh dan daftar file memakai halaman 50 item', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lumilan-history-'));
@@ -347,8 +450,13 @@ test('arsip menyimpan percakapan offline dan penghapusan permanen membersihkan f
     b.rename('Budi');
     await a.connectAddress(b.addresses[0]);
     await b.sendMessage('Simpan dahulu', a.id);
+    const firstFile = await b.sendFile('hapus.txt', Buffer.from('hapus sekarang'), a.id);
+    assert.equal(await a.deleteArchivedHistory(b.id), 2);
+    assert.equal(a.listMessages(b.id).length, 0);
+    assert.equal(existsSync(join(a.filesDir, firstFile.message.id)), false);
+    await b.sendMessage('Simpan kembali', a.id);
     const file = await b.sendFile('dokumen.txt', Buffer.from('isi dokumen'), a.id);
-    await assert.rejects(a.deleteArchivedHistory(b.id), /Arsip tidak ditemukan/);
+    await assert.rejects(a.deleteArchivedHistory('unknown'), /Percakapan tidak tersedia/);
     a.archiveThread(b.id);
     assert.equal(a.snapshot().archivedThreads[0].id, b.id);
     await assert.rejects(a.sendMessage('Tidak boleh dikirim', b.id), /Pulihkan percakapan/);
@@ -360,10 +468,12 @@ test('arsip menyimpan percakapan offline dan penghapusan permanen membersihkan f
     assert.equal(a.listMessages(b.id).length, 2);
     assert.equal(a.listFiles(b.id).total, 1);
     assert.equal(existsSync(a.filePath(file.message.id).path), true);
+    writeFileSync(`${a.filePath(file.message.id).path}.thumb.webp`, 'thumbnail');
     assert.equal(await a.deleteArchivedHistory(b.id), 2);
     assert.equal(a.snapshot().stats[b.id], undefined);
     assert.equal(a.listFiles(b.id).total, 0);
     assert.equal(existsSync(join(a.filesDir, file.message.id)), false);
+    assert.equal(existsSync(join(a.filesDir, `${file.message.id}.thumb.webp`)), false);
     assert.deepEqual(a.state.pendingFileDeletes, []);
     a.restoreThread(b.id);
     assert.equal(a.snapshot().archivedThreads.length, 0);
@@ -403,6 +513,10 @@ test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async ()
     assert.equal(c.state.messages.some(message => message.roomId === id), false);
     await c.acceptRoom(id);
     await until(() => b.room(id).members.includes(c.id));
+    await b.sendTyping(`room:${id}`, true);
+    assert.deepEqual(a.snapshot().typing, [{ from: b.id, thread: `room:${id}` }]);
+    await b.sendTyping(`room:${id}`, false);
+    assert.deepEqual(a.snapshot().typing, []);
     a.archiveThread(`room:${id}`);
     assert.equal(a.snapshot().archivedThreads.some(item => item.id === `room:${id}`), true);
     await assert.rejects(a.sendRoomMessage('Tidak boleh dikirim', id), /Pulihkan percakapan/);
@@ -413,6 +527,7 @@ test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async ()
 
     await a.updateRoom(id, [c.id]);
     assert.equal(b.room(id), undefined);
+    await assert.rejects(b.sendTo(a.id, { type: 'typing', roomId: id, active: true }), /Status mengetik tidak valid/);
     await assert.rejects(b.sendRoomMessage('Ditolak', id), /Pesan Ruang tidak valid/);
     await assert.rejects(b.sendTo(c.id, { type: 'room-message', message: {
       id: randomUUID(), roomId: id, to: null, kind: 'text', text: 'Ditolak',

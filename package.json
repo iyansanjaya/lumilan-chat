@@ -1,6 +1,6 @@
 {
   "name": "lumilan-chat",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Pesan langsung antarperangkat di jaringan lokal",
   "author": "Iyan Sanjaya",
   "private": true,
@@ -20,11 +20,13 @@
     "appId": "dev.lumilan.desktop",
     "productName": "Lumilan Chat",
     "asar": true,
+    "asarUnpack": ["**/node_modules/sharp/**/*", "**/node_modules/@img/**/*"],
     "files": [
       "main.js",
       "updates.js",
       "preload.cjs",
       "peer.js",
+      "preview-image.js",
       "discovery.js",
       "public/**/*",
       "build/icon.ico",
@@ -69,7 +71,8 @@
     "electron-updater": "^6.8.9",
     "libp2p": "3.3.11",
     "multicast-dns": "7.2.5",
-    "reicon": "1.2.4"
+    "reicon": "1.2.4",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "electron": "44.4.5",

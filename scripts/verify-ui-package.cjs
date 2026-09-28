@@ -1,4 +1,4 @@
-const { readdirSync } = require('node:fs');
+const { existsSync, readdirSync } = require('node:fs');
 const { join } = require('node:path');
 const { listPackage } = require('@electron/asar');
 
@@ -14,7 +14,14 @@ const asar = platform === 'darwin'
   ? join('dist', directory, 'Lumilan Chat.app', 'Contents', 'Resources', 'app.asar')
   : join('dist', directory, 'resources', 'app.asar');
 const files = new Set(listPackage(asar).map(path => path.replaceAll('\\', '/').replace(/^\/+/, '')));
-for (const file of ['main.js', 'preload.cjs', 'peer.js', 'discovery.js', 'public/index.html', 'public/app.css', 'public/app.js', 'public/i18n.js', 'public/fonts/PublicSans.ttf', 'build/icon.png']) {
+for (const file of ['main.js', 'preload.cjs', 'peer.js', 'discovery.js', 'preview-image.js', 'public/index.html', 'public/app.css', 'public/app.js', 'public/i18n.js', 'public/fonts/PublicSans.ttf', 'build/icon.png']) {
   if (!files.has(file)) throw new Error(`Missing ${file} in ${asar}`);
+}
+const unpacked = join(`${asar}.unpacked`, 'node_modules');
+for (const path of [join(unpacked, 'sharp'), join(unpacked, '@img', `sharp-${platform}-${process.arch}`)]) {
+  if (!existsSync(path)) throw new Error(`Missing image processor in ${path}`);
+}
+if (platform !== 'win32' && !existsSync(join(unpacked, '@img', `sharp-libvips-${platform}-${process.arch}`))) {
+  throw new Error(`Missing libvips image processor in ${unpacked}`);
 }
 console.log(`Verified UI in ${asar}`);

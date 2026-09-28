@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('lumilan', {
   testNotification: () => ipcRenderer.invoke('lumilan:test-notification'),
   message: (text, to) => ipcRenderer.invoke('lumilan:message', text, to),
   roomMessage: (text, id) => ipcRenderer.invoke('lumilan:room-message', text, id),
+  typing: (thread, active) => ipcRenderer.invoke('lumilan:typing', thread, active),
   announcement: text => ipcRenderer.invoke('lumilan:announcement', text),
   createAnnouncementRoom: () => ipcRenderer.invoke('lumilan:create-announcement-room'),
   deleteAnnouncementRoom: () => ipcRenderer.invoke('lumilan:delete-announcement-room'),
@@ -30,7 +31,13 @@ contextBridge.exposeInMainWorld('lumilan', {
     ipcRenderer.on('lumilan:file-progress', listener);
     return () => ipcRenderer.removeListener('lumilan:file-progress', listener);
   },
+  onTyping: callback => {
+    const listener = (_event, entries) => callback(entries);
+    ipcRenderer.on('lumilan:typing', listener);
+    return () => ipcRenderer.removeListener('lumilan:typing', listener);
+  },
   saveFile: id => ipcRenderer.invoke('lumilan:save-file', id),
+  previewImage: id => ipcRenderer.invoke('lumilan:preview-image', id),
   listFiles: (thread, offset) => ipcRenderer.invoke('lumilan:list-files', thread, offset),
   listMessages: (thread, before) => ipcRenderer.invoke('lumilan:list-messages', thread, before),
   currentThread: thread => ipcRenderer.invoke('lumilan:current-thread', thread),

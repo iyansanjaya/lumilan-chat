@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { copyFile } from 'node:fs/promises';
 import electronUpdater from 'electron-updater';
 import { LumilanPeer } from './peer.js';
+import { previewImage } from './preview-image.js';
 import { languageForRegion, languageSettings, locales, translate } from './public/i18n.js';
 import { startUpdates } from './updates.js';
 
@@ -36,6 +37,8 @@ let settingsPath;
 let pendingThread;
 let checkUpdates = () => Promise.resolve();
 let activeUpload;
+let deletingHistory = 0;
+const previewRequests = new Set();
 const activeNotifications = new Map();
 let notificationError = '';
 let refreshingNetwork = false;
@@ -240,13 +243,13 @@ if (instanceLock) app.whenReady().then(async () => {
   if (!settings || typeof settings !== 'object') settings = {};
   settings = { enabled: settings.enabled !== false, preview: settings.preview === true, silent: settings.silent === true, background: settings.background !== false,
     ...languageSettings(settings, app.getLocaleCountryCode()) };
-  peer = await new LumilanPeer({ dataDir, acceptFile: async ({ fromName, name, size }) => {
+  peer = await new LumilanPeer({ dataDir, acceptFile: async ({ fromName, name, size, roomName }) => {
     if (!window || window.isDestroyed()) return false;
     if (!window.isVisible()) window.show();
     const { response } = await dialog.showMessageBox(window, {
       type: 'question', title: tr('File masuk'),
       message: tr('Terima file {name} ({size} MB) dari {sender}?', { name, size: (size / 1024 / 1024).toFixed(1), sender: fromName }),
-      detail: tr('File akan disimpan di data Lumilan Chat pada perangkat ini.'),
+      detail: `${roomName ? `${tr('Ruang: {name}', { name: roomName })}\n` : ''}${tr('File akan disimpan di data Lumilan Chat pada perangkat ini.')}`,
       buttons: [tr('Tolak'), tr('Terima file')], defaultId: 0, cancelId: 0, noLink: true,
     });
     return response === 1;
@@ -279,6 +282,7 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('test-notification', testNotification);
   handler('message', (text, to) => peer.sendMessage(text, to));
   handler('room-message', (text, id) => peer.sendRoomMessage(text, id));
+  handler('typing', (thread, active) => peer.sendTyping(thread, active));
   handler('announcement', text => peer.sendAnnouncement(text));
   handler('create-announcement-room', () => peer.createAnnouncementRoom());
   handler('delete-announcement-room', () => peer.deleteAnnouncementRoom());
@@ -290,7 +294,11 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('delete-room', id => peer.deleteRoom(id));
   handler('archive-thread', id => peer.archiveThread(id));
   handler('restore-thread', id => peer.restoreThread(id));
-  handler('delete-archived-history', id => peer.deleteArchivedHistory(id));
+  handler('delete-archived-history', async id => {
+    deletingHistory++;
+    try { await Promise.allSettled([...previewRequests]); return await peer.deleteArchivedHistory(id); }
+    finally { deletingHistory--; }
+  });
   handler('connect-address', value => peer.connectAddress(value));
   handler('set-announcements', enabled => peer.setAnnouncements(enabled));
   handler('mute-announcements-from', (id, muted) => peer.muteAnnouncementsFrom(id, muted));
@@ -304,6 +312,9 @@ if (instanceLock) app.whenReady().then(async () => {
       } });
     } finally { activeUpload = undefined; }
   });
+  peer.on('typing', entries => {
+    if (window && !window.isDestroyed()) window.webContents.send('lumilan:typing', entries);
+  });
   handler('cancel-file', () => { activeUpload?.abort(new Error('Pengiriman dibatalkan.')); return true; });
   handler('list-files', (thread, offset) => peer.listFiles(thread, offset));
   handler('list-messages', (thread, before) => peer.listMessages(thread, before));
@@ -312,6 +323,13 @@ if (instanceLock) app.whenReady().then(async () => {
     const result = await dialog.showSaveDialog(window, { defaultPath: file.name, properties: ['createDirectory', 'showOverwriteConfirmation'] });
     if (!result.canceled && result.filePath) await copyFile(file.path, result.filePath);
     return !result.canceled;
+  });
+  handler('preview-image', id => {
+    if (deletingHistory) throw new Error('Pratinjau gambar tidak tersedia.');
+    const request = previewImage(peer.filePath(id));
+    previewRequests.add(request);
+    void request.then(() => previewRequests.delete(request), () => previewRequests.delete(request));
+    return request;
   });
   handler('current-thread', thread => {
     if (thread !== null && thread !== 'announcements' && !Object.hasOwn(peer.state.archivedThreads, thread) && !peer.online.has(thread) &&
