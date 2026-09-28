@@ -505,16 +505,55 @@ test('catatan pribadi tetap ada, balasan tersinkron, dan penghapusan pesan hanya
     assert.equal(a.snapshot().stats.notes.messages, 2);
     assert.equal(a.listMessages('notes').length, 2);
     assert.equal(b.snapshot().stats.notes, undefined);
+    const noteSource = join(root, 'lampiran-catatan.txt');
+    writeFileSync(noteSource, 'Hanya untuk saya');
+    const attachment = (await a.sendFilePath(noteSource, 'notes')).message;
+    assert.equal(attachment.note, true);
+    assert.equal(a.snapshot().stats.notes.files, 1);
+    assert.equal(a.listFiles('notes').items[0].id, attachment.id);
+    assert.equal(readFileSync(a.filePath(attachment.id).path, 'utf8'), 'Hanya untuk saya');
+    assert.equal(b.snapshot().stats.notes, undefined);
+    const canceledSource = join(root, 'batal.bin');
+    writeFileSync(canceledSource, '');
+    truncateSync(canceledSource, 2 * 1024 * 1024);
+    const controller = new AbortController();
+    await assert.rejects(a.sendFilePath(canceledSource, 'notes', { signal: controller.signal,
+      onProgress: sent => { if (sent >= 512 * 1024) controller.abort(new Error('Penyimpanan dibatalkan.')); },
+    }), /dibatalkan/);
+    assert.equal(a.snapshot().stats.notes.files, 1);
+    assert.equal(readdirSync(a.filesDir).some(name => name.endsWith('.part')), false);
+    const changedSource = join(root, 'berubah.bin');
+    writeFileSync(changedSource, '');
+    truncateSync(changedSource, 1024 * 1024);
+    await assert.rejects(a.sendFilePath(changedSource, 'notes', {
+      onProgress: sent => { if (sent === 512 * 1024) writeFileSync(changedSource, 'x', { flag: 'a' }); },
+    }), /File berubah/);
+    assert.equal(a.snapshot().stats.notes.files, 1);
+    assert.equal(readdirSync(a.filesDir).some(name => name.endsWith('.part')), false);
+    truncateSync(canceledSource, 500 * 1024 * 1024 + 1);
+    await assert.rejects(a.sendFilePath(canceledSource, 'notes'), /1 B–500 MB/);
     await a.connectAddress(b.addresses[0]);
     const first = (await b.sendMessage('Halo', a.id)).message;
     const reply = (await a.sendMessage('Ya', b.id, first.id)).message;
     assert.equal(b.listMessages(a.id).at(-1).replyTo, first.id);
+    await a.react('notes', note.id, '👍');
+    assert.equal(a.listMessages('notes')[0].reactions[a.id], '👍');
+    assert.equal(b.state.messages.some(message => message.id === note.id), false);
+    await a.react(b.id, first.id, '❤️');
+    assert.equal(b.listMessages(a.id)[0].reactions[a.id], '❤️');
+    await a.react(b.id, first.id, '❤️');
+    assert.equal(b.listMessages(a.id)[0].reactions, undefined);
+    await assert.rejects(a.react(b.id, first.id, 'invalid'), /Reaksi tidak valid/);
+    assert.throws(() => b.receiveReaction(a.id, { id: note.id, emoji: '👍' }), /tidak ditemukan/);
     await assert.rejects(a.sendMessage('Salah', b.id, note.id), /tidak ditemukan/);
     const { id } = await a.createRoom('Diskusi', [b.id]);
     await b.acceptRoom(id);
     const roomFirst = (await b.sendRoomMessage('Topik', id)).message;
     await a.sendRoomMessage('Jawaban', id, roomFirst.id);
     assert.equal(b.listMessages(`room:${id}`).at(-1).replyTo, roomFirst.id);
+    await a.react(`room:${id}`, roomFirst.id, '😂');
+    assert.equal(b.listMessages(`room:${id}`)[0].reactions[a.id], '😂');
+    assert.throws(() => b.receiveReaction(a.id, { id: roomFirst.id, emoji: '👍', roomId: id, version: -1 }), /ditolak/);
     await assert.rejects(a.deleteMessages('notes', [first.id]), /tidak ditemukan/);
     assert.equal(await a.deleteMessages(b.id, [first.id, reply.id]), 2);
     assert.equal(a.listMessages(b.id).length, 0);
@@ -525,9 +564,13 @@ test('catatan pribadi tetap ada, balasan tersinkron, dan penghapusan pesan hanya
     assert.equal(existsSync(join(a.filesDir, file.message.id)), false);
     assert.equal(existsSync(join(b.filesDir, file.message.id)), true);
     assert.equal(await a.deleteMessages('notes', [note.id]), 1);
-    assert.equal(a.snapshot().stats.notes.messages, 1);
+    assert.equal(a.snapshot().stats.notes.messages, 2);
     await a.stop(); await a.start();
     assert.equal(a.listMessages('notes')[0].replyTo, note.id);
+    assert.equal(a.listMessages(`room:${id}`).find(message => message.id === roomFirst.id).reactions[a.id], '😂');
+    assert.equal(a.listFiles('notes').items[0].id, attachment.id);
+    assert.equal(await a.deleteMessages('notes', [attachment.id]), 1);
+    assert.equal(existsSync(join(a.filesDir, attachment.id)), false);
     assert.equal(a.snapshot().stats.notes.messages, 1);
   } finally {
     await a.stop(); await b.stop();

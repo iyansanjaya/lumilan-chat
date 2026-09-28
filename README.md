@@ -10,6 +10,9 @@ A cross-device chat app for Windows, macOS, and Linux. Discover people on your l
 
 Get the latest package from [Releases](https://github.com/iyansanjaya/lumilan-chat/releases/latest):
 
+> [!WARNING]
+> **Unsigned packages — download only from the official source.** Current packages are unsigned, so Windows or macOS may show a publisher warning. Download Lumilan Chat **only** from the [official Releases page](https://github.com/iyansanjaya/lumilan-chat/releases/latest). Do not install copies from other links. The maintainer cannot verify third-party copies and accepts no responsibility for damage, data loss, or security risks caused by them.
+
 | System | Package |
 | --- | --- |
 | Windows (64-bit) | `Lumilan Chat Setup *.exe` |
@@ -17,18 +20,11 @@ Get the latest package from [Releases](https://github.com/iyansanjaya/lumilan-ch
 | macOS 13+ Apple Silicon | Select the Apple Silicon (arm64) package in the release notes |
 | Linux (64-bit) | `*.AppImage` |
 
-> [!WARNING]
-> **Unsigned packages — download only from the official source.** Current packages are unsigned, so Windows or macOS may show a publisher warning. Download Lumilan Chat **only** from the [official Releases page](https://github.com/iyansanjaya/lumilan-chat/releases/latest). Do not install copies from other links. The maintainer cannot verify third-party copies and accepts no responsibility for damage, data loss, or security risks caused by them.
-
 ## Get started
 
 1. Install and open Lumilan Chat on devices connected to the same LAN or Wi-Fi network.
 2. Enter your name. Other connected devices appear in the direct message list.
 3. Select a person for a direct conversation. Use **Create Room** to make an invitation-only Conversation Room or an Announcement Room. Your Announcement Room appears after creation and broadcasts to all active devices that allow announcements. Recipients see it when a message arrives.
-
-Click a person's photo in the chat header, details panel, or beside a message to view it larger. Your own photo opens from the top bar or your messages.
-
-**Personal notes** stay on your device and remain in the direct message list even when no one is online. Select messages with the icon beside each bubble to copy them, reply to one, or delete selected messages from this device. Deleting a message does not remove the other person's copy. The **App language** label stays in English to help you find it after changing languages.
 
 For a routed local subnet where devices do not appear automatically, open **Connect a device** on the destination, copy its device code, and paste it on the other device. Both sides must be reachable over TCP port **40754**. A code includes the private IPv4 address, port, and authenticated device ID. The app has no internet relay or global chat service.
 

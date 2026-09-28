@@ -10,6 +10,9 @@ Aplikasi chat antarperangkat untuk Windows, macOS, dan Linux. Temukan pengguna l
 
 Ambil paket terbaru di [Releases](https://github.com/iyansanjaya/lumilan-chat/releases/latest):
 
+> [!WARNING]
+> **Paket belum ditandatangani — unduh hanya dari sumber resmi.** Paket saat ini belum memiliki tanda tangan digital, sehingga Windows atau macOS mungkin menampilkan peringatan penerbit. Unduh Lumilan Chat **hanya** dari [halaman Releases resmi](https://github.com/iyansanjaya/lumilan-chat/releases/latest). Jangan pasang salinan dari tautan lain. Pengelola tidak dapat memverifikasi salinan dari pihak lain dan tidak bertanggung jawab atas kerusakan, kehilangan data, atau risiko keamanan yang disebabkan olehnya.
+
 | Sistem | Paket |
 | --- | --- |
 | Windows (64-bit) | `Lumilan Chat Setup *.exe` |
@@ -17,18 +20,11 @@ Ambil paket terbaru di [Releases](https://github.com/iyansanjaya/lumilan-chat/re
 | macOS 13+ Apple Silicon | Pilih paket Apple Silicon (arm64) pada keterangan rilis |
 | Linux (64-bit) | `*.AppImage` |
 
-> [!WARNING]
-> **Paket belum ditandatangani — unduh hanya dari sumber resmi.** Paket saat ini belum memiliki tanda tangan digital, sehingga Windows atau macOS mungkin menampilkan peringatan penerbit. Unduh Lumilan Chat **hanya** dari [halaman Releases resmi](https://github.com/iyansanjaya/lumilan-chat/releases/latest). Jangan pasang salinan dari tautan lain. Pengelola tidak dapat memverifikasi salinan dari pihak lain dan tidak bertanggung jawab atas kerusakan, kehilangan data, atau risiko keamanan yang disebabkan olehnya.
-
 ## Mulai menggunakan
 
 1. Pasang dan buka Lumilan Chat pada perangkat yang terhubung ke LAN atau Wi-Fi yang sama.
 2. Isi nama Anda. Semua perangkat lain yang terhubung akan muncul di daftar pesan pribadi.
 3. Pilih orang untuk chat pribadi. Gunakan **Buat Ruang** untuk membuat Ruang Percakapan berundangan atau Ruang Pengumuman. Ruang Pengumuman Anda baru muncul setelah dibuat dan menyiarkan ke semua perangkat aktif yang mengizinkannya. Penerima melihatnya setelah mendapat pesan.
-
-Klik foto pengguna di header chat, panel detail, atau di samping pesan untuk melihatnya lebih besar. Foto Anda sendiri dapat dibuka dari bar atas atau pesan Anda.
-
-**Catatan pribadi** hanya tersimpan di perangkat Anda dan tetap ada dalam daftar pesan pribadi walau tidak ada pengguna lain yang online. Pilih pesan melalui ikon di samping bubble untuk menyalin, membalas satu pesan, atau menghapus pesan terpilih dari perangkat ini. Menghapus pesan tidak menghapus salinannya pada perangkat lawan bicara. Label **App language** tetap berbahasa Inggris agar mudah ditemukan setelah pengguna mengganti bahasa.
 
 Untuk subnet lokal yang saling memiliki rute tetapi perangkatnya tidak muncul otomatis, buka **Hubungkan perangkat** pada perangkat tujuan, salin kode perangkatnya, lalu tempel pada perangkat lain. Keduanya harus dapat terhubung lewat TCP port **40754**. Kode memuat alamat IPv4 privat, port, dan ID perangkat yang diautentikasi. Aplikasi tidak memakai relay internet atau layanan chat global.
 

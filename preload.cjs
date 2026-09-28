@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('lumilan', {
   message: (text, to, replyTo) => ipcRenderer.invoke('lumilan:message', text, to, replyTo),
   roomMessage: (text, id, replyTo) => ipcRenderer.invoke('lumilan:room-message', text, id, replyTo),
   note: (text, replyTo) => ipcRenderer.invoke('lumilan:note', text, replyTo),
+  react: (thread, id, emoji) => ipcRenderer.invoke('lumilan:react', thread, id, emoji),
   typing: (thread, active) => ipcRenderer.invoke('lumilan:typing', thread, active),
   announcement: (text, replyTo) => ipcRenderer.invoke('lumilan:announcement', text, replyTo),
   createAnnouncementRoom: () => ipcRenderer.invoke('lumilan:create-announcement-room'),

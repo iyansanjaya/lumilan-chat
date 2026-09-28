@@ -283,6 +283,7 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('message', (text, to, replyTo) => peer.sendMessage(text, to, replyTo));
   handler('room-message', (text, id, replyTo) => peer.sendRoomMessage(text, id, replyTo));
   handler('note', (text, replyTo) => peer.saveNote(text, replyTo));
+  handler('react', (thread, id, emoji) => peer.react(thread, id, emoji));
   handler('typing', (thread, active) => peer.sendTyping(thread, active));
   handler('announcement', (text, replyTo) => peer.sendAnnouncement(text, replyTo));
   handler('create-announcement-room', () => peer.createAnnouncementRoom());
@@ -338,7 +339,7 @@ if (instanceLock) app.whenReady().then(async () => {
     return request;
   });
   handler('current-thread', thread => {
-    if (thread !== null && thread !== 'announcements' && !Object.hasOwn(peer.state.archivedThreads, thread) && !peer.online.has(thread) &&
+    if (thread !== null && thread !== 'notes' && thread !== 'announcements' && !Object.hasOwn(peer.state.archivedThreads, thread) && !peer.online.has(thread) &&
         !(typeof thread === 'string' && thread.startsWith('room:') && peer.room(thread.slice(5)))) throw new Error('Percakapan tidak valid.');
     currentThread = thread;
     if (window?.isFocused() && thread !== null) { peer.markRead(thread); dismiss(thread); }
