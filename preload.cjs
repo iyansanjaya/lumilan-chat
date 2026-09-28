@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld('lumilan', {
   checkUpdates: () => ipcRenderer.invoke('lumilan:check-updates'),
   testNotification: () => ipcRenderer.invoke('lumilan:test-notification'),
   message: (text, to, replyTo) => ipcRenderer.invoke('lumilan:message', text, to, replyTo),
-  roomMessage: (text, id, replyTo) => ipcRenderer.invoke('lumilan:room-message', text, id, replyTo),
+  roomMessage: (text, id, replyTo, mentions) => ipcRenderer.invoke('lumilan:room-message', text, id, replyTo, mentions),
   note: (text, replyTo) => ipcRenderer.invoke('lumilan:note', text, replyTo),
   react: (thread, id, emoji) => ipcRenderer.invoke('lumilan:react', thread, id, emoji),
   typing: (thread, active) => ipcRenderer.invoke('lumilan:typing', thread, active),
@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('lumilan', {
   connectAddress: value => ipcRenderer.invoke('lumilan:connect-address', value),
   setAnnouncements: enabled => ipcRenderer.invoke('lumilan:set-announcements', enabled),
   muteAnnouncementsFrom: (id, muted) => ipcRenderer.invoke('lumilan:mute-announcements-from', id, muted),
+  setThreadMuted: (thread, muted) => ipcRenderer.invoke('lumilan:set-thread-muted', thread, muted),
   file: (file, to) => ipcRenderer.invoke('lumilan:file', webUtils.getPathForFile(file), to),
   cancelFile: () => ipcRenderer.invoke('lumilan:cancel-file'),
   onFileProgress: callback => {

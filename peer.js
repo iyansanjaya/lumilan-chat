@@ -41,6 +41,20 @@ const safeFileName = value => {
 const validId = value => typeof value === 'string' && /^[a-zA-Z0-9]{30,100}$/.test(value);
 const validRoomId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const roomKey = id => `room:${id}`;
+const validMentions = (text, mentions, room, sender) => {
+  if (mentions === undefined) return [];
+  if (!Array.isArray(mentions) || mentions.length > 20) throw new Error('Mention Ruang tidak valid.');
+  let lastEnd = 0;
+  return mentions.map(item => {
+    if (!item || !validId(item.id) || item.id === sender || !room.members.includes(item.id) ||
+        !Number.isInteger(item.start) || !Number.isInteger(item.end) || item.start < lastEnd ||
+        item.end <= item.start + 1 || item.end > text.length || item.end - item.start > 33 ||
+        !text.slice(item.start, item.end).startsWith('@') || /[\r\n]/.test(text.slice(item.start, item.end)))
+      throw new Error('Mention Ruang tidak valid.');
+    lastEnd = item.end;
+    return { id: item.id, start: item.start, end: item.end };
+  });
+};
 const messageKey = (message, ownId) => message.kind === 'note' || message.kind === 'file' && message.note === true ? 'notes' : message.roomId ? roomKey(message.roomId) : message.kind === 'announcement' ? 'announcements' : message.from === ownId ? message.to : message.from;
 const inThread = (message, thread, ownId) => thread === 'notes' ? message.kind === 'note' || message.kind === 'file' && message.note === true : thread === 'announcements' ? message.kind === 'announcement'
   : thread?.startsWith('room:') ? message.roomId === thread.slice(5)
@@ -136,7 +150,7 @@ export class LumilanPeer extends EventEmitter {
     this.keyPath = join(dataDir, 'identity.key');
     this.filesDir = join(dataDir, 'files');
     // ponytail: riwayat kecil disimpan sebagai satu JSON; pindah ke SQLite jika pemakaian bertahun-tahun membuatnya besar.
-    this.state = { name: '', status: 'active', about: '', avatar: '', trusted: [], rooms: [], declinedRooms: [], leftRooms: [], roomTombstones: [], archivedThreads: {}, pendingFileDeletes: [], messages: [], unread: {}, announcementsEnabled: true, announcementRoomCreated: false, mutedAnnouncements: [] };
+    this.state = { name: '', status: 'active', about: '', avatar: '', trusted: [], rooms: [], declinedRooms: [], leftRooms: [], roomTombstones: [], archivedThreads: {}, pendingFileDeletes: [], messages: [], unread: {}, announcementsEnabled: true, announcementRoomCreated: false, mutedAnnouncements: [], mutedThreads: [] };
     this.node = null;
     this.identity = null;
     this.discovered = new Map();
@@ -172,6 +186,7 @@ export class LumilanPeer extends EventEmitter {
     this.state.announcementsEnabled = this.state.announcementsEnabled !== false;
     this.state.announcementRoomCreated = this.state.announcementRoomCreated === true;
     this.state.mutedAnnouncements ||= [];
+    this.state.mutedThreads = Array.isArray(this.state.mutedThreads) ? this.state.mutedThreads.filter(id => typeof id === 'string' && (validId(id) || id.startsWith('room:') && validRoomId(id.slice(5)))) : [];
     this.state.status = cleanStatus(this.state.status);
     this.state.about = cleanAbout(this.state.about);
     this.state.avatar = cleanAvatar(this.state.avatar);
@@ -310,6 +325,7 @@ export class LumilanPeer extends EventEmitter {
       announcementsEnabled: this.state.announcementsEnabled,
       announcementRoomCreated: this.state.announcementRoomCreated,
       mutedAnnouncements: this.state.mutedAnnouncements,
+      mutedThreads: this.state.mutedThreads,
       peers: this.state.trusted.filter(peer => online.has(peer.id)).map(peer => ({
         id: peer.id, name: peer.name, online: true, status: cleanStatus(peer.status), about: cleanAbout(peer.about), avatar: cleanAvatar(peer.avatar), announcements: peer.announcements === true,
       })),
@@ -622,6 +638,15 @@ export class LumilanPeer extends EventEmitter {
     this.save();
   }
 
+  setThreadMuted(thread, muted) {
+    const room = typeof thread === 'string' && thread.startsWith('room:') ? this.room(thread.slice(5)) : null;
+    if (typeof muted !== 'boolean' || !(room && !room.pending && room.members.includes(this.id) || validId(thread) && this.trusted.has(thread)))
+      throw new Error('Percakapan tidak tersedia.');
+    this.state.mutedThreads = this.state.mutedThreads.filter(id => id !== thread);
+    if (muted) this.state.mutedThreads.push(thread);
+    this.save();
+  }
+
   async request(target, protocol, payload, responseLimit = 4096, { responseTimeout = 30_000, signal } = {}) {
     const dialSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000);
     const stream = await this.node.dialProtocol(target, protocol, { signal: dialSignal });
@@ -788,7 +813,8 @@ export class LumilanPeer extends EventEmitter {
         !validRoomId(message.id) || message.kind !== 'text' || message.to !== null || message.version !== room.version ||
         typeof message.text !== 'string' || !message.text.trim() || message.text.length > MAX_TEXT || message.replyTo != null && !validRoomId(message.replyTo)) throw new Error('Pesan Ruang ditolak.');
     if (this.state.messages.some(item => item.id === message.id)) return;
-    this.state.messages.push({ id: message.id, roomId: room.id, from, fromName: this.trusted.get(from).name, to: null, text: message.text, kind: 'text', at: Date.now(), ...(message.replyTo ? { replyTo: message.replyTo } : {}) });
+    const mentions = validMentions(message.text, message.mentions, room, from);
+    this.state.messages.push({ id: message.id, roomId: room.id, from, fromName: this.trusted.get(from).name, to: null, text: message.text, kind: 'text', at: Date.now(), ...(message.replyTo ? { replyTo: message.replyTo } : {}), ...(mentions.length ? { mentions } : {}) });
     this.clearTyping(roomKey(room.id), from);
     this.recordIncoming(this.state.messages.at(-1));
   }
@@ -1036,13 +1062,15 @@ export class LumilanPeer extends EventEmitter {
     this.emit('typing', this.typingList());
   }
 
-  async sendRoomMessage(text, id, replyTo = null) {
+  async sendRoomMessage(text, id, replyTo = null, mentions = []) {
     const room = this.room(id);
     if (!room || room.pending || !room.members.includes(this.id) || typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('Pesan Ruang tidak valid.');
     this.requireWritableThread(roomKey(id));
     const targets = room.members.filter(peer => peer !== this.id && this.online.has(peer));
     if (!targets.length) throw new Error('Tidak ada anggota Ruang yang online.');
-    const message = { id: randomUUID(), roomId: id, version: room.version, from: this.id, fromName: this.state.name, to: null, text: text.trim(), kind: 'text', at: Date.now() };
+    const cleanText = text.trim();
+    const selectedMentions = validMentions(cleanText, mentions, room, this.id);
+    const message = { id: randomUUID(), roomId: id, version: room.version, from: this.id, fromName: this.state.name, to: null, text: cleanText, kind: 'text', at: Date.now(), ...(selectedMentions.length ? { mentions: selectedMentions } : {}) };
     const reply = this.replyTarget(roomKey(id), replyTo);
     if (reply) message.replyTo = reply;
     const results = await Promise.allSettled(targets.map(peer => this.sendTo(peer, { type: 'room-message', message })));

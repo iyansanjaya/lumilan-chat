@@ -153,7 +153,7 @@ test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', a
     await a.stop();
     await b.stop();
     await c.stop();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -200,7 +200,7 @@ test('isi pesan tidak tampak pada lalu lintas TCP antara dua peer', async () => 
     await a.stop();
     await b.stop();
     if (proxy) await new Promise(resolve => proxy.close(resolve));
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -314,7 +314,7 @@ test('transfer bertahap memverifikasi batas 500 MB, kompatibilitas, persetujuan,
   } finally {
     await a.stop();
     await b.stop();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -401,7 +401,7 @@ test('file Ruang dikirim hanya ke anggota aktif dengan persetujuan dan dibersihk
     assert.equal(existsSync(join(b.filesDir, sent.message.id)), false);
   } finally {
     await Promise.all(peers.map(peer => peer.stop()));
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -436,7 +436,7 @@ test('ringkasan menghitung riwayat penuh dan daftar file memakai halaman 50 item
   } finally {
     await peer.stop();
     await other.stop();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -699,6 +699,54 @@ test('Ruang berundangan, Pengumuman, koneksi manual, dan peer offline', async ()
     assert.equal(a.snapshot().archivedThreads.some(item => item.id === 'announcements'), false);
   } finally {
     for (const peer of peers) await peer.stop();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test('mention Ruang ditargetkan dan mute percakapan tidak menghapus pesan', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-mention-'));
+  const peers = ['Andi', 'Budi', 'Citra'].map((name, index) => new LumilanPeer({
+    dataDir: join(root, String(index)), discovery: false, listen: '/ip4/127.0.0.1/tcp/0',
+  }));
+  const [a, b, c] = peers;
+  try {
+    for (const [index, peer] of peers.entries()) { await peer.start(); peer.rename(['Andi', 'Budi', 'Citra'][index]); }
+    await a.connectAddress(b.addresses[0]);
+    await a.connectAddress(c.addresses[0]);
+    const { id } = await a.createRoom('Proyek', [b.id, c.id]);
+    await b.acceptRoom(id);
+    await c.acceptRoom(id);
+    await until(() => a.room(id).members.length === 3 && b.room(id).members.length === 3 && c.room(id).members.length === 3);
+
+    const text = 'Tolong cek @Budi';
+    const mention = { id: b.id, start: text.indexOf('@Budi'), end: text.length };
+    const receivedB = [];
+    b.on('incoming', message => receivedB.push(message));
+    const sent = await a.sendRoomMessage(text, id, null, [mention]);
+    assert.equal(sent.delivered, 2);
+    assert.deepEqual(receivedB.at(-1).mentions, [mention]);
+    assert.equal(c.listMessages(`room:${id}`).at(-1).mentions.some(item => item.id === c.id), false);
+    await assert.rejects(a.sendRoomMessage(text, id, null, [{ ...mention, id: a.id }]), /Mention Ruang tidak valid/);
+    await assert.rejects(a.sendRoomMessage(text, id, null, [{ ...mention, end: 999 }]), /Mention Ruang tidak valid/);
+    await assert.rejects(a.sendTo(b.id, { type: 'room-message', message: { ...sent.message, id: randomUUID(), mentions: [{ ...mention, id: a.id }] } }), /Mention Ruang tidak valid/);
+
+    b.setThreadMuted(a.id, true);
+    b.setThreadMuted(`room:${id}`, true);
+    assert.deepEqual(b.snapshot().mutedThreads, [a.id, `room:${id}`]);
+    const unreadBefore = b.snapshot().unread[`room:${id}`];
+    await a.sendRoomMessage('Pesan biasa', id);
+    await a.sendMessage('Pesan pribadi', b.id);
+    assert.equal(b.snapshot().unread[`room:${id}`], unreadBefore + 1);
+    assert.equal(b.snapshot().unread[a.id], 1);
+    assert.equal(b.listMessages(`room:${id}`).at(-1).mentions, undefined);
+    assert.throws(() => b.setThreadMuted('announcements', true), /Percakapan tidak tersedia/);
+    await b.stop();
+    await b.start();
+    assert.deepEqual(b.snapshot().mutedThreads, [a.id, `room:${id}`]);
+    b.setThreadMuted(`room:${id}`, false);
+    assert.deepEqual(b.snapshot().mutedThreads, [a.id]);
+  } finally {
+    for (const peer of peers) await peer.stop();
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

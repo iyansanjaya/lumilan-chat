@@ -135,18 +135,20 @@ function notify(message) {
     peer.markRead(thread);
     return;
   }
+  if (peer.state.mutedThreads.includes(thread)) return;
   if (!settings.enabled || peer.state.status === 'dnd') return;
   if (!Notification.isSupported()) {
     notificationError = 'Sistem operasi tidak menyediakan layanan notifikasi desktop.';
     return;
   }
   const key = thread;
+  const mentioned = Boolean(message.roomId && message.mentions?.some(item => item.id === peer.id));
   const name = peer.trusted.get(message.from)?.name || tr('Teman');
   const title = !settings.preview ? 'Lumilan Chat' : message.roomId ? peer.room(message.roomId)?.name || tr('Ruang') : message.kind === 'announcement' ? tr('Pengumuman') : name;
   const content = message.kind === 'file' ? tr('File: {name}', { name: message.name })
     : message.text.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').slice(0, 120);
-  const body = settings.preview ? message.to === null ? tr('{name}: {content}', { name, content }) : content
-    : message.kind === 'file' ? tr('File baru diterima') : tr('Pesan baru diterima');
+  const body = settings.preview ? mentioned ? tr('{name} menyebut Anda: {content}', { name, content }) : message.to === null ? tr('{name}: {content}', { name, content }) : content
+    : mentioned ? tr('Anda disebut dalam Ruang') : message.kind === 'file' ? tr('File baru diterima') : tr('Pesan baru diterima');
   try {
     const notification = new Notification({
       id: message.id, groupId: key, title,
@@ -281,7 +283,7 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('check-updates', () => checkUpdates(true));
   handler('test-notification', testNotification);
   handler('message', (text, to, replyTo) => peer.sendMessage(text, to, replyTo));
-  handler('room-message', (text, id, replyTo) => peer.sendRoomMessage(text, id, replyTo));
+  handler('room-message', (text, id, replyTo, mentions) => peer.sendRoomMessage(text, id, replyTo, mentions));
   handler('note', (text, replyTo) => peer.saveNote(text, replyTo));
   handler('react', (thread, id, emoji) => peer.react(thread, id, emoji));
   handler('typing', (thread, active) => peer.sendTyping(thread, active));
@@ -309,6 +311,10 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('connect-address', value => peer.connectAddress(value));
   handler('set-announcements', enabled => peer.setAnnouncements(enabled));
   handler('mute-announcements-from', (id, muted) => peer.muteAnnouncementsFrom(id, muted));
+  handler('set-thread-muted', (thread, muted) => {
+    peer.setThreadMuted(thread, muted);
+    if (muted) dismiss(thread);
+  });
   handler('file', async (path, to) => {
     if (activeUpload) throw new Error('Pengiriman file lain masih berlangsung.');
     const controller = new AbortController();
