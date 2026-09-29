@@ -11,6 +11,14 @@ contextBridge.exposeInMainWorld('lumilan', {
   note: (text, replyTo) => ipcRenderer.invoke('lumilan:note', text, replyTo),
   react: (thread, id, emoji) => ipcRenderer.invoke('lumilan:react', thread, id, emoji),
   typing: (thread, active) => ipcRenderer.invoke('lumilan:typing', thread, active),
+  callState: () => ipcRenderer.invoke('lumilan:call-state'),
+  call: packet => ipcRenderer.invoke('lumilan:call', packet),
+  callMicrophone: () => ipcRenderer.invoke('lumilan:call-microphone'),
+  onCall: callback => {
+    const listener = (_event, signal) => callback(signal);
+    ipcRenderer.on('lumilan:call', listener);
+    return () => ipcRenderer.removeListener('lumilan:call', listener);
+  },
   announcement: (text, replyTo) => ipcRenderer.invoke('lumilan:announcement', text, replyTo),
   createAnnouncementRoom: () => ipcRenderer.invoke('lumilan:create-announcement-room'),
   deleteAnnouncementRoom: () => ipcRenderer.invoke('lumilan:delete-announcement-room'),

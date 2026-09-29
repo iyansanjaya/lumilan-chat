@@ -1,6 +1,6 @@
 {
   "name": "lumilan-chat",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "Pesan langsung antarperangkat di jaringan lokal",
   "author": "Iyan Sanjaya",
   "private": true,
@@ -53,7 +53,10 @@
         "dmg",
         "zip"
       ],
-      "icon": "build/icon.svg"
+      "icon": "build/icon.svg",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Lumilan Chat memerlukan mikrofon saat Anda menerima atau memulai panggilan suara."
+      }
     },
     "linux": {
       "target": "AppImage",

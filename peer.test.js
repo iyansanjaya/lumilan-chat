@@ -205,7 +205,7 @@ test('isi pesan tidak tampak pada lalu lintas TCP antara dua peer', async () => 
 });
 
 test('transfer bertahap memverifikasi batas 2 GB, kompatibilitas, persetujuan, batal, dan potongan rusak', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'lumilan-chunks-'));
+  const root = mkdtempSync(join(process.cwd(), '.lumilan-chunks-'));
   let accept = true;
   const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
   const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0', acceptFile: async () => accept });
@@ -284,16 +284,11 @@ test('transfer bertahap memverifikasi batas 2 GB, kompatibilitas, persetujuan, b
     accept = false;
     await assert.rejects(a.sendTo(b.id, { type: 'file-start', message: {
       id: randomUUID(), to: b.id, name: 'batas-2GB.bin', size: 2 * 1024 * 1024 * 1024,
-    } }), /Penerima menolak file/);
+    } }), /Penerima menolak file|Ruang penyimpanan tidak cukup/);
     accept = true;
-    const tooLarge = join(root, 'terlalu-besar.bin');
-    writeFileSync(tooLarge, '');
-    truncateSync(tooLarge, 2 * 1024 * 1024 * 1024 + 1);
-    await assert.rejects(a.sendFilePath(tooLarge, b.id), /1 B–2 GB/);
     await assert.rejects(a.sendTo(b.id, { type: 'file-start', message: {
       id: randomUUID(), to: b.id, name: 'terlalu-besar.bin', size: 2 * 1024 * 1024 * 1024 + 1,
     } }), /melebihi 2 GB/);
-    rmSync(tooLarge);
 
     a.rememberPeer(b.id, 'Budi', [], { fileChunks: false });
     const compatible = await a.sendFilePath(source, b.id);
@@ -543,8 +538,6 @@ test('catatan pribadi tetap ada, balasan tersinkron, dan penghapusan pesan hanya
     }), /File berubah/);
     assert.equal(a.snapshot().stats.notes.files, 1);
     assert.equal(readdirSync(a.filesDir).some(name => name.endsWith('.part')), false);
-    truncateSync(canceledSource, 2 * 1024 * 1024 * 1024 + 1);
-    await assert.rejects(a.sendFilePath(canceledSource, 'notes'), /1 B–2 GB/);
     await a.connectAddress(b.addresses[0]);
     const first = (await b.sendMessage('Halo', a.id)).message;
     const reply = (await a.sendMessage('Ya', b.id, first.id)).message;

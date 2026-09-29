@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, Notification, protocol, shell, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, Notification, protocol, session, shell, systemPreferences, Tray } from 'electron';
 import { dirname, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -42,6 +42,7 @@ let deletingHistory = 0;
 const previewRequests = new Set();
 const activeNotifications = new Map();
 let notificationError = '';
+let callNotification;
 let refreshingNetwork = false;
 const tr = (source, values) => translate(settings?.language || 'id', source, values);
 
@@ -216,7 +217,7 @@ function assetPath(url) {
     return join(iconDir, relative);
   }
   if (path === '/brand-icon.png') return join(here, 'build', 'icon.png');
-  if (!/^\/(index\.html|app\.css|app\.js|i18n\.js|message-format\.js|fonts\/PublicSans\.ttf)$/.test(path)) return null;
+  if (!/^\/(index\.html|app\.css|app\.js|i18n\.js|message-format\.js|voice-call\.js|fonts\/PublicSans\.ttf)$/.test(path)) return null;
   const file = resolve(publicDir, `.${path}`);
   return file.startsWith(publicDir + sep) ? file : null;
 }
@@ -236,6 +237,13 @@ if (instanceLock) app.whenReady().then(async () => {
   protocol.handle('lumilan', request => {
     const path = assetPath(request.url);
     return path && existsSync(path) ? net.fetch(pathToFileURL(path).toString()) : new Response('Not found', { status: 404 });
+  });
+  session.defaultSession.setPermissionCheckHandler((contents, permission) =>
+    contents === window?.webContents && contents.getURL() === mainUrl && (permission === 'media' || permission === 'clipboard-sanitized-write'));
+  session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+    const appPage = contents === window?.webContents && contents.getURL() === mainUrl;
+    callback(appPage && (permission === 'clipboard-sanitized-write' || permission === 'media' && details.requestingUrl === mainUrl &&
+      details.mediaTypes?.length === 1 && details.mediaTypes[0] === 'audio'));
   });
 
   const dataDir = join(app.getPath('userData'), 'lumilan');
@@ -274,6 +282,26 @@ if (instanceLock) app.whenReady().then(async () => {
     if (window && !window.isDestroyed()) window.webContents.send('lumilan:state', peer.snapshot());
   });
   peer.on('incoming', notify);
+  peer.on('call', signal => {
+    if (signal.type === 'end') { callNotification?.close(); callNotification = undefined; }
+    if (signal.type === 'offer' && (!window || window.isDestroyed())) {
+      peer.sendCall({ action: 'end', id: signal.id, peerId: signal.peerId, reason: 'declined' }).catch(() => {});
+      return;
+    }
+    if (window && !window.isDestroyed()) window.webContents.send('lumilan:call', signal);
+    if (signal.type !== 'offer') return;
+    if (!window.isVisible()) window.show();
+    if (settings.enabled && peer.state.status !== 'dnd' && Notification.isSupported()) {
+      try {
+        const notification = new Notification({ title: settings.preview ? tr('Panggilan suara masuk') : 'Lumilan Chat',
+          body: settings.preview ? tr('{name} mengundang Anda ke panggilan suara.', { name: peer.trusted.get(signal.peerId)?.name || tr('Teman') }) : tr('Panggilan suara masuk menunggu jawaban.'),
+          silent: settings.silent });
+        notification.on('click', () => reveal(signal.peerId));
+        notification.show();
+        callNotification = notification;
+      } catch (error) { console.warn('Notifikasi panggilan gagal:', error); }
+    }
+  });
   peer.on('file-transfer', transfer => {
     if (transfer.status === 'canceled') pendingFileOffers.get(transfer.id)?.decide(false);
     if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-transfer', transfer);
@@ -303,6 +331,12 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('note', (text, replyTo) => peer.saveNote(text, replyTo));
   handler('react', (thread, id, emoji) => peer.react(thread, id, emoji));
   handler('typing', (thread, active) => peer.sendTyping(thread, active));
+  handler('call-state', () => peer.callState());
+  handler('call', packet => {
+    if (packet?.action === 'answer') { callNotification?.close(); callNotification = undefined; }
+    return peer.sendCall(packet);
+  });
+  handler('call-microphone', () => process.platform === 'darwin' ? systemPreferences.askForMediaAccess('microphone') : true);
   handler('announcement', (text, replyTo) => peer.sendAnnouncement(text, replyTo));
   handler('create-announcement-room', () => peer.createAnnouncementRoom());
   handler('delete-announcement-room', () => peer.deleteAnnouncementRoom());
@@ -418,6 +452,7 @@ if (instanceLock) app.whenReady().then(async () => {
       sandbox: true,
       nodeIntegration: false,
       webSecurity: true,
+      backgroundThrottling: false,
     },
   });
   if (process.platform !== 'darwin') window.removeMenu();
@@ -431,6 +466,12 @@ if (instanceLock) app.whenReady().then(async () => {
   });
   updateBadge();
   window.webContents.on('will-navigate', (event, url) => { if (url !== mainUrl) event.preventDefault(); });
+  window.webContents.on('did-start-navigation', details => {
+    if (details.isMainFrame && !details.isSameDocument && peer.activeCall) peer.sendCall({ action: 'end', id: peer.activeCall.id, peerId: peer.activeCall.peerId }).catch(() => {});
+  });
+  window.webContents.on('render-process-gone', () => {
+    if (peer.activeCall) peer.sendCall({ action: 'end', id: peer.activeCall.id, peerId: peer.activeCall.peerId }).catch(() => {});
+  });
   window.webContents.on('did-finish-load', () => {
     if (pendingThread !== undefined) {
       window.webContents.send('lumilan:open-thread', pendingThread);

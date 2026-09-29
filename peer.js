@@ -24,6 +24,7 @@ const MAX_TEXT = 4000;
 const MAX_AVATAR = 24 * 1024;
 const MAX_ROOMS = 64;
 const MAX_MEMBERS = 64;
+const MAX_CALL_SDP = 64 * 1024;
 const STATUSES = new Set(['active', 'busy', 'away', 'dnd']);
 const REACTIONS = new Set(['👍', '❤️', '😂', '😮', '😢', '🙏']);
 const encoder = new TextEncoder();
@@ -40,6 +41,8 @@ const safeFileName = value => {
 };
 const validId = value => typeof value === 'string' && /^[a-zA-Z0-9]{30,100}$/.test(value);
 const validRoomId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+const validCallSdp = value => typeof value === 'string' && value.length <= MAX_CALL_SDP && value.startsWith('v=0\r\n') &&
+  value.includes('\r\nm=audio ') && value.includes('\r\na=fingerprint:') && !/\r\nm=(?!audio )/.test(value);
 const roomKey = id => `room:${id}`;
 const validMentions = (text, mentions, room, sender) => {
   if (mentions === undefined) return [];
@@ -160,6 +163,7 @@ export class LumilanPeer extends EventEmitter {
     this.pendingFileOffers = new Map();
     this.announcementTimes = new Map();
     this.typing = new Map();
+    this.activeCall = null;
   }
 
   get id() { return this.node?.peerId.toString() || this.identity; }
@@ -234,6 +238,7 @@ export class LumilanPeer extends EventEmitter {
       for (const [key, item] of this.typing) if (item.from === from) { clearTimeout(item.timer); this.typing.delete(key); }
       this.emit('typing', this.typingList());
       this.emit('change');
+      setImmediate(() => { if (this.activeCall?.peerId === from && !this.online.has(from)) this.finishCall('offline'); });
     });
     await this.node.start();
     for (const peer of this.state.trusted) this.dialKnown(peer.id, peer.addresses || []).catch(() => {});
@@ -261,6 +266,7 @@ export class LumilanPeer extends EventEmitter {
   }
 
   async stop() {
+    this.finishCall('offline');
     for (const item of this.typing.values()) clearTimeout(item.timer);
     this.typing.clear();
     for (const [id, offer] of this.pendingFileOffers) { offer.canceled = true; this.emit('file-transfer', { id, status: 'canceled' }); }
@@ -327,7 +333,7 @@ export class LumilanPeer extends EventEmitter {
       mutedAnnouncements: this.state.mutedAnnouncements,
       mutedThreads: this.state.mutedThreads,
       peers: this.state.trusted.filter(peer => online.has(peer.id)).map(peer => ({
-        id: peer.id, name: peer.name, online: true, status: cleanStatus(peer.status), about: cleanAbout(peer.about), avatar: cleanAvatar(peer.avatar), announcements: peer.announcements === true,
+        id: peer.id, name: peer.name, online: true, status: cleanStatus(peer.status), about: cleanAbout(peer.about), avatar: cleanAvatar(peer.avatar), announcements: peer.announcements === true, voiceCalls: peer.voiceCalls === true,
       })),
       messages: visibleMessages.slice(-1000),
       typing: this.typingList(),
@@ -346,7 +352,7 @@ export class LumilanPeer extends EventEmitter {
     return this.snapshot();
   }
 
-  profile() { return { name: this.state.name, status: this.state.status, about: this.state.about, avatar: this.state.avatar, fileChunks: true, maxFileSize: MAX_STREAM_FILE, roomFiles: true, reactions: true, announcements: this.state.announcementsEnabled }; }
+  profile() { return { name: this.state.name, status: this.state.status, about: this.state.about, avatar: this.state.avatar, fileChunks: true, maxFileSize: MAX_STREAM_FILE, roomFiles: true, reactions: true, voiceCalls: true, announcements: this.state.announcementsEnabled }; }
 
   broadcastProfile() {
     if (!this.state.name) return;
@@ -425,6 +431,7 @@ export class LumilanPeer extends EventEmitter {
       status: cleanStatus(profile.status ?? previous?.status), about: cleanAbout(profile.about ?? previous?.about),
       avatar: cleanAvatar(profile.avatar ?? previous?.avatar), fileChunks: profile.fileChunks === true,
       maxFileSize: peerFileLimit(profile), roomFiles: profile.roomFiles === true, reactions: profile.reactions === true,
+      voiceCalls: profile.voiceCalls === true,
       announcements: profile.announcements === true,
     };
     this.state.trusted = this.state.trusted.filter(item => item.id !== id).concat(peer);
@@ -701,6 +708,7 @@ export class LumilanPeer extends EventEmitter {
       else if (data?.type === 'room-message') this.receiveRoomMessage(from, data.message);
       else if (data?.type === 'reaction') this.receiveReaction(from, data);
       else if (data?.type === 'typing') this.receiveTyping(from, data);
+      else if (data?.type === 'call') this.receiveCall(from, data);
       else if (data?.type === 'file') { stream.inactivityTimeout = 300_000; await this.receiveFile(from, data); }
       else if (data?.type === 'file-start') { stream.inactivityTimeout = 300_000; await this.beginIncomingFile(from, data.message); }
       else if (data?.type === 'file-chunk') await this.receiveFileChunk(from, data);
@@ -993,6 +1001,95 @@ export class LumilanPeer extends EventEmitter {
     if (!this.trusted.has(id)) throw new Error('Perangkat belum ditemukan di jaringan lokal.');
     if (!this.online.has(id)) throw new Error('Perangkat sedang offline.');
     return this.request(this.node.getConnections().find(connection => connection.remotePeer.toString() === id && localPeer(connection)).remotePeer, DATA, payload, 4096, options);
+  }
+
+  callState() {
+    const call = this.activeCall;
+    return call && { id: call.id, peerId: call.peerId, phase: call.phase, ...(call.sdp ? { sdp: call.sdp } : {}) };
+  }
+
+  finishCall(reason) {
+    const call = this.activeCall;
+    if (!call) return;
+    clearTimeout(call.timer);
+    this.activeCall = null;
+    this.emit('call', { type: 'end', id: call.id, peerId: call.peerId, reason });
+  }
+
+  timeCall(call) {
+    call.timer = setTimeout(() => {
+      if (this.activeCall !== call) return;
+      this.finishCall('timeout');
+      this.sendTo(call.peerId, { type: 'call', action: 'end', id: call.id, reason: 'timeout' }).catch(() => {});
+    }, 60_000);
+    call.timer.unref?.();
+  }
+
+  async sendCall(packet) {
+    if (!packet || !validRoomId(packet.id) || !validId(packet.peerId)) throw new Error('Panggilan tidak valid.');
+    if (packet.action === 'offer') {
+      if (!validCallSdp(packet.sdp)) throw new Error('Data audio panggilan tidak valid.');
+      if (this.activeCall) throw new Error('Selesaikan panggilan yang sedang berlangsung.');
+      if (!this.trusted.get(packet.peerId)?.voiceCalls) throw new Error('Penerima belum mendukung panggilan suara.');
+      if (!this.online.has(packet.peerId)) throw new Error('Penerima sedang offline.');
+      const call = { id: packet.id, peerId: packet.peerId, phase: 'outgoing' };
+      this.activeCall = call;
+      this.timeCall(call);
+      try { await this.sendTo(call.peerId, { type: 'call', action: 'offer', id: call.id, sdp: packet.sdp }); }
+      catch (error) {
+        if (this.activeCall === call) {
+          clearTimeout(call.timer);
+          this.activeCall = null;
+          this.sendTo(call.peerId, { type: 'call', action: 'end', id: call.id, reason: 'ended' }).catch(() => {});
+        }
+        throw error;
+      }
+      return true;
+    }
+    const call = this.activeCall;
+    if (!call || call.id !== packet.id || call.peerId !== packet.peerId) throw new Error('Panggilan sudah tidak tersedia.');
+    if (packet.action === 'answer') {
+      if (call.phase !== 'incoming' || !validCallSdp(packet.sdp)) throw new Error('Jawaban panggilan tidak valid.');
+      clearTimeout(call.timer);
+      call.phase = 'connecting';
+      try { await this.sendTo(call.peerId, { type: 'call', action: 'answer', id: call.id, sdp: packet.sdp }); }
+      catch (error) {
+        if (this.activeCall === call) {
+          this.activeCall = null;
+          this.sendTo(call.peerId, { type: 'call', action: 'end', id: call.id, reason: 'ended' }).catch(() => {});
+        }
+        throw error;
+      }
+      return true;
+    }
+    if (packet.action === 'end') {
+      this.finishCall(packet.reason === 'declined' ? 'declined' : 'ended');
+      await this.sendTo(call.peerId, { type: 'call', action: 'end', id: call.id, reason: packet.reason === 'declined' ? 'declined' : 'ended' }).catch(() => {});
+      return true;
+    }
+    throw new Error('Aksi panggilan tidak valid.');
+  }
+
+  receiveCall(from, packet) {
+    if (!validRoomId(packet.id)) throw new Error('Panggilan tidak valid.');
+    if (packet.action === 'offer') {
+      if (!validCallSdp(packet.sdp)) throw new Error('Data audio panggilan tidak valid.');
+      if (this.activeCall || this.state.status === 'dnd') throw new Error('Penerima sedang tidak tersedia untuk panggilan.');
+      const call = { id: packet.id, peerId: from, phase: 'incoming', sdp: packet.sdp };
+      this.activeCall = call;
+      this.timeCall(call);
+      this.emit('call', { type: 'offer', id: call.id, peerId: from, sdp: call.sdp });
+    } else if (packet.action === 'answer') {
+      if (!validCallSdp(packet.sdp)) throw new Error('Jawaban panggilan tidak valid.');
+      const call = this.activeCall;
+      if (!call || call.id !== packet.id || call.peerId !== from || call.phase !== 'outgoing') throw new Error('Panggilan sudah tidak tersedia.');
+      clearTimeout(call.timer);
+      call.phase = 'connecting';
+      this.emit('call', { type: 'answer', id: call.id, peerId: from, sdp: packet.sdp });
+    } else if (packet.action === 'end') {
+      if (!['ended', 'declined', 'timeout'].includes(packet.reason)) throw new Error('Akhir panggilan tidak valid.');
+      if (this.activeCall?.id === packet.id && this.activeCall.peerId === from) this.finishCall(packet.reason);
+    } else throw new Error('Aksi panggilan tidak valid.');
   }
 
   async sendMessage(text, to, replyTo = null) {
