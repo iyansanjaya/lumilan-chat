@@ -28,6 +28,8 @@ Get the latest package from [Releases](https://github.com/iyansanjaya/lumilan-ch
 
 For a routed local subnet where devices do not appear automatically, open **Connect a device** on the destination, copy its device code, and paste it on the other device. Both sides must be reachable over TCP port **40754**. A code includes the private IPv4 address, port, and authenticated device ID. The app has no internet relay or global chat service.
 
+Send files up to **2 GB** in direct messages or Conversation Rooms. Recipients accept or decline in the conversation and can follow the transfer progress. Use the composer buttons for bold, italic, strikethrough, lists, quotes, and inline code.
+
 ## Privacy and network limits
 
 Direct device connections use **libp2p Noise** to encrypt traffic and authenticate device identities. Profile names are chosen by users; there is no verification of a person's identity. Data stored on the device is **not encrypted**. Use trusted networks and enable disk encryption if needed.

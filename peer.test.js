@@ -204,11 +204,13 @@ test('isi pesan tidak tampak pada lalu lintas TCP antara dua peer', async () => 
   }
 });
 
-test('transfer bertahap memverifikasi batas 500 MB, kompatibilitas, persetujuan, batal, dan potongan rusak', async () => {
+test('transfer bertahap memverifikasi batas 2 GB, kompatibilitas, persetujuan, batal, dan potongan rusak', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lumilan-chunks-'));
   let accept = true;
   const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
   const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0', acceptFile: async () => accept });
+  const transferEvents = [];
+  b.on('file-transfer', event => transferEvents.push(event));
   try {
     await a.start();
     await b.start();
@@ -217,16 +219,20 @@ test('transfer bertahap memverifikasi batas 500 MB, kompatibilitas, persetujuan,
     a.discovered.set(b.id, b.addresses);
     await a.probePeer(b.id);
     assert.equal(a.trusted.get(b.id).fileChunks, true);
-    assert.equal(a.trusted.get(b.id).maxFileSize, 500 * 1024 * 1024);
+    assert.equal(a.trusted.get(b.id).maxFileSize, 2 * 1024 * 1024 * 1024);
 
     const source = join(root, 'contoh.bin');
     const contents = Buffer.alloc(1024 * 1024 + 17, 0x6b);
     writeFileSync(source, contents);
     const progress = [];
-    const sent = await a.sendFilePath(source, b.id, { onProgress: bytes => progress.push(bytes) });
+    const statuses = [];
+    const sent = await a.sendFilePath(source, b.id, { onProgress: bytes => progress.push(bytes), onStatus: status => statuses.push(status) });
     assert.equal(sent.delivered, 1);
+    assert.deepEqual(statuses, ['waiting']);
     assert.equal(progress.at(-1), contents.length);
     assert.ok(progress.length >= 3);
+    assert.ok(transferEvents.some(event => event.status === 'receiving' && event.received > 0));
+    assert.equal(transferEvents.at(-1).status, 'complete');
     assert.deepEqual(readFileSync(b.filePath(sent.message.id).path), contents);
     assert.equal(a.filePath(sent.message.id).name, 'contoh.bin');
 
@@ -252,6 +258,7 @@ test('transfer bertahap memverifikasi batas 500 MB, kompatibilitas, persetujuan,
       onProgress: bytes => { if (bytes >= 512 * 1024) controller.abort(new Error('Pengiriman dibatalkan.')); },
     }), /dibatalkan/);
     assert.equal(b.incomingFiles.size, 0);
+    assert.equal(transferEvents.at(-1).status, 'canceled');
 
     const badId = randomUUID();
     await a.sendTo(b.id, { type: 'file-start', message: { id: badId, to: b.id, name: 'rusak.bin', size: 4 } });
@@ -274,13 +281,19 @@ test('transfer bertahap memverifikasi batas 500 MB, kompatibilitas, persetujuan,
     await b.start();
     await until(() => a.online.has(b.id) && b.online.has(a.id));
 
+    accept = false;
+    await assert.rejects(a.sendTo(b.id, { type: 'file-start', message: {
+      id: randomUUID(), to: b.id, name: 'batas-2GB.bin', size: 2 * 1024 * 1024 * 1024,
+    } }), /Penerima menolak file/);
+    accept = true;
     const tooLarge = join(root, 'terlalu-besar.bin');
     writeFileSync(tooLarge, '');
-    truncateSync(tooLarge, 500 * 1024 * 1024 + 1);
-    await assert.rejects(a.sendFilePath(tooLarge, b.id), /1 B–500 MB/);
+    truncateSync(tooLarge, 2 * 1024 * 1024 * 1024 + 1);
+    await assert.rejects(a.sendFilePath(tooLarge, b.id), /1 B–2 GB/);
     await assert.rejects(a.sendTo(b.id, { type: 'file-start', message: {
-      id: randomUUID(), to: b.id, name: 'terlalu-besar.bin', size: 500 * 1024 * 1024 + 1,
-    } }), /melebihi 500 MB/);
+      id: randomUUID(), to: b.id, name: 'terlalu-besar.bin', size: 2 * 1024 * 1024 * 1024 + 1,
+    } }), /melebihi 2 GB/);
+    rmSync(tooLarge);
 
     a.rememberPeer(b.id, 'Budi', [], { fileChunks: false });
     const compatible = await a.sendFilePath(source, b.id);
@@ -530,8 +543,8 @@ test('catatan pribadi tetap ada, balasan tersinkron, dan penghapusan pesan hanya
     }), /File berubah/);
     assert.equal(a.snapshot().stats.notes.files, 1);
     assert.equal(readdirSync(a.filesDir).some(name => name.endsWith('.part')), false);
-    truncateSync(canceledSource, 500 * 1024 * 1024 + 1);
-    await assert.rejects(a.sendFilePath(canceledSource, 'notes'), /1 B–500 MB/);
+    truncateSync(canceledSource, 2 * 1024 * 1024 * 1024 + 1);
+    await assert.rejects(a.sendFilePath(canceledSource, 'notes'), /1 B–2 GB/);
     await a.connectAddress(b.addresses[0]);
     const first = (await b.sendMessage('Halo', a.id)).message;
     const reply = (await a.sendMessage('Ya', b.id, first.id)).message;

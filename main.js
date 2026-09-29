@@ -37,6 +37,7 @@ let settingsPath;
 let pendingThread;
 let checkUpdates = () => Promise.resolve();
 let activeUpload;
+const pendingFileOffers = new Map();
 let deletingHistory = 0;
 const previewRequests = new Set();
 const activeNotifications = new Map();
@@ -215,7 +216,7 @@ function assetPath(url) {
     return join(iconDir, relative);
   }
   if (path === '/brand-icon.png') return join(here, 'build', 'icon.png');
-  if (!/^\/(index\.html|app\.css|app\.js|i18n\.js|fonts\/PublicSans\.ttf)$/.test(path)) return null;
+  if (!/^\/(index\.html|app\.css|app\.js|i18n\.js|message-format\.js|fonts\/PublicSans\.ttf)$/.test(path)) return null;
   const file = resolve(publicDir, `.${path}`);
   return file.startsWith(publicDir + sep) ? file : null;
 }
@@ -245,16 +246,27 @@ if (instanceLock) app.whenReady().then(async () => {
   if (!settings || typeof settings !== 'object') settings = {};
   settings = { enabled: settings.enabled !== false, preview: settings.preview === true, silent: settings.silent === true, background: settings.background !== false,
     ...languageSettings(settings, app.getLocaleCountryCode()) };
-  peer = await new LumilanPeer({ dataDir, acceptFile: async ({ fromName, name, size, roomName }) => {
+  peer = await new LumilanPeer({ dataDir, acceptFile: ({ id, from, fromName, name, size, roomId }) => {
     if (!window || window.isDestroyed()) return false;
-    if (!window.isVisible()) window.show();
-    const { response } = await dialog.showMessageBox(window, {
-      type: 'question', title: tr('File masuk'),
-      message: tr('Terima file {name} ({size} MB) dari {sender}?', { name, size: (size / 1024 / 1024).toFixed(1), sender: fromName }),
-      detail: `${roomName ? `${tr('Ruang: {name}', { name: roomName })}\n` : ''}${tr('File akan disimpan di data Lumilan Chat pada perangkat ini.')}`,
-      buttons: [tr('Tolak'), tr('Terima file')], defaultId: 0, cancelId: 0, noLink: true,
+    if (pendingFileOffers.has(id)) return false;
+    const offer = { id, from, fromName, name, size, thread: roomId ? `room:${roomId}` : from };
+    return new Promise(resolve => {
+      const timer = setTimeout(() => { entry.notification?.close(); pendingFileOffers.delete(id); resolve(false); if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-transfer', { id, status: 'canceled' }); }, 290_000);
+      timer.unref();
+      const entry = { offer, notification: null, decide: accepted => { clearTimeout(timer); entry.notification?.close(); pendingFileOffers.delete(id); resolve(accepted); } };
+      pendingFileOffers.set(id, entry);
+      window.webContents.send('lumilan:file-offer', offer);
+      if (!window.isVisible()) window.show();
+      if (settings.enabled && peer?.state.status !== 'dnd' && Notification.isSupported()) {
+        try {
+          const notification = new Notification({ title: settings.preview ? tr('File masuk') : 'Lumilan Chat',
+            body: settings.preview ? tr('Terima file {name} dari {sender}?', { name, sender: fromName }) : tr('File masuk menunggu persetujuan.'), silent: settings.silent });
+          notification.on('click', () => reveal(offer.thread));
+          notification.show();
+          entry.notification = notification;
+        } catch (error) { console.warn('Notifikasi file gagal:', error); }
+      }
     });
-    return response === 1;
   } }).start();
   peer.on('change', () => {
     if (!peer.node) return;
@@ -262,6 +274,10 @@ if (instanceLock) app.whenReady().then(async () => {
     if (window && !window.isDestroyed()) window.webContents.send('lumilan:state', peer.snapshot());
   });
   peer.on('incoming', notify);
+  peer.on('file-transfer', transfer => {
+    if (transfer.status === 'canceled') pendingFileOffers.get(transfer.id)?.decide(false);
+    if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-transfer', transfer);
+  });
   setInterval(() => peer.maintainConnections(), 15_000).unref();
   setInterval(() => {
     if (quitting || refreshingNetwork) return;
@@ -320,10 +336,22 @@ if (instanceLock) app.whenReady().then(async () => {
     const controller = new AbortController();
     activeUpload = controller;
     try {
-      return await peer.sendFilePath(path, to, { signal: controller.signal, onProgress: (sent, total) => {
+      return await peer.sendFilePath(path, to, { signal: controller.signal, onStatus: status => {
+        if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-progress', { status });
+      }, onProgress: (sent, total) => {
         if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-progress', { sent, total });
       } });
     } finally { activeUpload = undefined; }
+  });
+  handler('file-offers', () => [
+    ...[...pendingFileOffers.values()].map(item => ({ ...item.offer, status: 'offered', received: 0 })),
+    ...[...peer.incomingFiles.values()].map(item => ({ id: item.id, fromName: peer.trusted.get(item.from)?.name || tr('Teman'), name: item.name, size: item.size,
+      thread: item.roomId ? `room:${item.roomId}` : item.from, status: 'receiving', received: item.received })),
+  ]);
+  handler('decide-file', (id, accepted) => {
+    if (typeof id !== 'string' || typeof accepted !== 'boolean' || !pendingFileOffers.has(id)) throw new Error('Permintaan file sudah tidak tersedia.');
+    pendingFileOffers.get(id).decide(accepted);
+    return true;
   });
   peer.on('typing', entries => {
     if (window && !window.isDestroyed()) window.webContents.send('lumilan:typing', entries);
@@ -428,6 +456,6 @@ if (instanceLock) app.whenReady().then(async () => {
   app.quit();
 });
 
-app.on('before-quit', () => { quitting = true; peer?.stop().catch(() => {}); });
+app.on('before-quit', () => { quitting = true; for (const entry of pendingFileOffers.values()) entry.decide(false); peer?.stop().catch(() => {}); });
 app.on('window-all-closed', () => app.quit());
 app.on('activate', () => reveal());

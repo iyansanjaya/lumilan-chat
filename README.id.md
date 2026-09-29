@@ -28,6 +28,8 @@ Ambil paket terbaru di [Releases](https://github.com/iyansanjaya/lumilan-chat/re
 
 Untuk subnet lokal yang saling memiliki rute tetapi perangkatnya tidak muncul otomatis, buka **Hubungkan perangkat** pada perangkat tujuan, salin kode perangkatnya, lalu tempel pada perangkat lain. Keduanya harus dapat terhubung lewat TCP port **40754**. Kode memuat alamat IPv4 privat, port, dan ID perangkat yang diautentikasi. Aplikasi tidak memakai relay internet atau layanan chat global.
 
+Kirim file hingga **2 GB** melalui pesan pribadi atau Ruang Percakapan. Penerima dapat menerima atau menolak di dalam percakapan serta memantau progres transfer. Gunakan tombol komposer untuk teks tebal, miring, coret, daftar, kutipan, dan kode sebaris.
+
 ## Privasi dan batasan jaringan
 
 Koneksi langsung antarperangkat memakai **libp2p Noise** untuk mengenkripsi lalu lintas dan mengautentikasi identitas perangkat. Nama profil dipilih sendiri oleh pengguna; verifikasi identitas orang belum tersedia. Data yang tersimpan di perangkat **belum terenkripsi**. Gunakan jaringan yang Anda percayai dan aktifkan enkripsi disk jika diperlukan.

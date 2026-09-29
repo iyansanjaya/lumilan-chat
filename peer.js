@@ -17,7 +17,7 @@ const PROFILE = '/lumilan/profile/1.0.0';
 const DATA = '/lumilan/data/1.0.0';
 const MAX_FILE = 20 * 1024 * 1024;
 const PREVIOUS_STREAM_FILE = 100 * 1024 * 1024;
-const MAX_STREAM_FILE = 500 * 1024 * 1024;
+const MAX_STREAM_FILE = 2 * 1024 * 1024 * 1024;
 const FILE_CHUNK = 512 * 1024;
 const MAX_FRAME = 29 * 1024 * 1024;
 const MAX_TEXT = 4000;
@@ -263,7 +263,7 @@ export class LumilanPeer extends EventEmitter {
   async stop() {
     for (const item of this.typing.values()) clearTimeout(item.timer);
     this.typing.clear();
-    for (const offer of this.pendingFileOffers.values()) offer.canceled = true;
+    for (const [id, offer] of this.pendingFileOffers) { offer.canceled = true; this.emit('file-transfer', { id, status: 'canceled' }); }
     for (const id of this.incomingFiles.keys()) await this.cancelIncomingFile(id);
     if (this.node) { await this.node.stop(); this.node = null; }
   }
@@ -847,7 +847,7 @@ export class LumilanPeer extends EventEmitter {
     if (this.state.messages.some(item => item.id === message.id)) return;
     const buffer = Buffer.from(bytes, 'base64');
     if (!buffer.length || buffer.length > MAX_FILE || buffer.length !== message.size || sha256(buffer).toString('hex') !== message.sha256) throw new Error('File rusak atau terlalu besar.');
-    if (!await this.acceptFile({ from, fromName: this.trusted.get(from).name, name: safeFileName(message.name), size: buffer.length })) throw new Error('Penerima menolak file.');
+    if (!await this.acceptFile({ id: message.id, from, fromName: this.trusted.get(from).name, name: safeFileName(message.name), size: buffer.length })) throw new Error('Penerima menolak file.');
     requireDiskSpace(this.filesDir, buffer.length);
     const path = join(this.filesDir, message.id);
     if (existsSync(path)) {
@@ -855,6 +855,7 @@ export class LumilanPeer extends EventEmitter {
     } else writeFileSync(path, buffer, { flag: 'wx', mode: 0o600 });
     this.state.messages.push({ id: message.id, from, fromName: this.trusted.get(from).name, to: message.to, name: safeFileName(message.name), size: buffer.length, kind: 'file', at: Date.now() });
     this.recordIncoming(this.state.messages.at(-1));
+    this.emit('file-transfer', { id: message.id, status: 'complete' });
   }
 
   resetIncomingTimer(id) {
@@ -870,12 +871,13 @@ export class LumilanPeer extends EventEmitter {
     const transfer = this.incomingFiles.get(id);
     if (!transfer) {
       const offer = this.pendingFileOffers.get(id);
-      if (offer && (!from || offer.from === from)) offer.canceled = true;
+      if (offer && (!from || offer.from === from)) { offer.canceled = true; this.emit('file-transfer', { id, status: 'canceled' }); }
       return;
     }
     if (from && transfer.from !== from) throw new Error('Pengirim file tidak valid.');
     this.incomingFiles.delete(id);
     clearTimeout(transfer.timer);
+    this.emit('file-transfer', { id, status: 'canceled' });
     try { await transfer.handle.close(); }
     finally { await unlink(transfer.path).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
   }
@@ -886,15 +888,15 @@ export class LumilanPeer extends EventEmitter {
         typeof message.name !== 'string' || !message.name || safeFileName(message.name) !== message.name ||
         (roomFile ? message.to !== null || !this.roomFileAllowed(from, message.roomId, message.version) : message.to !== this.id) ||
         !Number.isSafeInteger(message.size) || message.size < 1 || message.size > MAX_STREAM_FILE)
-      throw new Error('File tidak valid atau melebihi 500 MB.');
+      throw new Error('File tidak valid atau melebihi 2 GB.');
     if (this.state.messages.some(item => item.id === message.id) || existsSync(join(this.filesDir, message.id))) throw new Error('ID file sudah digunakan.');
     if (this.incomingFiles.size || this.pendingFileOffers.size) throw new Error('Perangkat sedang menerima file lain. Coba lagi nanti.');
     requireDiskSpace(this.filesDir, message.size);
     const offer = { from, canceled: false };
     this.pendingFileOffers.set(message.id, offer);
     try {
-      const accepted = await this.acceptFile({ from, fromName: this.trusted.get(from).name, name: message.name, size: message.size,
-        roomName: roomFile ? this.room(message.roomId).name : '' });
+      const accepted = await this.acceptFile({ id: message.id, from, fromName: this.trusted.get(from).name, name: message.name, size: message.size,
+        roomId: roomFile ? message.roomId : null, roomName: roomFile ? this.room(message.roomId).name : '' });
       if (offer.canceled) throw new Error('Pengiriman dibatalkan.');
       if (!accepted) throw new Error('Penerima menolak file.');
       const path = join(this.filesDir, `.upload-${message.id}.part`);
@@ -910,6 +912,7 @@ export class LumilanPeer extends EventEmitter {
         throw new Error('Keanggotaan Ruang berubah selama persetujuan file.');
       }
       this.incomingFiles.set(message.id, { ...message, from, path, handle, hash: createHash('sha256'), received: 0, timer: null });
+      this.emit('file-transfer', { id: message.id, status: 'receiving', received: 0, total: message.size });
       this.resetIncomingTimer(message.id);
     } finally { this.pendingFileOffers.delete(message.id); }
   }
@@ -927,6 +930,11 @@ export class LumilanPeer extends EventEmitter {
       await writeAll(transfer.handle, bytes);
       transfer.hash.update(bytes);
       transfer.received += bytes.length;
+      const percent = Math.floor(transfer.received / transfer.size * 100);
+      if (percent !== transfer.lastProgressPercent) {
+        transfer.lastProgressPercent = percent;
+        this.emit('file-transfer', { id: data.id, status: 'receiving', received: transfer.received, total: transfer.size });
+      }
     } catch (error) { await this.cancelIncomingFile(data.id); throw error; }
   }
 
@@ -970,9 +978,13 @@ export class LumilanPeer extends EventEmitter {
       }
       try { this.emit('incoming', message); }
       catch (error) { console.warn('Notifikasi file masuk gagal:', error); }
+      this.emit('file-transfer', { id: data.id, status: 'complete' });
     } catch (error) {
       if (this.incomingFiles.has(data.id)) await this.cancelIncomingFile(data.id);
-      else await unlink(transfer.path).catch(unlinkError => { if (unlinkError.code !== 'ENOENT') throw unlinkError; });
+      else {
+        await unlink(transfer.path).catch(unlinkError => { if (unlinkError.code !== 'ENOENT') throw unlinkError; });
+        this.emit('file-transfer', { id: data.id, status: 'canceled' });
+      }
       throw error;
     }
   }
@@ -1119,7 +1131,7 @@ export class LumilanPeer extends EventEmitter {
     return { message, delivered, failed };
   }
 
-  async sendFilePath(path, to, { signal, onProgress } = {}) {
+  async sendFilePath(path, to, { signal, onProgress, onStatus } = {}) {
     if (typeof path !== 'string' || !path || typeof to !== 'string') throw new Error('Penerima atau file tidak valid.');
     if (to === 'notes') return this.saveNoteFilePath(path, { signal, onProgress });
     const roomId = to.startsWith('room:') ? to.slice(5) : null;
@@ -1132,7 +1144,7 @@ export class LumilanPeer extends EventEmitter {
     if (!room && !this.online.has(to)) throw new Error('Penerima sedang offline.');
     const source = await stat(path);
     const filename = safeFileName(basename(path));
-    if (!source.isFile() || !filename || source.size < 1 || source.size > MAX_STREAM_FILE) throw new Error('File harus berukuran 1 B–500 MB.');
+    if (!source.isFile() || !filename || source.size < 1 || source.size > MAX_STREAM_FILE) throw new Error('File harus berukuran 1 B–2 GB.');
     if (!room && source.size > peerFileLimit(this.trusted.get(to))) {
       const response = await this.profilePacket(to, { type: 'profile', ...this.profile(), addresses: this.addresses });
       const name = cleanName(response.name);
@@ -1141,7 +1153,7 @@ export class LumilanPeer extends EventEmitter {
     }
     if (!room && source.size > peerFileLimit(this.trusted.get(to))) {
       if (peerFileLimit(this.trusted.get(to)) === MAX_FILE) throw new Error('Perbarui Lumilan Chat pada perangkat penerima untuk mengirim file di atas 20 MB.');
-      throw new Error('Perbarui Lumilan Chat pada perangkat penerima untuk mengirim file di atas 100 MB.');
+      throw new Error(`Perbarui Lumilan Chat pada perangkat penerima untuk mengirim file di atas ${Math.round(peerFileLimit(this.trusted.get(to)) / 1024 / 1024)} MB.`);
     }
     if (!room && !this.trusted.get(to).fileChunks) {
       return this.sendFile(filename, await readFile(path), to, { signal });
@@ -1169,7 +1181,7 @@ export class LumilanPeer extends EventEmitter {
         const recipient = this.trusted.get(target);
         if (room && (!recipient?.roomFiles || source.size > peerFileLimit(recipient))) {
           lastError = new Error(recipient?.roomFiles
-            ? 'Perbarui Lumilan Chat pada perangkat penerima untuk mengirim file di atas 100 MB.'
+            ? `Perbarui Lumilan Chat pada perangkat penerima untuk mengirim file di atas ${Math.round(peerFileLimit(recipient) / 1024 / 1024)} MB.`
             : 'Anggota Ruang perlu memperbarui Lumilan Chat untuk menerima file.');
           onProgress?.((index + 1) * source.size, targets.length * source.size);
           continue;
@@ -1177,6 +1189,7 @@ export class LumilanPeer extends EventEmitter {
         let offered = false;
         try {
           offered = true;
+          onStatus?.('waiting');
           await this.sendTo(target, { type: 'file-start', message: { id, to: room ? null : target,
             ...(room ? { roomId, version: message.version } : {}), name: filename, size: source.size } }, { responseTimeout: 300_000, signal });
           const hash = createHash('sha256');
@@ -1224,7 +1237,7 @@ export class LumilanPeer extends EventEmitter {
     if (signal?.aborted) throw signal.reason || new Error('Penyimpanan dibatalkan.');
     const source = await stat(path);
     const filename = safeFileName(basename(path));
-    if (!source.isFile() || !filename || source.size < 1 || source.size > MAX_STREAM_FILE) throw new Error('File harus berukuran 1 B–500 MB.');
+    if (!source.isFile() || !filename || source.size < 1 || source.size > MAX_STREAM_FILE) throw new Error('File harus berukuran 1 B–2 GB.');
     requireDiskSpace(this.filesDir, source.size);
     const id = randomUUID();
     const temporary = join(this.filesDir, `.outgoing-${id}.part`);

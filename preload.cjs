@@ -30,6 +30,18 @@ contextBridge.exposeInMainWorld('lumilan', {
   setThreadMuted: (thread, muted) => ipcRenderer.invoke('lumilan:set-thread-muted', thread, muted),
   file: (file, to) => ipcRenderer.invoke('lumilan:file', webUtils.getPathForFile(file), to),
   cancelFile: () => ipcRenderer.invoke('lumilan:cancel-file'),
+  fileOffers: () => ipcRenderer.invoke('lumilan:file-offers'),
+  decideFile: (id, accepted) => ipcRenderer.invoke('lumilan:decide-file', id, accepted),
+  onFileOffer: callback => {
+    const listener = (_event, offer) => callback(offer);
+    ipcRenderer.on('lumilan:file-offer', listener);
+    return () => ipcRenderer.removeListener('lumilan:file-offer', listener);
+  },
+  onFileTransfer: callback => {
+    const listener = (_event, transfer) => callback(transfer);
+    ipcRenderer.on('lumilan:file-transfer', listener);
+    return () => ipcRenderer.removeListener('lumilan:file-transfer', listener);
+  },
   onFileProgress: callback => {
     const listener = (_event, progress) => callback(progress);
     ipcRenderer.on('lumilan:file-progress', listener);
