@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { constants, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statfsSync, writeFileSync } from 'node:fs';
-import { copyFile, open, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statfsSync, writeFileSync } from 'node:fs';
+import { open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { createLibp2p } from 'libp2p';
@@ -17,7 +17,7 @@ const PROFILE = '/lumilan/profile/1.0.0';
 const DATA = '/lumilan/data/1.0.0';
 const MAX_FILE = 20 * 1024 * 1024;
 const PREVIOUS_STREAM_FILE = 100 * 1024 * 1024;
-const MAX_STREAM_FILE = 2 * 1024 * 1024 * 1024;
+const MAX_STREAM_FILE = 5 * 1024 * 1024 * 1024;
 const FILE_CHUNK = 512 * 1024;
 const MAX_FRAME = 29 * 1024 * 1024;
 const MAX_TEXT = 4000;
@@ -153,7 +153,7 @@ export class LumilanPeer extends EventEmitter {
     this.keyPath = join(dataDir, 'identity.key');
     this.filesDir = join(dataDir, 'files');
     // ponytail: riwayat kecil disimpan sebagai satu JSON; pindah ke SQLite jika pemakaian bertahun-tahun membuatnya besar.
-    this.state = { name: '', status: 'active', about: '', avatar: '', trusted: [], rooms: [], declinedRooms: [], leftRooms: [], roomTombstones: [], archivedThreads: {}, pendingFileDeletes: [], messages: [], unread: {}, announcementsEnabled: true, announcementRoomCreated: false, mutedAnnouncements: [], mutedThreads: [] };
+    this.state = { name: '', status: 'active', about: '', avatar: '', trusted: [], contactLabels: {}, rooms: [], declinedRooms: [], leftRooms: [], roomTombstones: [], archivedThreads: {}, pendingFileDeletes: [], messages: [], unread: {}, announcementsEnabled: true, announcementRoomCreated: false, mutedAnnouncements: [], mutedThreads: [] };
     this.node = null;
     this.identity = null;
     this.discovered = new Map();
@@ -191,6 +191,8 @@ export class LumilanPeer extends EventEmitter {
     this.state.announcementRoomCreated = this.state.announcementRoomCreated === true;
     this.state.mutedAnnouncements ||= [];
     this.state.mutedThreads = Array.isArray(this.state.mutedThreads) ? this.state.mutedThreads.filter(id => typeof id === 'string' && (validId(id) || id.startsWith('room:') && validRoomId(id.slice(5)))) : [];
+    this.state.contactLabels = Object.fromEntries(Object.entries(this.state.contactLabels && typeof this.state.contactLabels === 'object' && !Array.isArray(this.state.contactLabels) ? this.state.contactLabels : {})
+      .filter(([id, label]) => validId(id) && typeof label === 'string' && cleanName(label)).map(([id, label]) => [id, cleanName(label)]));
     this.state.status = cleanStatus(this.state.status);
     this.state.about = cleanAbout(this.state.about);
     this.state.avatar = cleanAvatar(this.state.avatar);
@@ -327,6 +329,7 @@ export class LumilanPeer extends EventEmitter {
         members: room.members, onlineMembers: room.members.filter(id => id === this.id || online.has(id)),
         invited: room.owner === this.id ? room.invited : undefined })),
       contacts: this.state.trusted.map(peer => ({ id: peer.id, name: peer.name, avatar: cleanAvatar(peer.avatar) })),
+      contactLabels: this.state.contactLabels,
       archivedThreads: Object.entries(this.state.archivedThreads).map(([id, name]) => ({ id, name })),
       announcementsEnabled: this.state.announcementsEnabled,
       announcementRoomCreated: this.state.announcementRoomCreated,
@@ -352,7 +355,7 @@ export class LumilanPeer extends EventEmitter {
     return this.snapshot();
   }
 
-  profile() { return { name: this.state.name, status: this.state.status, about: this.state.about, avatar: this.state.avatar, fileChunks: true, maxFileSize: MAX_STREAM_FILE, roomFiles: true, reactions: true, voiceCalls: true, announcements: this.state.announcementsEnabled }; }
+  profile() { return { name: this.state.name, status: this.state.status, about: this.state.about, avatar: this.state.avatar, fileChunks: true, maxFileSize: MAX_STREAM_FILE, roomFiles: true, reactions: true, voiceCalls: true, callErrorReason: true, announcements: this.state.announcementsEnabled }; }
 
   broadcastProfile() {
     if (!this.state.name) return;
@@ -431,7 +434,7 @@ export class LumilanPeer extends EventEmitter {
       status: cleanStatus(profile.status ?? previous?.status), about: cleanAbout(profile.about ?? previous?.about),
       avatar: cleanAvatar(profile.avatar ?? previous?.avatar), fileChunks: profile.fileChunks === true,
       maxFileSize: peerFileLimit(profile), roomFiles: profile.roomFiles === true, reactions: profile.reactions === true,
-      voiceCalls: profile.voiceCalls === true,
+      voiceCalls: profile.voiceCalls === true, callErrorReason: profile.callErrorReason === true,
       announcements: profile.announcements === true,
     };
     this.state.trusted = this.state.trusted.filter(item => item.id !== id).concat(peer);
@@ -652,6 +655,15 @@ export class LumilanPeer extends EventEmitter {
     this.state.mutedThreads = this.state.mutedThreads.filter(id => id !== thread);
     if (muted) this.state.mutedThreads.push(thread);
     this.save();
+  }
+
+  setContactLabel(id, value) {
+    if (!validId(id) || !this.trusted.has(id) || typeof value !== 'string' || value.length > 64) throw new Error('Perangkat atau tanda tidak valid.');
+    const label = cleanName(value);
+    if (label) this.state.contactLabels[id] = label;
+    else delete this.state.contactLabels[id];
+    this.save();
+    return this.snapshot();
   }
 
   async request(target, protocol, payload, responseLimit = 4096, { responseTimeout = 30_000, signal } = {}) {
@@ -896,7 +908,7 @@ export class LumilanPeer extends EventEmitter {
         typeof message.name !== 'string' || !message.name || safeFileName(message.name) !== message.name ||
         (roomFile ? message.to !== null || !this.roomFileAllowed(from, message.roomId, message.version) : message.to !== this.id) ||
         !Number.isSafeInteger(message.size) || message.size < 1 || message.size > MAX_STREAM_FILE)
-      throw new Error('File tidak valid atau melebihi 2 GB.');
+      throw new Error('File tidak valid atau melebihi 5 GB.');
     if (this.state.messages.some(item => item.id === message.id) || existsSync(join(this.filesDir, message.id))) throw new Error('ID file sudah digunakan.');
     if (this.incomingFiles.size || this.pendingFileOffers.size) throw new Error('Perangkat sedang menerima file lain. Coba lagi nanti.');
     requireDiskSpace(this.filesDir, message.size);
@@ -1063,8 +1075,10 @@ export class LumilanPeer extends EventEmitter {
       return true;
     }
     if (packet.action === 'end') {
-      this.finishCall(packet.reason === 'declined' ? 'declined' : 'ended');
-      await this.sendTo(call.peerId, { type: 'call', action: 'end', id: call.id, reason: packet.reason === 'declined' ? 'declined' : 'ended' }).catch(() => {});
+      const reason = ['declined', 'device-error'].includes(packet.reason) ? packet.reason : 'ended';
+      this.finishCall(reason);
+      await this.sendTo(call.peerId, { type: 'call', action: 'end', id: call.id,
+        reason: reason === 'device-error' && !this.trusted.get(call.peerId)?.callErrorReason ? 'ended' : reason }).catch(() => {});
       return true;
     }
     throw new Error('Aksi panggilan tidak valid.');
@@ -1074,7 +1088,8 @@ export class LumilanPeer extends EventEmitter {
     if (!validRoomId(packet.id)) throw new Error('Panggilan tidak valid.');
     if (packet.action === 'offer') {
       if (!validCallSdp(packet.sdp)) throw new Error('Data audio panggilan tidak valid.');
-      if (this.activeCall || this.state.status === 'dnd') throw new Error('Penerima sedang tidak tersedia untuk panggilan.');
+      if (this.activeCall) throw new Error('Penerima sedang dalam panggilan lain. Coba lagi nanti.');
+      if (this.state.status === 'dnd') throw new Error('Penerima mengaktifkan Jangan ganggu.');
       const call = { id: packet.id, peerId: from, phase: 'incoming', sdp: packet.sdp };
       this.activeCall = call;
       this.timeCall(call);
@@ -1087,7 +1102,7 @@ export class LumilanPeer extends EventEmitter {
       call.phase = 'connecting';
       this.emit('call', { type: 'answer', id: call.id, peerId: from, sdp: packet.sdp });
     } else if (packet.action === 'end') {
-      if (!['ended', 'declined', 'timeout'].includes(packet.reason)) throw new Error('Akhir panggilan tidak valid.');
+      if (!['ended', 'declined', 'timeout', 'device-error'].includes(packet.reason)) throw new Error('Akhir panggilan tidak valid.');
       if (this.activeCall?.id === packet.id && this.activeCall.peerId === from) this.finishCall(packet.reason);
     } else throw new Error('Aksi panggilan tidak valid.');
   }
@@ -1228,7 +1243,7 @@ export class LumilanPeer extends EventEmitter {
     return { message, delivered, failed };
   }
 
-  async sendFilePath(path, to, { signal, onProgress, onStatus } = {}) {
+  async sendFilePath(path, to, { signal, onProgress, onStatus, onPreparationProgress } = {}) {
     if (typeof path !== 'string' || !path || typeof to !== 'string') throw new Error('Penerima atau file tidak valid.');
     if (to === 'notes') return this.saveNoteFilePath(path, { signal, onProgress });
     const roomId = to.startsWith('room:') ? to.slice(5) : null;
@@ -1241,7 +1256,7 @@ export class LumilanPeer extends EventEmitter {
     if (!room && !this.online.has(to)) throw new Error('Penerima sedang offline.');
     const source = await stat(path);
     const filename = safeFileName(basename(path));
-    if (!source.isFile() || !filename || source.size < 1 || source.size > MAX_STREAM_FILE) throw new Error('File harus berukuran 1 B–2 GB.');
+    if (!source.isFile() || !filename || source.size < 1 || source.size > MAX_STREAM_FILE) throw new Error('File harus berukuran 1 B–5 GB.');
     if (!room && source.size > peerFileLimit(this.trusted.get(to))) {
       const response = await this.profilePacket(to, { type: 'profile', ...this.profile(), addresses: this.addresses });
       const name = cleanName(response.name);
@@ -1255,14 +1270,33 @@ export class LumilanPeer extends EventEmitter {
     if (!room && !this.trusted.get(to).fileChunks) {
       return this.sendFile(filename, await readFile(path), to, { signal });
     }
+    if (room && targets.every(target => !this.trusted.get(target)?.roomFiles || source.size > peerFileLimit(this.trusted.get(target))))
+      throw new Error('Tidak ada anggota Ruang online yang mendukung ukuran file ini. Perbarui Lumilan Chat pada perangkat penerima.');
     requireDiskSpace(this.filesDir, source.size);
     const id = randomUUID();
     const temporary = join(this.filesDir, `.outgoing-${id}.part`);
     const finalPath = join(this.filesDir, id);
     try {
-      await copyFile(path, temporary, constants.COPYFILE_EXCL);
+      onStatus?.('preparing');
+      const input = await open(path, 'r');
+      try {
+        const output = await open(temporary, 'wx', 0o600);
+        try {
+          for (let offset = 0; offset < source.size;) {
+            if (signal?.aborted) throw signal.reason || new Error('Pengiriman dibatalkan.');
+            const buffer = Buffer.allocUnsafe(Math.min(FILE_CHUNK, source.size - offset));
+            const { bytesRead } = await input.read(buffer, 0, buffer.length, offset);
+            if (!bytesRead) throw new Error('File berubah saat disiapkan. Coba lagi.');
+            await writeAll(output, buffer.subarray(0, bytesRead));
+            offset += bytesRead;
+            onPreparationProgress?.(offset, source.size);
+          }
+        } finally { await output.close(); }
+      } finally { await input.close(); }
       if (signal?.aborted) throw signal.reason || new Error('Pengiriman dibatalkan.');
-      if ((await stat(temporary)).size !== source.size) throw new Error('File berubah saat disiapkan. Coba lagi.');
+      const sourceAfter = await stat(path);
+      if ((await stat(temporary)).size !== source.size || sourceAfter.size !== source.size || sourceAfter.mtimeMs !== source.mtimeMs)
+        throw new Error('File berubah saat disiapkan. Coba lagi.');
       const message = { id, from: this.id, fromName: this.state.name, to: room ? null : to,
         ...(room ? { roomId, version: room.version } : {}), name: filename, size: source.size, kind: 'file', at: Date.now() };
       let delivered = 0;
@@ -1334,7 +1368,7 @@ export class LumilanPeer extends EventEmitter {
     if (signal?.aborted) throw signal.reason || new Error('Penyimpanan dibatalkan.');
     const source = await stat(path);
     const filename = safeFileName(basename(path));
-    if (!source.isFile() || !filename || source.size < 1 || source.size > MAX_STREAM_FILE) throw new Error('File harus berukuran 1 B–2 GB.');
+    if (!source.isFile() || !filename || source.size < 1 || source.size > MAX_STREAM_FILE) throw new Error('File harus berukuran 1 B–5 GB.');
     requireDiskSpace(this.filesDir, source.size);
     const id = randomUUID();
     const temporary = join(this.filesDir, `.outgoing-${id}.part`);

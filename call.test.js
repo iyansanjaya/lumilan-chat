@@ -13,11 +13,14 @@ test('undangan panggilan LAN: persetujuan, penolakan, sibuk, SDP terlarang, dan 
   const root = mkdtempSync(join(tmpdir(), 'lumilan-call-'));
   const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
   const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const c = new LumilanPeer({ dataDir: join(root, 'c'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
   try {
-    await a.start(); await b.start();
-    a.rename('Andi'); b.rename('Budi');
+    await a.start(); await b.start(); await c.start();
+    a.rename('Andi'); b.rename('Budi'); c.rename('Citra');
     a.discovered.set(b.id, b.addresses);
     await a.probePeer(b.id);
+    c.discovered.set(b.id, b.addresses);
+    await c.probePeer(b.id);
     assert.equal(a.snapshot().peers[0].voiceCalls, true);
     const eventsA = [], eventsB = [];
     a.on('call', signal => eventsA.push(signal));
@@ -26,6 +29,9 @@ test('undangan panggilan LAN: persetujuan, penolakan, sibuk, SDP terlarang, dan 
     await a.sendCall({ action: 'offer', id, peerId: b.id, sdp });
     assert.equal(eventsB.at(-1).type, 'offer');
     assert.equal(b.callState().phase, 'incoming');
+    await assert.rejects(c.sendCall({ action: 'offer', id: randomUUID(), peerId: b.id, sdp }), /panggilan lain/);
+    assert.equal(c.callState(), null);
+    assert.equal(b.callState().peerId, a.id);
     await assert.rejects(b.sendCall({ action: 'offer', id: randomUUID(), peerId: a.id, sdp }), /berlangsung/);
     await assert.rejects(b.sendCall({ action: 'answer', id, peerId: a.id, sdp: sdp + 'm=video 9\r\n' }), /tidak valid/);
     await b.sendCall({ action: 'answer', id, peerId: a.id, sdp });
@@ -39,8 +45,18 @@ test('undangan panggilan LAN: persetujuan, penolakan, sibuk, SDP terlarang, dan 
     await a.sendCall({ action: 'offer', id: declined, peerId: b.id, sdp });
     await b.sendCall({ action: 'end', id: declined, peerId: a.id, reason: 'declined' });
     assert.equal(eventsA.at(-1).reason, 'declined');
+    const unavailable = randomUUID();
+    await a.sendCall({ action: 'offer', id: unavailable, peerId: b.id, sdp });
+    await b.sendCall({ action: 'end', id: unavailable, peerId: a.id, reason: 'device-error' });
+    assert.equal(eventsA.at(-1).reason, 'device-error');
+    b.state.trusted.find(peer => peer.id === a.id).callErrorReason = false;
+    const legacy = randomUUID();
+    await a.sendCall({ action: 'offer', id: legacy, peerId: b.id, sdp });
+    await b.sendCall({ action: 'end', id: legacy, peerId: a.id, reason: 'device-error' });
+    assert.equal(eventsA.at(-1).reason, 'ended');
+    b.state.trusted.find(peer => peer.id === a.id).callErrorReason = true;
     b.setProfile({ name: 'Budi', status: 'dnd', about: '', avatar: '' });
-    await assert.rejects(a.sendCall({ action: 'offer', id: randomUUID(), peerId: b.id, sdp }), /tidak tersedia/);
+    await assert.rejects(a.sendCall({ action: 'offer', id: randomUUID(), peerId: b.id, sdp }), /Jangan ganggu/);
     assert.equal(a.callState(), null);
     b.setProfile({ name: 'Budi', status: 'active', about: '', avatar: '' });
     await assert.rejects(a.sendCall({ action: 'offer', id: randomUUID(), peerId: b.id, sdp: 'v=0\r\nm=video 9\r\n' }), /tidak valid/);
@@ -52,7 +68,7 @@ test('undangan panggilan LAN: persetujuan, penolakan, sibuk, SDP terlarang, dan 
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(a.callState(), null);
   } finally {
-    await a.stop(); await b.stop(); rmSync(root, { recursive: true, force: true });
+    await a.stop(); await b.stop(); await c.stop(); rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -108,4 +124,72 @@ test('audio WebRTC langsung: hanya mikrofon, mute, akhiri, dan pembatalan izin',
   await pending;
   assert.equal(waiting.state, null);
   assert.equal(lateTrack.stopped, true);
+
+  const blockedAudio = { srcObject: null, pause() {}, play: async () => { const error = new Error('blocked'); error.name = 'NotAllowedError'; throw error; } };
+  const blocked = new VoiceCall({ bridge: { callMicrophone: async () => true, call: async () => true },
+    audio: blockedAudio, media, PeerConnection: FakePeerConnection, onChange: () => {}, onEnd: () => {} });
+  await blocked.start('peer-b');
+  blocked.call.pc.ontrack({ streams: [{}] });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(blocked.state.audioBlocked, true);
+  assert.match(blocked.state.audioIssue, /Putar audio/);
+  blocked.end();
+});
+
+test('perangkat audio tidak tersedia membatalkan undangan dan membersihkan mikrofon', async () => {
+  const track = { stopped: false, stop() { this.stopped = true; } };
+  const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
+  const packets = [];
+  const call = new VoiceCall({
+    bridge: { callMicrophone: async () => true, call: async packet => { packets.push(packet); } },
+    audio: { pause() {}, srcObject: null },
+    media: { getUserMedia: async () => stream, enumerateDevices: async () => [{ kind: 'audioinput' }] },
+    PeerConnection: class {}, onChange: () => {}, onEnd: () => {},
+  });
+  call.incoming({ id: randomUUID(), peerId: 'peer-a', sdp });
+  await assert.rejects(call.accept(), /Speaker atau perangkat keluaran audio tidak terdeteksi/);
+  assert.equal(track.stopped, true);
+  assert.equal(call.state, null);
+  assert.equal(packets.at(-1).reason, 'device-error');
+});
+
+test('panggilan dibatalkan saat pemeriksaan perangkat dan speaker terlepas saat aktif', async () => {
+  const track = { stopped: false, stop() { this.stopped = true; } };
+  const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
+  let releaseDevices;
+  const media = new EventTarget();
+  media.getUserMedia = async () => stream;
+  media.enumerateDevices = () => new Promise(resolve => { releaseDevices = resolve; });
+  const sent = [];
+  const call = new VoiceCall({ bridge: { callMicrophone: async () => true, call: async packet => { sent.push(packet); } },
+    audio: { srcObject: null, pause() {} }, media, PeerConnection: class {}, onChange: () => {}, onEnd: () => {} });
+  const pending = call.start('peer-b');
+  await new Promise(resolve => setImmediate(resolve));
+  call.end();
+  releaseDevices([{ kind: 'audiooutput' }]);
+  await pending;
+  assert.equal(track.stopped, true);
+  assert.equal(call.state, null);
+  assert.equal(sent.length, 0);
+
+  class FakePeerConnection extends EventTarget {
+    iceGatheringState = 'complete';
+    addTrack() {}
+    async createOffer() { return { type: 'offer', sdp }; }
+    async setLocalDescription(value) { this.localDescription = value; }
+    close() {}
+  }
+  let devices = [{ kind: 'audiooutput' }];
+  const nextTrack = { stop() {} };
+  media.getUserMedia = async () => ({ getTracks: () => [nextTrack], getAudioTracks: () => [nextTrack] });
+  media.enumerateDevices = async () => devices;
+  const next = new VoiceCall({ bridge: { callMicrophone: async () => true, call: async () => true },
+    audio: { srcObject: null, pause() {} }, media, PeerConnection: FakePeerConnection, onChange: () => {}, onEnd: () => {} });
+  await next.start('peer-b');
+  devices = [{ kind: 'audioinput' }];
+  media.dispatchEvent(new Event('devicechange'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(next.state.audioBlocked, true);
+  assert.match(next.state.audioIssue, /Speaker atau headset terputus/);
+  next.end();
 });

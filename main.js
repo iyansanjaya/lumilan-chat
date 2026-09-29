@@ -290,7 +290,9 @@ if (instanceLock) app.whenReady().then(async () => {
     }
     if (window && !window.isDestroyed()) window.webContents.send('lumilan:call', signal);
     if (signal.type !== 'offer') return;
+    if (window.isMinimized()) window.restore();
     if (!window.isVisible()) window.show();
+    window.focus();
     if (settings.enabled && peer.state.status !== 'dnd' && Notification.isSupported()) {
       try {
         const notification = new Notification({ title: settings.preview ? tr('Panggilan suara masuk') : 'Lumilan Chat',
@@ -324,6 +326,7 @@ if (instanceLock) app.whenReady().then(async () => {
   handler('state', () => peer.snapshot());
   handler('rename', name => peer.rename(name));
   handler('set-profile', value => peer.setProfile(value));
+  handler('set-contact-label', (id, label) => peer.setContactLabel(id, label));
   handler('check-updates', () => checkUpdates(true));
   handler('test-notification', testNotification);
   handler('message', (text, to, replyTo) => peer.sendMessage(text, to, replyTo));
@@ -369,12 +372,18 @@ if (instanceLock) app.whenReady().then(async () => {
     if (activeUpload) throw new Error('Pengiriman file lain masih berlangsung.');
     const controller = new AbortController();
     activeUpload = controller;
+    let lastProgressAt = 0;
+    const reportProgress = (sent, total, status) => {
+      const now = Date.now();
+      if (sent !== total && now - lastProgressAt < 100) return;
+      lastProgressAt = now;
+      if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-progress', { sent, total, status });
+    };
     try {
       return await peer.sendFilePath(path, to, { signal: controller.signal, onStatus: status => {
         if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-progress', { status });
-      }, onProgress: (sent, total) => {
-        if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-progress', { sent, total });
-      } });
+      }, onProgress: (sent, total) => reportProgress(sent, total),
+      onPreparationProgress: (sent, total) => reportProgress(sent, total, 'preparing') });
     } finally { activeUpload = undefined; }
   });
   handler('file-offers', () => [

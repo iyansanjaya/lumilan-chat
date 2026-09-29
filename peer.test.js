@@ -64,6 +64,32 @@ test('mDNS mengirim pada setiap antarmuka LAN, bukan adaptor VPN saja', async ()
   } finally { await discovery.stop(); }
 });
 
+test('tanda pribadi tetap lokal dan bertahan saat kontak mengganti nama', async () => {
+  const root = mkdtempSync(join(process.cwd(), '.lumilan-label-'));
+  const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  try {
+    await a.start(); await b.start();
+    a.rename('Saya'); b.rename('Puan');
+    a.discovered.set(b.id, b.addresses);
+    await a.probePeer(b.id);
+    a.setContactLabel(b.id, 'Puan lama');
+    assert.equal(a.snapshot().contactLabels[b.id], 'Puan lama');
+    assert.equal(b.snapshot().contactLabels[a.id], undefined);
+    b.rename('Banteng');
+    await until(() => a.snapshot().peers.some(peer => peer.id === b.id && peer.name === 'Banteng'));
+    assert.equal(a.snapshot().contactLabels[b.id], 'Puan lama');
+    await a.stop(); await a.start();
+    assert.equal(a.snapshot().contactLabels[b.id], 'Puan lama');
+    assert.throws(() => a.setContactLabel('invalid', 'X'), /tidak valid/);
+    a.setContactLabel(b.id, '');
+    assert.equal(a.snapshot().contactLabels[b.id], undefined);
+  } finally {
+    await a.stop(); await b.stop();
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
 test('perangkat LAN dapat langsung berkirim pesan dan file setelah ditemukan', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lumilan-peer-'));
   let network = 'rumah';
@@ -204,7 +230,7 @@ test('isi pesan tidak tampak pada lalu lintas TCP antara dua peer', async () => 
   }
 });
 
-test('transfer bertahap memverifikasi batas 2 GB, kompatibilitas, persetujuan, batal, dan potongan rusak', async () => {
+test('transfer bertahap memverifikasi batas 5 GB, kompatibilitas, persetujuan, batal, dan potongan rusak', async () => {
   const root = mkdtempSync(join(process.cwd(), '.lumilan-chunks-'));
   let accept = true;
   const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
@@ -219,7 +245,7 @@ test('transfer bertahap memverifikasi batas 2 GB, kompatibilitas, persetujuan, b
     a.discovered.set(b.id, b.addresses);
     await a.probePeer(b.id);
     assert.equal(a.trusted.get(b.id).fileChunks, true);
-    assert.equal(a.trusted.get(b.id).maxFileSize, 2 * 1024 * 1024 * 1024);
+    assert.equal(a.trusted.get(b.id).maxFileSize, 5 * 1024 * 1024 * 1024);
 
     const source = join(root, 'contoh.bin');
     const contents = Buffer.alloc(1024 * 1024 + 17, 0x6b);
@@ -228,7 +254,7 @@ test('transfer bertahap memverifikasi batas 2 GB, kompatibilitas, persetujuan, b
     const statuses = [];
     const sent = await a.sendFilePath(source, b.id, { onProgress: bytes => progress.push(bytes), onStatus: status => statuses.push(status) });
     assert.equal(sent.delivered, 1);
-    assert.deepEqual(statuses, ['waiting']);
+    assert.deepEqual(statuses, ['preparing', 'waiting']);
     assert.equal(progress.at(-1), contents.length);
     assert.ok(progress.length >= 3);
     assert.ok(transferEvents.some(event => event.status === 'receiving' && event.received > 0));
@@ -251,6 +277,19 @@ test('transfer bertahap memverifikasi batas 2 GB, kompatibilitas, persetujuan, b
     answerOffer(false);
     await assert.rejects(pending, /Penerima menolak file/);
     b.acceptFile = async () => accept;
+
+    const preparingController = new AbortController();
+    await assert.rejects(a.sendFilePath(source, b.id, {
+      signal: preparingController.signal,
+      onPreparationProgress: bytes => { if (bytes >= 512 * 1024) preparingController.abort(new Error('Pengiriman dibatalkan.')); },
+    }), /dibatalkan/);
+    assert.equal(readdirSync(a.filesDir).filter(name => name.endsWith('.part')).length, 0);
+    const changingSource = join(root, 'berubah.bin');
+    writeFileSync(changingSource, contents);
+    await assert.rejects(a.sendFilePath(changingSource, b.id, {
+      onPreparationProgress: bytes => { if (bytes === 512 * 1024) writeFileSync(changingSource, 'x', { flag: 'a' }); },
+    }), /File berubah saat disiapkan/);
+    assert.equal(readdirSync(a.filesDir).filter(name => name.endsWith('.part')).length, 0);
 
     const controller = new AbortController();
     await assert.rejects(a.sendFilePath(source, b.id, {
@@ -283,12 +322,12 @@ test('transfer bertahap memverifikasi batas 2 GB, kompatibilitas, persetujuan, b
 
     accept = false;
     await assert.rejects(a.sendTo(b.id, { type: 'file-start', message: {
-      id: randomUUID(), to: b.id, name: 'batas-2GB.bin', size: 2 * 1024 * 1024 * 1024,
+      id: randomUUID(), to: b.id, name: 'batas-5GB.bin', size: 5 * 1024 * 1024 * 1024,
     } }), /Penerima menolak file|Ruang penyimpanan tidak cukup/);
     accept = true;
     await assert.rejects(a.sendTo(b.id, { type: 'file-start', message: {
-      id: randomUUID(), to: b.id, name: 'terlalu-besar.bin', size: 2 * 1024 * 1024 * 1024 + 1,
-    } }), /melebihi 2 GB/);
+      id: randomUUID(), to: b.id, name: 'terlalu-besar.bin', size: 5 * 1024 * 1024 * 1024 + 1,
+    } }), /melebihi 5 GB/);
 
     a.rememberPeer(b.id, 'Budi', [], { fileChunks: false });
     const compatible = await a.sendFilePath(source, b.id);
@@ -306,6 +345,13 @@ test('transfer bertahap memverifikasi batas 2 GB, kompatibilitas, persetujuan, b
     a.profilePacket = async () => ({ ok: true, name: 'Budi', fileChunks: true, roomFiles: true });
     truncateSync(legacyLarge, 100 * 1024 * 1024 + 1);
     await assert.rejects(a.sendFilePath(legacyLarge, b.id), /di atas 100 MB/);
+    a.profilePacket = originalProfilePacket;
+    truncateSync(legacyLarge, 2 * 1024 ** 3 + 1);
+    for (const limit of [500 * 1024 ** 2, 2 * 1024 ** 3]) {
+      a.rememberPeer(b.id, 'Budi', [], { fileChunks: true, roomFiles: true, maxFileSize: limit });
+      a.profilePacket = async () => ({ ok: true, name: 'Budi', fileChunks: true, roomFiles: true, maxFileSize: limit });
+      await assert.rejects(a.sendFilePath(legacyLarge, b.id), /Perbarui Lumilan Chat/);
+    }
     a.profilePacket = originalProfilePacket;
     a.rememberPeer(b.id, 'Budi', [], b.profile());
 
@@ -378,6 +424,12 @@ test('file Ruang dikirim hanya ke anggota aktif dengan persetujuan dan dibersihk
     assert.equal(olderRoomPeer.failed, 1);
     assert.equal(c.state.messages.some(message => message.id === olderRoomPeer.message.id), false);
     a.state.trusted.find(peer => peer.id === c.id).maxFileSize = 500 * 1024 * 1024;
+    a.state.trusted.find(peer => peer.id === b.id).roomFiles = false;
+    a.state.trusted.find(peer => peer.id === c.id).roomFiles = false;
+    await assert.rejects(a.sendFilePath(source, `room:${id}`), /Tidak ada anggota Ruang online yang mendukung ukuran file/);
+    assert.equal(readdirSync(a.filesDir).filter(name => name.endsWith('.part')).length, 0);
+    a.state.trusted.find(peer => peer.id === b.id).roomFiles = true;
+    a.state.trusted.find(peer => peer.id === c.id).roomFiles = true;
 
     const controller = new AbortController();
     const sendTo = a.sendTo.bind(a);

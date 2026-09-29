@@ -39,5 +39,5 @@ test('thumbnail lokal memproses PNG, JPEG, WebP di atas 5 MB dan menolak input b
     await assert.rejects(previewImage(file('rusak.png')));
     truncateSync(path, 100 * 1024 * 1024 + 1);
     await assert.rejects(previewImage(file('terlalu-besar.png')));
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 });

@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('lumilan', {
   state: () => ipcRenderer.invoke('lumilan:state'),
   rename: name => ipcRenderer.invoke('lumilan:rename', name),
   setProfile: profile => ipcRenderer.invoke('lumilan:set-profile', profile),
+  setContactLabel: (id, label) => ipcRenderer.invoke('lumilan:set-contact-label', id, label),
   checkUpdates: () => ipcRenderer.invoke('lumilan:check-updates'),
   testNotification: () => ipcRenderer.invoke('lumilan:test-notification'),
   message: (text, to, replyTo) => ipcRenderer.invoke('lumilan:message', text, to, replyTo),
