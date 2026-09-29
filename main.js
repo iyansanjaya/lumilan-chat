@@ -20,7 +20,8 @@ const mainUrl = 'lumilan://app/index.html';
 protocol.registerSchemesAsPrivileged([{ scheme: 'lumilan', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 app.setName('Lumilan Chat');
 // Keep the existing identity and chat history after the rename.
-app.setPath('userData', join(app.getPath('appData'), 'Lumilan'));
+const userDataOverride = app.commandLine.getSwitchValue('user-data-dir');
+app.setPath('userData', userDataOverride ? resolve(userDataOverride) : join(app.getPath('appData'), 'Lumilan'));
 if (process.platform === 'win32') app.setAppUserModelId('dev.lumilan.desktop');
 
 const instanceLock = app.requestSingleInstanceLock();
@@ -217,7 +218,7 @@ function assetPath(url) {
     return join(iconDir, relative);
   }
   if (path === '/brand-icon.png') return join(here, 'build', 'icon.png');
-  if (!/^\/(index\.html|app\.css|app\.js|i18n\.js|message-format\.js|voice-call\.js|fonts\/PublicSans\.ttf)$/.test(path)) return null;
+  if (!/^\/(?:index\.html|app\.css|[a-z][a-z0-9-]*\.js|fonts\/PublicSans\.ttf)$/.test(path)) return null;
   const file = resolve(publicDir, `.${path}`);
   return file.startsWith(publicDir + sep) ? file : null;
 }
@@ -254,7 +255,9 @@ if (instanceLock) app.whenReady().then(async () => {
   if (!settings || typeof settings !== 'object') settings = {};
   settings = { enabled: settings.enabled !== false, preview: settings.preview === true, silent: settings.silent === true, background: settings.background !== false,
     ...languageSettings(settings, app.getLocaleCountryCode()) };
-  peer = await new LumilanPeer({ dataDir, acceptFile: ({ id, from, fromName, name, size, roomId }) => {
+  peer = await new LumilanPeer({ dataDir,
+    ...(app.commandLine.hasSwitch('lumilan-ui-smoke') ? { discovery: false, listen: '/ip4/127.0.0.1/tcp/0' } : {}),
+    acceptFile: ({ id, from, fromName, name, size, roomId }) => {
     if (!window || window.isDestroyed()) return false;
     if (pendingFileOffers.has(id)) return false;
     const offer = { id, from, fromName, name, size, thread: roomId ? `room:${roomId}` : from };

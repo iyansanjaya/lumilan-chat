@@ -1,6 +1,6 @@
 {
   "name": "lumilan-chat",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Pesan langsung antarperangkat di jaringan lokal",
   "author": "Iyan Sanjaya",
   "private": true,
@@ -12,6 +12,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test",
+    "smoke:ui": "node scripts/smoke-ui.cjs",
     "pack": "electron-builder --dir --publish never",
     "dist": "electron-builder --publish never",
     "release": "node scripts/prepare-release.mjs && electron-builder --publish always"

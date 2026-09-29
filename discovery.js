@@ -19,6 +19,35 @@ export function lanInterfaces(networks = networkInterfaces()) {
       .map(address => address.address)))];
 }
 
+export const networkSignature = () => Object.entries(networkInterfaces())
+  .flatMap(([name, addresses]) => (addresses || []).filter(address => address.family === 'IPv4' && !address.internal)
+    .map(address => `${name}:${address.address}/${address.netmask}`)).sort().join('|');
+
+export function addressPriority(address) {
+  const ip = /^\/ip4\/([^/]+)/.exec(address)?.[1];
+  if (!ip) return 3;
+  if (ip.startsWith('127.')) return 2;
+  const number = ip.split('.').map(Number).reduce((value, byte) => (value * 256 + byte) >>> 0, 0);
+  for (const addresses of Object.values(networkInterfaces())) for (const local of addresses || []) {
+    if (local.family !== 'IPv4' || local.internal) continue;
+    const own = local.address.split('.').map(Number).reduce((value, byte) => (value * 256 + byte) >>> 0, 0);
+    const mask = local.netmask.split('.').map(Number).reduce((value, byte) => (value * 256 + byte) >>> 0, 0);
+    if ((number & mask) === (own & mask)) return 0;
+  }
+  return 1;
+}
+
+export function localAddress(address) {
+  const match = /^\/ip4\/(\d+\.\d+\.\d+\.\d+)\/tcp\/(\d+)\/p2p\/([a-zA-Z0-9]+)$/.exec(address);
+  return Boolean(match && lanIPv4(match[1]) && +match[2] >= 1 && +match[2] <= 65535);
+}
+
+export function localPeer(connection) {
+  const id = connection.remotePeer.toString();
+  const address = connection.remoteAddr.toString();
+  return localAddress(address.endsWith('/p2p/' + id) ? address : address + '/p2p/' + id);
+}
+
 export class LanDiscovery extends EventTarget {
   constructor(components, getInterfaces = lanInterfaces, createSocket = multicastDNS) {
     super();
