@@ -28,6 +28,8 @@ Get the latest package from [Releases](https://github.com/iyansanjaya/lumilan-ch
 
 On first launch, supported installed builds enable opening Lumilan Chat at computer sign-in by default. You can turn this off in **Settings → When the computer starts**.
 
+Sent GIFs play in a local chat preview after the file is received. Download the attachment to view the original.
+
 For a routed local subnet where devices do not appear automatically, open **Connect a device** on the destination, copy its device code, and paste it on the other device. Both sides must be reachable over TCP port **40754**. A code includes the private IPv4 address, port, and authenticated device ID. The app has no internet relay or global chat service.
 
 ## Privacy and network limits

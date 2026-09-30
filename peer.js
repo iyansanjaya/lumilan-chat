@@ -1272,27 +1272,34 @@ export class LumilanPeer extends EventEmitter {
       let delivered = 0;
       let digest = '';
       let lastError;
-      let canceled = false;
-      for (const [index, target] of targets.entries()) {
-        if (signal?.aborted) { canceled = true; break; }
-        if (room && !this.roomFileAllowed(this.id, roomId, message.version)) {
-          lastError = new Error('Keanggotaan Ruang berubah selama transfer file.');
-          break;
-        }
-        const recipient = this.trusted.get(target);
-        if (room && (!recipient?.roomFiles || source.size > peerFileLimit(recipient))) {
-          lastError = new Error(recipient?.roomFiles
-            ? `Perbarui Lumilan Chat pada perangkat penerima untuk mengirim file di atas ${Math.round(peerFileLimit(recipient) / 1024 / 1024)} MB.`
-            : 'Anggota Ruang perlu memperbarui Lumilan Chat untuk menerima file.');
-          onProgress?.((index + 1) * source.size, targets.length * source.size);
-          continue;
-        }
+      const progress = targets.map(() => 0);
+      const reportProgress = (index, bytes) => {
+        progress[index] = bytes;
+        onProgress?.(progress.reduce((sum, value) => sum + value, 0), targets.length * source.size);
+      };
+      let waiting = targets.length;
+      let sending = 0;
+      onStatus?.('waiting');
+      // At most 63 room recipients; each reader holds only one 512 KB chunk.
+      const results = await Promise.allSettled(targets.map(async (target, index) => {
+        const recipientSignal = signal && AbortSignal.any([signal]);
         let offered = false;
+        let accepted = false;
         try {
+          if (signal?.aborted) throw signal.reason || new Error('Pengiriman dibatalkan.');
+          if (room && !this.roomFileAllowed(this.id, roomId, message.version)) throw new Error('Keanggotaan Ruang berubah selama transfer file.');
+          const recipient = this.trusted.get(target);
+          if (room && (!recipient?.roomFiles || source.size > peerFileLimit(recipient))) {
+            throw new Error(recipient?.roomFiles
+              ? `Perbarui Lumilan Chat pada perangkat penerima untuk mengirim file di atas ${Math.round(peerFileLimit(recipient) / 1024 / 1024)} MB.`
+              : 'Anggota Ruang perlu memperbarui Lumilan Chat untuk menerima file.');
+          }
           offered = true;
-          onStatus?.('waiting');
           await this.sendTo(target, { type: 'file-start', message: { id, to: room ? null : target,
-            ...(room ? { roomId, version: message.version } : {}), name: filename, size: source.size } }, { responseTimeout: 300_000, signal });
+            ...(room ? { roomId, version: message.version } : {}), name: filename, size: source.size } }, { responseTimeout: 300_000, signal: recipientSignal });
+          accepted = true;
+          waiting--;
+          sending++;
           const hash = createHash('sha256');
           const handle = await open(temporary, 'r');
           try {
@@ -1303,10 +1310,10 @@ export class LumilanPeer extends EventEmitter {
               const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
               if (!bytesRead) throw new Error('File berubah saat dikirim. Coba lagi.');
               const bytes = buffer.subarray(0, bytesRead);
-              await this.sendTo(target, { type: 'file-chunk', id, offset, bytes: bytes.toString('base64') }, { signal });
+              await this.sendTo(target, { type: 'file-chunk', id, offset, bytes: bytes.toString('base64') }, { signal: recipientSignal });
               hash.update(bytes);
               offset += bytesRead;
-              onProgress?.(index * source.size + offset, targets.length * source.size);
+              reportProgress(index, offset);
             }
           } finally { await handle.close(); }
           if (signal?.aborted) throw signal.reason || new Error('Pengiriman dibatalkan.');
@@ -1317,12 +1324,16 @@ export class LumilanPeer extends EventEmitter {
           delivered++;
         } catch (error) {
           if (offered) await this.sendTo(target, { type: 'file-cancel', id }).catch(() => {});
-          if (!room) throw error;
           lastError = error;
-          if (signal?.aborted) { canceled = true; break; }
+        } finally {
+          if (accepted) sending--;
+          else waiting--;
+          if (room) reportProgress(index, source.size);
+          if (waiting && !sending && !signal?.aborted) onStatus?.('waiting');
         }
-        onProgress?.((index + 1) * source.size, targets.length * source.size);
-      }
+      }));
+      for (const result of results) if (result.status === 'rejected') lastError = result.reason;
+      const canceled = Boolean(signal?.aborted);
       if (!delivered) throw signal?.aborted ? signal.reason || new Error('Pengiriman dibatalkan.') : lastError || new Error('Tidak ada anggota Ruang yang menerima file.');
       await rename(temporary, finalPath);
       this.state.messages.push({ ...message, sha256: digest });

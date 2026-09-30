@@ -4,6 +4,7 @@ const { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } = requir
 const { createServer } = require('node:net');
 const { tmpdir } = require('node:os');
 const { basename, dirname, join, resolve } = require('node:path');
+const sharp = require('sharp');
 
 async function main() {
   const root = resolve(__dirname, '..');
@@ -228,6 +229,7 @@ async function main() {
       document.querySelector('#call-name').textContent = 'Pengguna dengan nama yang cukup panjang';
       document.querySelector('#call-status').textContent = 'Panggilan suara masuk';
       document.querySelector('#call-accept').hidden = false;
+      document.querySelector('#call-dismiss').hidden = false;
       const fixture = document.createElement('div');
       fixture.style.cssText = 'position:fixed;left:8px;bottom:8px;width:304px;z-index:40;background:var(--surface)';
       fixture.innerHTML = '<div class="room-invite-actions"><button>Terima undangan Ruang</button><button>Tolak undangan Ruang</button></div><div class="incoming-transfer-actions"><button>Tolak pengiriman</button><button>Terima pengiriman file</button></div>';
@@ -243,10 +245,39 @@ async function main() {
     assert(transientControls.callLeft >= 0 && transientControls.callRight <= 320 && !transientControls.overflow &&
       transientControls.buttons.every(button => button.height >= 38 && button.font >= 12 && button.left >= 0 && button.right <= 320),
       `Call, invitation, or file controls overflow or are too small: ${JSON.stringify(transientControls)}`);
+    const dragStart = await evaluate(`(() => { const card = document.querySelector('#call-panel').getBoundingClientRect();
+      const handle = document.querySelector('#call-drag').getBoundingClientRect();
+      return { left: card.left, top: card.top, x: Math.floor(handle.left + handle.width / 2), y: Math.floor(handle.top + handle.height / 2) }; })()`);
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dragStart.x, y: dragStart.y });
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: dragStart.x, y: dragStart.y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dragStart.x - 50, y: dragStart.y + 150, button: 'left', buttons: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: dragStart.x - 50, y: dragStart.y + 150, button: 'left', clickCount: 1 });
+    const dragged = await evaluate(`(() => { const rect = document.querySelector('#call-panel').getBoundingClientRect();
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }; })()`);
+    assert(dragged.top > dragStart.top + 100 && dragged.left < dragStart.left && dragged.left >= 8 && dragged.right <= 312 && dragged.bottom <= 692,
+      `Call card did not drag or stay in the viewport: ${JSON.stringify({ dragStart, dragged })}`);
+    await evaluate("document.querySelector('#call-drag').focus()");
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 });
+    const keyboardTop = await evaluate("document.querySelector('#call-panel').getBoundingClientRect().top");
+    assert.equal(keyboardTop, dragged.top - 20, 'Arrow keys did not move the call card');
+    await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 240, deviceScaleFactor: 1, mobile: false });
+    await delay(150);
+    const resized = await evaluate(`(() => { const rect = document.querySelector('#call-panel').getBoundingClientRect();
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, height: innerHeight }; })()`);
+    assert(resized.left >= 8 && resized.top >= 8 && resized.right <= 312 && resized.bottom <= 232,
+      `Dragged call card escaped after resize: ${JSON.stringify(resized)}`);
+    await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 700, deviceScaleFactor: 1, mobile: false });
     const callScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
-    writeFileSync(join(dist, 'ui-audit-call-narrow.png'), Buffer.from(callScreenshot.data, 'base64'));
+    writeFileSync(join(dist, 'ui-audit-call-dragged.png'), Buffer.from(callScreenshot.data, 'base64'));
+    await evaluate("document.documentElement.dataset.theme = 'light'");
+    const lightCallScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
+    writeFileSync(join(dist, 'ui-audit-call-dragged-light.png'), Buffer.from(lightCallScreenshot.data, 'base64'));
+    await evaluate("document.documentElement.dataset.theme = 'dark'");
+    await evaluate("document.querySelector('#call-dismiss').click()");
+    assert(await evaluate("document.querySelector('#call-panel').hidden"), 'Call dismissal stopped working after dragging');
     await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 800, deviceScaleFactor: 1, mobile: false });
-    await evaluate("document.querySelector('#call-panel').hidden = true; document.querySelector('#notes-button').click()");
+    await evaluate("document.querySelector('#notes-button').click()");
     const notesResult = await send('Runtime.evaluate', {
       expression: "(async () => { for (let i = 0; i < 40; i++) await window.lumilan.note('Pesan lama untuk uji posisi ' + i); return true })()",
       awaitPromise: true, returnByValue: true,
@@ -308,8 +339,64 @@ async function main() {
     const bottomDistance = await evaluate("(() => { const list = document.querySelector('#messages'); return list.scrollHeight - list.scrollTop - list.clientHeight })()");
     assert.equal(noteCount, 42, 'Newest message did not render');
     assert(bottomDistance <= 2, `Chat did not follow new messages while already at the bottom: ${bottomDistance}`);
+    const gifPixels = Buffer.alloc(32 * 32 * 2 * 3);
+    gifPixels.fill(255, 0, 32 * 32 * 3);
+    for (let pixel = 32 * 32 * 3; pixel < gifPixels.length; pixel += 3) gifPixels[pixel] = 255;
+    const gifPath = join(profile, 'smoke-animated.gif');
+    writeFileSync(gifPath, await sharp(gifPixels, { raw: { width: 32, height: 64, pageHeight: 32, channels: 3 } })
+      .gif({ delay: [120, 240], loop: 0 }).toBuffer());
+    const dom = await send('DOM.getDocument');
+    const fileInput = await send('DOM.querySelector', { nodeId: dom.root.nodeId, selector: '#file-input' });
+    assert(fileInput.nodeId, 'File input is unavailable');
+    await send('DOM.setFileInputFiles', { nodeId: fileInput.nodeId, files: [gifPath] });
+    await evaluate("document.querySelector('#file-input').dispatchEvent(new Event('change', { bubbles: true }))");
+    let gifPreview;
+    while (Date.now() < timeoutAt) {
+      gifPreview = await evaluate(`(() => { const row = [...document.querySelectorAll('#messages .message')]
+        .find(item => item.textContent.includes('smoke-animated.gif')); const image = row?.querySelector('.image-preview');
+        return image?.complete && image.naturalWidth ? image.src : null; })()`);
+      if (gifPreview) break;
+      await delay(100);
+    }
+    assert.match(gifPreview || '', /^data:image\/webp;base64,/, 'Animated GIF preview did not render');
+    assert.equal((await sharp(Buffer.from(gifPreview.split(',')[1], 'base64')).metadata()).pages, 2);
+    const gifPosition = await evaluate(`(() => { const image = [...document.querySelectorAll('#messages .message')]
+      .find(item => item.textContent.includes('smoke-animated.gif')).querySelector('.image-preview');
+      const bounds = image.getBoundingClientRect();
+      return { left: Math.floor(bounds.left + bounds.width / 2), top: Math.floor(bounds.top + bounds.height / 2) }; })()`);
+    const playbackColors = new Set();
+    for (let frame = 0; frame < 8; frame++) {
+      const screenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
+      const pixel = await sharp(Buffer.from(screenshot.data, 'base64'))
+        .extract({ left: gifPosition.left, top: gifPosition.top, width: 1, height: 1 }).raw().toBuffer();
+      playbackColors.add(pixel.subarray(0, 3).join(','));
+      await delay(90);
+    }
+    assert(playbackColors.size >= 2, `Animated GIF did not move in Chromium: ${JSON.stringify([...playbackColors])}`);
+    const gifDialog = await evaluate(`(() => { const row = [...document.querySelectorAll('#messages .message')]
+      .find(item => item.textContent.includes('smoke-animated.gif')); row.querySelector('.image-preview-button').click();
+      return { open: document.querySelector('#image-dialog').open,
+        samePreview: document.querySelector('#image-dialog-image').src === row.querySelector('.image-preview').src }; })()`);
+    assert(gifDialog.open && gifDialog.samePreview, `Animated GIF dialog failed: ${JSON.stringify(gifDialog)}`);
+    const gifScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
+    writeFileSync(join(dist, 'ui-audit-gif-preview.png'), Buffer.from(gifScreenshot.data, 'base64'));
+    const previewCenter = await evaluate(`(() => { const rect = document.querySelector('#image-dialog-image').getBoundingClientRect();
+      return { x: Math.floor(rect.left + rect.width / 2), y: Math.floor(rect.top + rect.height / 2) }; })()`);
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...previewCenter, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...previewCenter, button: 'left', clickCount: 1 });
+    assert(await evaluate("document.querySelector('#image-dialog').open"), 'Clicking the thumbnail closed its dialog');
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 4, y: 4, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 4, y: 4, button: 'left', clickCount: 1 });
+    assert(await evaluate("!document.querySelector('#image-dialog').open"), 'Clicking the backdrop did not close the thumbnail dialog');
+    await delay(50);
+    assert(await evaluate("!document.querySelector('#image-dialog-image').hasAttribute('src')"), 'Closed thumbnail dialog retained its image');
+    await evaluate(`document.querySelector('.message .image-preview-button').click()`);
+    assert(await evaluate("document.querySelector('#image-dialog').open"), 'Thumbnail dialog could not reopen after backdrop dismissal');
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    assert(await evaluate("!document.querySelector('#image-dialog').open"), 'Escape did not close the thumbnail dialog');
     passed = true;
-    console.log('Packaged UI rendered: welcome, chat, details, settings, room, contact dialog, call, avatar, and older-message reactions without scroll jumps');
+    console.log('Packaged UI rendered: welcome, chat, details, settings, room, contact dialog, call, avatar, animated GIF preview, and older-message reactions without scroll jumps');
   } finally {
     if (!passed) console.error(logs);
     socket?.close();

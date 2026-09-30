@@ -434,6 +434,10 @@ test('file Ruang dikirim hanya ke anggota aktif dengan persetujuan dan dibersihk
     const controller = new AbortController();
     const sendTo = a.sendTo.bind(a);
     a.sendTo = async (target, packet, options) => {
+      if (target === c.id && packet.type === 'file-start') {
+        await new Promise(resolve => controller.signal.addEventListener('abort', resolve, { once: true }));
+        throw controller.signal.reason;
+      }
       const result = await sendTo(target, packet, options);
       if (target === b.id && packet.type === 'file-end') controller.abort(new Error('Pengiriman dibatalkan.'));
       return result;
@@ -461,6 +465,100 @@ test('file Ruang dikirim hanya ke anggota aktif dengan persetujuan dan dibersihk
     assert.equal(existsSync(join(b.filesDir, sent.message.id)), false);
   } finally {
     await Promise.all(peers.map(peer => peer.stop()));
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test('persetujuan dan transfer file Ruang independen untuk setiap penerima', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-room-independent-'));
+  let decision;
+  let offeredId;
+  const peers = ['Andi', 'Budi', 'Citra'].map((name, index) => new LumilanPeer({
+    dataDir: join(root, String(index)), discovery: false, listen: '/ip4/127.0.0.1/tcp/0',
+    acceptFile: async offer => {
+      offeredId = offer.id;
+      return index === 1 && decision ? decision.promise : true;
+    },
+  }));
+  const [a, b, c] = peers;
+  // Mirror the app's cancellation of an unanswered consent dialog.
+  b.on('file-transfer', transfer => { if (transfer.status === 'canceled') decision?.resolve(false); });
+  const sendTo = a.sendTo.bind(a);
+  let operation;
+  let chunkGate;
+  let controller;
+  try {
+    for (const [index, peer] of peers.entries()) { await peer.start(); peer.rename(['Andi', 'Budi', 'Citra'][index]); }
+    await a.connectAddress(b.addresses[0]);
+    await a.connectAddress(c.addresses[0]);
+    const { id } = await a.createRoom('Transfer Independen', [b.id, c.id]);
+    await b.acceptRoom(id);
+    await c.acceptRoom(id);
+    await until(() => b.room(id)?.members.length === 3 && c.room(id)?.members.length === 3);
+    const contents = Buffer.alloc(1024 * 1024 + 17, 0x49);
+    const source = join(root, 'independen.bin');
+    writeFileSync(source, contents);
+    for (const scenario of ['accept', 'decline', 'slow', 'corrupt', 'cancel']) {
+      await t.test(scenario, async () => {
+        offeredId = null;
+        decision = ['accept', 'decline', 'cancel'].includes(scenario) ? Promise.withResolvers() : null;
+        chunkGate = scenario === 'slow' ? Promise.withResolvers() : null;
+        let chunkPaused = false;
+        controller = new AbortController();
+        const progress = [];
+        const statuses = [];
+        a.sendTo = async (target, packet, options) => {
+          if (target === b.id && packet.type === 'file-chunk' && chunkGate) {
+            chunkPaused = true;
+            await chunkGate.promise;
+          }
+          if (target === b.id && packet.type === 'file-end' && scenario === 'corrupt')
+            packet = { ...packet, sha256: '0'.repeat(64) };
+          return sendTo(target, packet, options);
+        };
+        operation = a.sendFilePath(source, `room:${id}`, {
+          signal: controller.signal, onStatus: status => statuses.push(status),
+          onProgress: (done, total) => progress.push([done, total]),
+        });
+        operation.catch(() => {});
+        await until(() => offeredId && c.state.messages.some(message => message.id === offeredId));
+        assert.deepEqual(readFileSync(c.filePath(offeredId).path), contents);
+        if (decision) {
+          await until(() => statuses.at(-1) === 'waiting' && progress.length > 0);
+          assert.equal(b.pendingFileOffers.has(offeredId), true);
+          assert.equal(b.state.messages.some(message => message.id === offeredId), false);
+          if (scenario === 'cancel') controller.abort(new Error('Pengiriman dibatalkan.'));
+          else decision.resolve(scenario === 'accept');
+        }
+        if (chunkGate) {
+          assert.equal(chunkPaused, true);
+          assert.equal(b.incomingFiles.has(offeredId), true);
+          assert.equal(b.state.messages.some(message => message.id === offeredId), false);
+          chunkGate.resolve();
+        }
+        const result = await operation;
+        const accepted = ['accept', 'slow'].includes(scenario);
+        assert.equal(result.delivered, accepted ? 2 : 1);
+        assert.equal(result.failed, accepted ? 0 : 1);
+        assert.equal(result.canceled, scenario === 'cancel');
+        assert.equal(b.state.messages.some(message => message.id === result.message.id), accepted);
+        if (accepted) assert.deepEqual(readFileSync(b.filePath(result.message.id).path), contents);
+        assert.equal(a.state.messages.filter(message => message.id === result.message.id).length, 1);
+        assert.equal(c.state.messages.at(-1).sha256, result.message.sha256);
+        assert.deepEqual(progress.at(-1), [contents.length * 2, contents.length * 2]);
+        for (let index = 1; index < progress.length; index++) assert.ok(progress[index][0] >= progress[index - 1][0]);
+        await until(() => peers.every(peer => peer.pendingFileOffers.size === 0 && peer.incomingFiles.size === 0));
+        for (const peer of peers) assert.equal(readdirSync(peer.filesDir).filter(name => name.endsWith('.part')).length, 0);
+      });
+    }
+  } finally {
+    decision?.resolve(false);
+    chunkGate?.resolve();
+    controller?.abort(new Error('Pengujian selesai.'));
+    await operation?.catch(() => {});
+    a.sendTo = sendTo;
+    await Promise.all(peers.map(peer => peer.stop()));
+    assert.ok(root.startsWith(join(tmpdir(), 'lumilan-room-independent-')));
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

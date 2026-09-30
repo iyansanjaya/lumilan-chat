@@ -28,6 +28,8 @@ Ambil paket terbaru di [Releases](https://github.com/iyansanjaya/lumilan-chat/re
 
 Pada pembukaan pertama, paket terpasang yang mendukung fitur ini mengaktifkan buka saat masuk ke komputer secara bawaan. Anda dapat mematikannya di **Pengaturan → Saat komputer dinyalakan**.
 
+GIF yang dikirim bergerak dalam pratinjau chat lokal setelah file diterima. Unduh lampirannya untuk melihat file asli.
+
 Untuk subnet lokal yang saling memiliki rute tetapi perangkatnya tidak muncul otomatis, buka **Hubungkan perangkat** pada perangkat tujuan, salin kode perangkatnya, lalu tempel pada perangkat lain. Keduanya harus dapat terhubung lewat TCP port **40754**. Kode memuat alamat IPv4 privat, port, dan ID perangkat yang diautentikasi. Aplikasi tidak memakai relay internet atau layanan chat global.
 
 ## Privasi dan batasan jaringan
