@@ -26,6 +26,8 @@ Ambil paket terbaru di [Releases](https://github.com/iyansanjaya/lumilan-chat/re
 2. Isi nama Anda. Semua perangkat lain yang terhubung akan muncul di daftar pesan pribadi.
 3. Pilih orang untuk chat pribadi. Gunakan **Buat Ruang** untuk membuat Ruang Percakapan berundangan atau Ruang Pengumuman. Ruang Pengumuman Anda baru muncul setelah dibuat dan menyiarkan ke semua perangkat aktif yang mengizinkannya. Penerima melihatnya setelah mendapat pesan.
 
+Pada pembukaan pertama, paket terpasang yang mendukung fitur ini mengaktifkan buka saat masuk ke komputer secara bawaan. Anda dapat mematikannya di **Pengaturan → Saat komputer dinyalakan**.
+
 Untuk subnet lokal yang saling memiliki rute tetapi perangkatnya tidak muncul otomatis, buka **Hubungkan perangkat** pada perangkat tujuan, salin kode perangkatnya, lalu tempel pada perangkat lain. Keduanya harus dapat terhubung lewat TCP port **40754**. Kode memuat alamat IPv4 privat, port, dan ID perangkat yang diautentikasi. Aplikasi tidak memakai relay internet atau layanan chat global.
 
 ## Privasi dan batasan jaringan

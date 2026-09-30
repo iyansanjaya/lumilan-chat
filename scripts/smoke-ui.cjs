@@ -245,8 +245,71 @@ async function main() {
       `Call, invitation, or file controls overflow or are too small: ${JSON.stringify(transientControls)}`);
     const callScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
     writeFileSync(join(dist, 'ui-audit-call-narrow.png'), Buffer.from(callScreenshot.data, 'base64'));
+    await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 800, deviceScaleFactor: 1, mobile: false });
+    await evaluate("document.querySelector('#call-panel').hidden = true; document.querySelector('#notes-button').click()");
+    const notesResult = await send('Runtime.evaluate', {
+      expression: "(async () => { for (let i = 0; i < 40; i++) await window.lumilan.note('Pesan lama untuk uji posisi ' + i); return true })()",
+      awaitPromise: true, returnByValue: true,
+    }, 30_000);
+    assert(!notesResult.exceptionDetails && notesResult.result.value, 'Could not create scroll test messages');
+    let noteCount = 0;
+    while (Date.now() < timeoutAt) {
+      noteCount = await evaluate("document.querySelectorAll('#messages .message').length");
+      if (noteCount === 40) break;
+      await delay(100);
+    }
+    assert.equal(noteCount, 40, 'Scroll test messages did not render');
+    const oldPosition = await evaluate(`(() => { const list = document.querySelector('#messages');
+      list.scrollTop = Math.floor((list.scrollHeight - list.clientHeight) / 3);
+      const y = list.getBoundingClientRect().top + 100;
+      const row = [...list.querySelectorAll('.message')].find(item => item.getBoundingClientRect().bottom > y);
+      row.querySelector('.message-select-button').click();
+      document.querySelector('#selection-react').click();
+      return { id: row.id, top: list.scrollTop, rowTop: row.getBoundingClientRect().top,
+        distance: list.scrollHeight - list.scrollTop - list.clientHeight }; })()`);
+    assert(oldPosition.distance > 64, `Test message is too close to the bottom: ${JSON.stringify(oldPosition)}`);
+    await evaluate("document.querySelector('#reaction-picker button').click()");
+    let reacted = false;
+    while (Date.now() < timeoutAt) {
+      reacted = await evaluate(`Boolean(document.querySelector('#${oldPosition.id} .message-reactions button'))`);
+      if (reacted) break;
+      await delay(100);
+    }
+    assert(reacted, 'Reaction did not appear on the older message');
+    const reactionPosition = await evaluate(`(() => { const list = document.querySelector('#messages');
+      return { top: list.scrollTop, rowTop: document.querySelector('#${oldPosition.id}').getBoundingClientRect().top }; })()`);
+    assert(Math.abs(reactionPosition.top - oldPosition.top) <= 2 && Math.abs(reactionPosition.rowTop - oldPosition.rowTop) <= 5,
+      `Reacting to an older message changed the viewport: ${JSON.stringify({ oldPosition, reactionPosition })}`);
+    await evaluate(`document.querySelector('#${oldPosition.id} .message-reactions button').click()`);
+    while (Date.now() < timeoutAt) {
+      reacted = await evaluate(`Boolean(document.querySelector('#${oldPosition.id} .message-reactions button'))`);
+      if (!reacted) break;
+      await delay(100);
+    }
+    assert(!reacted, 'Reaction chip did not toggle off');
+    const afterToggle = await evaluate("document.querySelector('#messages').scrollTop");
+    assert(Math.abs(afterToggle - oldPosition.top) <= 2, `Toggling a reaction chip changed the viewport: ${afterToggle}`);
+    await send('Runtime.evaluate', { expression: "window.lumilan.note('Pesan baru tanpa menggeser pembaca')", awaitPromise: true });
+    while (Date.now() < timeoutAt) {
+      noteCount = await evaluate("document.querySelectorAll('#messages .message').length");
+      if (noteCount === 41) break;
+      await delay(100);
+    }
+    assert.equal(noteCount, 41, 'New message did not render');
+    const afterIncoming = await evaluate("document.querySelector('#messages').scrollTop");
+    assert(Math.abs(afterIncoming - oldPosition.top) <= 2, `A new message moved a reader away from older messages: ${afterIncoming}`);
+    await evaluate("document.querySelector('#messages').scrollTop = document.querySelector('#messages').scrollHeight");
+    await send('Runtime.evaluate', { expression: "window.lumilan.note('Pesan baru saat pembaca di bawah')", awaitPromise: true });
+    while (Date.now() < timeoutAt) {
+      noteCount = await evaluate("document.querySelectorAll('#messages .message').length");
+      if (noteCount === 42) break;
+      await delay(100);
+    }
+    const bottomDistance = await evaluate("(() => { const list = document.querySelector('#messages'); return list.scrollHeight - list.scrollTop - list.clientHeight })()");
+    assert.equal(noteCount, 42, 'Newest message did not render');
+    assert(bottomDistance <= 2, `Chat did not follow new messages while already at the bottom: ${bottomDistance}`);
     passed = true;
-    console.log('Packaged UI rendered: welcome, chat, details, settings, room, contact dialog, call, and avatar processing');
+    console.log('Packaged UI rendered: welcome, chat, details, settings, room, contact dialog, call, avatar, and older-message reactions without scroll jumps');
   } finally {
     if (!passed) console.error(logs);
     socket?.close();

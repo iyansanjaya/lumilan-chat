@@ -26,6 +26,8 @@ Get the latest package from [Releases](https://github.com/iyansanjaya/lumilan-ch
 2. Enter your name. Other connected devices appear in the direct message list.
 3. Select a person for a direct conversation. Use **Create Room** to make an invitation-only Conversation Room or an Announcement Room. Your Announcement Room appears after creation and broadcasts to all active devices that allow announcements. Recipients see it when a message arrives.
 
+On first launch, supported installed builds enable opening Lumilan Chat at computer sign-in by default. You can turn this off in **Settings → When the computer starts**.
+
 For a routed local subnet where devices do not appear automatically, open **Connect a device** on the destination, copy its device code, and paste it on the other device. Both sides must be reachable over TCP port **40754**. A code includes the private IPv4 address, port, and authenticated device ID. The app has no internet relay or global chat service.
 
 ## Privacy and network limits

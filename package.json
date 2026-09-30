@@ -1,6 +1,6 @@
 {
   "name": "lumilan-chat",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Pesan langsung antarperangkat di jaringan lokal",
   "author": "Iyan Sanjaya",
   "private": true,
@@ -24,6 +24,7 @@
     "asarUnpack": ["**/node_modules/sharp/**/*", "**/node_modules/@img/**/*"],
     "files": [
       "main.js",
+      "startup-default.js",
       "updates.js",
       "preload.cjs",
       "peer.js",

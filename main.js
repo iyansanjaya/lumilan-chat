@@ -9,6 +9,7 @@ import { LumilanPeer } from './peer.js';
 import { previewImage } from './preview-image.js';
 import { languageForRegion, languageSettings, locales, translate } from './public/i18n.js';
 import { startUpdates } from './updates.js';
+import { clearPendingDefaultStartup, enableDefaultStartup } from './startup-default.js';
 
 const { autoUpdater } = electronUpdater;
 
@@ -248,6 +249,7 @@ if (instanceLock) app.whenReady().then(async () => {
   });
 
   const dataDir = join(app.getPath('userData'), 'lumilan');
+  enableDefaultStartup(dataDir, app, startupStatus, setStartup);
   mkdirSync(dataDir, { recursive: true });
   settingsPath = join(dataDir, 'notifications.json');
   try { settings = JSON.parse(readFileSync(settingsPath, 'utf8')); }
@@ -437,7 +439,11 @@ if (instanceLock) app.whenReady().then(async () => {
     updateBadge();
     return { language: settings.language, languageMode: settings.languageMode };
   });
-  handler('set-startup', setStartup);
+  handler('set-startup', value => {
+    if (typeof value !== 'boolean') throw new Error('Pengaturan tidak valid.');
+    clearPendingDefaultStartup(dataDir);
+    return setStartup(value);
+  });
   handler('set-notification-settings', value => {
     if (!value || typeof value !== 'object' || !['enabled', 'preview', 'silent', 'background'].every(key => typeof value[key] === 'boolean')) throw new Error('Pengaturan tidak valid.');
     const next = { enabled: value.enabled, preview: value.preview, silent: value.silent, background: value.background, language: settings.language, languageMode: settings.languageMode };

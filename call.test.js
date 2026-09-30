@@ -37,9 +37,35 @@ test('undangan panggilan LAN: persetujuan, penolakan, sibuk, SDP terlarang, dan 
     await b.sendCall({ action: 'answer', id, peerId: a.id, sdp });
     assert.equal(eventsA.at(-1).type, 'answer');
     assert.equal(a.callState().phase, 'connecting');
+    await assert.rejects(c.sendCall({ action: 'offer', id: randomUUID(), peerId: b.id, sdp }), /panggilan lain/);
     await a.sendCall({ action: 'end', id, peerId: b.id });
     assert.equal(b.callState(), null);
     assert.equal(eventsB.at(-1).reason, 'ended');
+
+    let releaseMicrophone;
+    const track = { stopped: false, stop() { this.stopped = true; } };
+    const voiceB = new VoiceCall({
+      bridge: { callMicrophone: async () => true, call: packet => b.sendCall(packet) },
+      audio: { srcObject: null, pause() {} },
+      media: { getUserMedia: () => new Promise(resolve => { releaseMicrophone = () => resolve({ getTracks: () => [track], getAudioTracks: () => [track] }); }) },
+      PeerConnection: class {}, onChange: () => {}, onEnd: () => {},
+    });
+    const competing = randomUUID();
+    const onCompetingCall = signal => { if (signal.id === competing) voiceB.signal(signal); };
+    b.on('call', onCompetingCall);
+    const preparing = voiceB.start(a.id);
+    await new Promise(resolve => setImmediate(resolve));
+    await c.sendCall({ action: 'offer', id: competing, peerId: b.id, sdp });
+    assert.equal(voiceB.state?.phase, 'incoming');
+    assert.equal(voiceB.state?.peerId, c.id);
+    releaseMicrophone();
+    await preparing;
+    assert.equal(track.stopped, true);
+    assert.equal(voiceB.state?.phase, 'incoming');
+    assert.equal(b.callState()?.peerId, c.id);
+    await b.sendCall({ action: 'end', id: competing, peerId: c.id, reason: 'declined' });
+    assert.equal(voiceB.state, null);
+    b.off('call', onCompetingCall);
 
     const declined = randomUUID();
     await a.sendCall({ action: 'offer', id: declined, peerId: b.id, sdp });
