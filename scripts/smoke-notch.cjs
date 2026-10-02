@@ -276,15 +276,50 @@ async function main() {
     assert.equal(await appPage.evaluate("document.querySelectorAll('#reminder-list strong b').length"),0,'Reminder title parsed as HTML');
     await appPage.evaluate(`document.querySelector('[data-reminder-id="${local.id}"] [data-action="edit"]').click();document.getElementById('reminder-title').value='Edited locally';document.getElementById('reminder-form').requestSubmit()`);
     await until(() => appPage.evaluate(`window.lumilan.reminders().then(rs=>rs.find(r=>r.id==='${local.id}')?.title==='Edited locally')`),'edit saved');
+    const recipientState = await appPage.evaluate('window.lumilan.state()');
+    const recipientFixture = { ...recipientState, contacts: [
+      ...Array.from({length:15},(_,i)=>({id:`historical-fixture-${i}`,name:i%2?'Budi':'Andi',reminders:false})),
+      {id:peer.id,name:'Nama sama',reminders:true},{id:third.id,name:'Nama sama',reminders:true},
+      {id:peer.id,name:'Nama sama',reminders:true},
+    ], peers:recipientState.peers.filter(p=>p.id!==third.id) };
+    await browser.evaluate(`smokeMain.webContents.send('lumilan:state',${JSON.stringify(recipientFixture)})`);
+    await appPage.evaluate("document.getElementById('reminder-new').click()");
+    const recipientOptions = await appPage.evaluate("[...document.getElementById('reminder-recipient').options].map(o=>({id:o.value,label:o.textContent,disabled:o.disabled}))");
+    assert.equal(recipientOptions.length,3,'Historical incompatible contacts cluttered reminder recipients');
+    assert.deepEqual(new Set(recipientOptions.map(o=>o.id)),new Set([appState.me.id,peer.id,third.id]),'Same-name devices were merged or offline capable contact was lost');
+    assert.equal(new Set(recipientOptions.map(o=>o.label)).size,3,'Same-name device choices were ambiguous');
+    assert(recipientOptions.every(o=>!o.disabled),'Unsupported recipients were left as disabled options');
+    await appPage.evaluate(`document.getElementById('reminder-recipient').value=${JSON.stringify(third.id)}`);
+    await browser.evaluate(`smokeMain.webContents.send('lumilan:state',${JSON.stringify(recipientFixture)})`);
+    assert.equal(await appPage.evaluate("document.getElementById('reminder-recipient').value"),third.id,'Refresh lost selected offline recipient');
+    const unsupportedFixture={...recipientFixture,contacts:recipientFixture.contacts.map(p=>p.id===third.id?{...p,reminders:false}:p)};
+    await browser.evaluate(`smokeMain.webContents.send('lumilan:state',${JSON.stringify(unsupportedFixture)})`);
+    await until(()=>appPage.evaluate("document.getElementById('reminder-recipient').selectedOptions[0]?.disabled"),'selected recipient loses capability');
+    assert.equal(await appPage.evaluate("document.getElementById('reminder-recipient').value"),third.id,'Recipient capability change silently switched target to self');
+    const beforeRejectedRecipient=await appPage.evaluate('window.lumilan.reminders().then(rs=>rs.length)');
+    await appPage.evaluate("document.getElementById('reminder-title').value='Unsupported recipient must not save';document.getElementById('reminder-form').requestSubmit()");
+    await until(()=>appPage.evaluate("!document.getElementById('reminder-error').hidden"),'incompatible selected recipient explains failure');
+    assert.equal(await appPage.evaluate('window.lumilan.reminders().then(rs=>rs.length)'),beforeRejectedRecipient,'Invalid recipient created a different reminder');
+    await browser.evaluate(`smokeMain.webContents.send('lumilan:state',${JSON.stringify(recipientState)})`);
+    const { translate } = await import('../public/i18n.js');
     for(const [theme,language] of [['light','en'],['dark','es'],['light','ja'],['dark','id']]){
       await appPage.send('Emulation.setDeviceMetricsOverride',{width:360,height:760,deviceScaleFactor:1,mobile:false});
-      await appPage.evaluate(`document.documentElement.dataset.theme='${theme}';document.getElementById('language-select').value='${language}';document.getElementById('language-select').dispatchEvent(new Event('change'));document.getElementById('reminder-new').click()`);
-      const layout=await appPage.evaluate("(()=>{const d=document.getElementById('reminders-dialog'),s=document.getElementById('reminder-recipient'),c=getComputedStyle(s);return {overflow:d.scrollWidth>d.clientWidth,selectOverflow:s.getBoundingClientRect().right>d.getBoundingClientRect().right,appearance:c.appearance,padding:parseFloat(c.paddingRight)}})()");
+      await appPage.evaluate(`document.getElementById('reminder-new').click();document.getElementById('reminder-title').value='Keep this draft';document.documentElement.dataset.theme='${theme}';document.getElementById('language-select').value='${language}';document.getElementById('language-select').dispatchEvent(new Event('change'))`);
+      await until(()=>appPage.evaluate(`document.documentElement.lang==='${language}'`),`reminder ${language} language ready`);
+      assert.equal(await appPage.evaluate("document.getElementById('reminder-form-title').textContent"),translate(language,'Buat pengingat'),'Reminder form retained previous language');
+      assert.equal(await appPage.evaluate("document.getElementById('reminder-title').value"),'Keep this draft','Language change erased reminder draft');
+      await appPage.evaluate("document.getElementById('reminder-new').click()");
+      const layout=await appPage.evaluate("(()=>{const d=document.getElementById('reminders-dialog'),s=document.getElementById('reminder-recipient'),c=getComputedStyle(s),f=document.getElementById('reminder-filters');return {overflow:d.scrollWidth>d.clientWidth,selectOverflow:s.getBoundingClientRect().right>d.getBoundingClientRect().right,appearance:c.appearance,padding:parseFloat(c.paddingRight),filterBorder:parseFloat(getComputedStyle(f).borderBottomWidth),tabs:[...f.children].map(b=>{const r=b.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(b);const text=range.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,textLeft:text.left,textRight:text.right,height:r.height}})}})()");
       assert(!layout.overflow&&!layout.selectOverflow&&layout.appearance==='none'&&layout.padding>=40,`Reminder form layout ${theme}/${language}: ${JSON.stringify(layout)}`);
+      assert.equal(layout.filterBorder,0,'Reminder filters inherited sidebar separator');
+      for(const tab of layout.tabs) assert(tab.height>=36&&tab.textLeft>=tab.left+6&&tab.textRight<=tab.right-6,`Reminder label does not fit ${theme}/${language}: ${JSON.stringify(tab)}`);
+      for(let i=0;i<layout.tabs.length;i++)for(let j=i+1;j<layout.tabs.length;j++){const a=layout.tabs[i],b=layout.tabs[j];assert(!(a.left<b.right&&b.left<a.right&&a.top<b.bottom&&b.top<a.bottom),'Reminder filter buttons overlap');}
       const image=await appPage.send('Page.captureScreenshot',{format:'png'});writeFileSync(join(dist,`ui-reminders-${theme}-${language}.png`),Buffer.from(image.data,'base64'));
       await appPage.evaluate("document.getElementById('reminder-form-cancel').click()");
     }
     await appPage.send('Emulation.clearDeviceMetricsOverride');
+    await appPage.evaluate("document.getElementById('reminder-new').click()");
+    const desktopReminder=await appPage.send('Page.captureScreenshot',{format:'png'});writeFileSync(join(dist,'ui-reminders-desktop.png'),Buffer.from(desktopReminder.data,'base64'));
     await appPage.evaluate("document.getElementById('reminders-close').click()");
     const note=await appPage.evaluate("window.lumilan.note('Reminder source').then(r=>r.message)");
     const sourceReminder=await appPage.evaluate(`window.lumilan.createReminder({title:'Source reminder',dueAt:Date.now()+3600000,sourceThread:'notes',sourceId:${JSON.stringify(note.id)}}).then(rs=>rs.find(r=>r.title==='Source reminder'))`);
