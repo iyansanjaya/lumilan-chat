@@ -6,17 +6,20 @@ import { LumiNotch, notchBounds } from './notch.js';
 function fixture() {
   class Window extends EventEmitter {
     constructor(options) {
-      super(); this.options = options; this.visible = false; this.dead = false;
+      super(); this.options = options; this.visible = false; this.dead = false; this.focusable = options.focusable;
       this.webContents = new EventEmitter();
       Object.assign(this.webContents, { mainFrame: { url: 'lumilan://app/notch.html' }, getURL: () => 'lumilan://app/notch.html',
         send: (_channel, value) => { this.last = value; }, setWindowOpenHandler: fn => { this.open = fn; } });
     }
     isDestroyed() { return this.dead; }
-    setAlwaysOnTop() {} setFocusable(value) { this.focusable = value; }
+    setAlwaysOnTop() {} setFocusable(value) {
+      assert.notEqual(process.platform, 'linux', 'Electron setFocusable is only available on Windows/macOS');
+      this.focusable = value;
+    }
     setIgnoreMouseEvents(value) { this.ignored = value; }
     setBounds(value) { this.bounds = value; } isVisible() { return this.visible; }
     showInactive() { this.visible = true; } hide() { this.visible = false; this.focused = false; this.emit('blur'); } destroy() { this.dead = true; }
-    focus() { this.focused = true; } isFocused() { return this.focused === true; } loadURL() { return Promise.resolve(); }
+    focus() { if (this.focusable) this.focused = true; } isFocused() { return this.focused === true; } loadURL() { return Promise.resolve(); }
   }
   const display = { id: 1, workArea: { x: 0, y: 0, width: 1920, height: 1080 } };
   const screen = new EventEmitter(); Object.assign(screen, { getPrimaryDisplay: () => display, getAllDisplays: () => [display], getDisplayNearestPoint: () => display, getCursorScreenPoint: () => ({ x: 500, y: 0 }) });
@@ -85,7 +88,7 @@ test('Lumi redacts queued content immediately and obeys DND, mute, visibility an
     assert(!JSON.stringify(notch.snapshot()).includes('secret'));
     settings.preview = true; assert(notch.snapshot().selected.body.includes('secret'));
     settings.preview = false; assert(!JSON.stringify(notch.snapshot()).includes('Alice'));
-    await notch.action({ type: 'expand' }); assert.equal(notch.win.focusable, true);
+    await notch.action({ type: 'expand' }); assert.equal(notch.win.focusable, process.platform !== 'linux');
     main.visible = true; assert.equal(notch.sync(), false); assert.equal(notch.win.visible, false);
     assert.equal(notch.win.focusable, false, 'A later automatic notification could still take native focus');
     main.visible = false; peer.state.status = 'dnd'; assert.equal(notch.sync(), false);
@@ -188,7 +191,7 @@ test('Lumi automatically hides manual and automatic previews without deleting pe
     notch.setMode('expanded'); // Also used by the tray's Show Lumi action.
     notch.pointerInside = true; // A stationary cursor must not keep the panel open indefinitely.
     t.mock.timers.tick(4000); assert.equal(notch.mode, 'hidden');
-    await notch.action({ type: 'expand' }); assert.equal(notch.win.isFocused(), true);
+    await notch.action({ type: 'expand' }); assert.equal(notch.win.isFocused(), process.platform !== 'linux');
     t.mock.timers.tick(4000); assert.equal(notch.mode, 'hidden');
     assert.equal(notch.win.isFocused(), false, 'The closed preview kept keyboard focus');
     assert.equal(notch.win.ignored, process.platform !== 'linux', 'The hidden transparent area still intercepts mouse clicks');
@@ -248,4 +251,43 @@ test('Lumi accepts bounded content heights only for the current expanded panel a
     assert.equal(await notch.action({ type: 'resize', height: 360, revision }), false);
     assert.equal(notch.win.bounds.height, 5, 'Stale layout expanded the hidden wake strip');
   } finally { notch.dispose(); }
+});
+
+test('Lumi focus respects Windows/macOS, X11 and Wayland capabilities', async t => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  const sessionType = process.env.XDG_SESSION_TYPE;
+  for (const [platform, session] of [['win32', ''], ['darwin', ''], ['linux', 'x11'], ['linux', 'wayland']]) {
+    await t.test(`${platform} ${session}`.trim(), async () => {
+      let notch;
+      try {
+        Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+        process.env.XDG_SESSION_TYPE = session;
+        const context = fixture(); notch = context.notch;
+        assert.equal(notch.supported, session !== 'wayland');
+        assert.equal(notch.message({}, 'alice', 'Alice', 'Test'), session !== 'wayland');
+        if (session === 'wayland') {
+          assert.equal(notch.win, undefined, 'Wayland should use system notifications without allocating an overlay');
+          assert.equal(notch.mode, 'hidden');
+          assert.equal(notch.timers.size, 0);
+          assert.equal(notch.file({ id: 'f1', thread: 'alice', name: 'Test.zip', size: 100 }), false);
+          return;
+        }
+        assert.equal(notch.win.options.focusable, false);
+        assert.equal(notch.win.isFocused(), false, 'Automatic notifications must not steal focus');
+        await notch.action({ type: 'expand' });
+        assert.equal(notch.win.focusable, platform !== 'linux');
+        assert.equal(notch.win.isFocused(), platform !== 'linux');
+        assert.equal(notch.win.ignored, false, 'Manual expansion must allow pointer input');
+        context.main.visible = true; notch.sync();
+        assert.equal(notch.win.visible, false);
+        assert.equal(notch.win.focusable, false);
+        assert.equal(notch.win.isFocused(), false);
+      } finally {
+        notch?.dispose();
+        Object.defineProperty(process, 'platform', platformDescriptor);
+        if (sessionType === undefined) delete process.env.XDG_SESSION_TYPE;
+        else process.env.XDG_SESSION_TYPE = sessionType;
+      }
+    });
+  }
 });
