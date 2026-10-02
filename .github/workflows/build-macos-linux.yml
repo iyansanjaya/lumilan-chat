@@ -34,8 +34,11 @@ jobs:
           - os: ubuntu-24.04
             platform: linux
             arch: x64
-            files: dist/*.AppImage
+            files: |
+              dist/*.AppImage
+              dist/latest-linux.yml
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - name: Verify private source access
         shell: bash
@@ -67,9 +70,14 @@ jobs:
         run: test "$(node -p process.arch)" = "${{ matrix.arch }}"
       - run: bun ci
       - run: bun run test
-      - name: Install Linux build dependency
+      - name: Install Linux build and native smoke dependencies
         if: matrix.platform == 'linux'
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libopenjp2-tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libopenjp2-tools dbus-x11 libglib2.0-bin python3-dbus python3-gi xvfb x11-utils openbox trayer weston libgbm1 libnss3 libgtk-3-0 libasound2t64
+          # Ubuntu's AppArmor policy otherwise blocks Chromium's user-namespace sandbox.
+          # Keep Electron sandboxing enabled on this disposable runner.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Build unsigned package
         if: matrix.platform != 'macos' || !inputs.sign_macos
         run: bun run dist --${{ matrix.arch }}
@@ -105,6 +113,7 @@ jobs:
             compgen -G 'dist/*.zip'
           else
             compgen -G 'dist/*.AppImage'
+            test -s dist/latest-linux.yml
           fi
       - name: Verify macOS package architecture
         if: matrix.platform == 'macos'
@@ -143,6 +152,28 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "${apps[0]}"
           spctl --assess --type exec --verbose=2 "${apps[0]}"
           xcrun stapler validate "${apps[0]}"
+          codesign -d --entitlements :- "${apps[0]}" 2>/dev/null > "$RUNNER_TEMP/lumilan-entitlements.plist"
+          python3 -c 'import plistlib,sys; assert plistlib.load(open(sys.argv[1],"rb")).get("com.apple.security.device.audio-input") is True' "$RUNNER_TEMP/lumilan-entitlements.plist"
+      - name: Smoke packaged macOS UI and Lumi
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun run smoke:ui
+          for attempt in 1 2 3; do bun run smoke:notch; done
+      - name: Smoke packaged Linux X11 and native Wayland fallback
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          bash scripts/smoke-linux.sh x11
+          bash scripts/smoke-linux.sh wayland
+      - name: Upload native smoke screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lumilan-smoke-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/ui-*.png
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v7
         with:
           name: lumilan-chat-${{ matrix.platform }}-${{ matrix.arch }}

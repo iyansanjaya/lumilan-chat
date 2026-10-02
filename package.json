@@ -26,6 +26,7 @@
     "files": [
       "main.js",
       "notch.js",
+      "linux-screen-lock.js",
       "notch-preload.cjs",
       "startup-default.js",
       "updates.js",
@@ -55,6 +56,8 @@
       "signExecutable": false
     },
     "mac": {
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "target": [
         "dmg",
         "zip"

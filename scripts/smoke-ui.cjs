@@ -32,7 +32,8 @@ async function main() {
 
   const tempRoot = realpathSync(tmpdir());
   const profile = mkdtempSync(join(tempRoot, 'lumilan-ui-smoke-'));
-  const child = spawn(executable, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--lumilan-ui-smoke'], {
+  const child = spawn(executable, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--lumilan-ui-smoke',
+    ...(platform === 'linux' ? [`--ozone-platform=${process.env.XDG_SESSION_TYPE === 'wayland' ? 'wayland' : 'x11'}`] : [])], {
     cwd: root,
     env: { ...process.env, APPDATA: profile, LOCALAPPDATA: profile, ELECTRON_ENABLE_LOGGING: '1' },
     windowsHide: true,

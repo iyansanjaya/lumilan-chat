@@ -11,6 +11,7 @@ import { languageForRegion, languageSettings, locales, translate } from './publi
 import { startUpdates } from './updates.js';
 import { clearPendingDefaultStartup, enableDefaultStartup } from './startup-default.js';
 import { LumiNotch } from './notch.js';
+import { LinuxScreenLock } from './linux-screen-lock.js';
 
 const { autoUpdater } = electronUpdater;
 
@@ -31,6 +32,7 @@ if (!instanceLock) app.quit();
 else app.on('second-instance', () => reveal());
 
 let window;
+let mainPresented = false;
 let peer;
 let tray;
 let quitting = false;
@@ -49,9 +51,11 @@ let notificationError = '';
 let callNotification;
 let refreshingNetwork = false;
 let notch;
+let linuxScreenLock;
 let positionSaveTimer;
 const reminderBlocks = new Set();
 const deferredReminders = new Map();
+const deferredMessages = new Map();
 const reminderNotifications = new Map();
 const tr = (source, values) => translate(settings?.language || 'id', source, values);
 
@@ -180,7 +184,7 @@ function notifyReminder(event) {
 }
 
 function readingWindow() {
-  return window && !window.isDestroyed() && window.isVisible() && !window.isMinimized() && window.isFocused();
+  return !reminderBlocks.size && window && !window.isDestroyed() && window.isVisible() && !window.isMinimized() && window.isFocused();
 }
 
 function updateBadge() {
@@ -198,6 +202,11 @@ function notify(message) {
   }
   if (peer.state.mutedThreads.includes(thread)) return;
   if (!settings.enabled || peer.state.status === 'dnd') return;
+  if (reminderBlocks.size) {
+    if (deferredMessages.size >= 64 && !deferredMessages.has(thread)) deferredMessages.delete(deferredMessages.keys().next().value);
+    deferredMessages.set(thread, message.id);
+    return;
+  }
   const key = thread;
   const mentioned = Boolean(message.roomId && message.mentions?.some(item => item.id === peer.id));
   const name = peer.trusted.get(message.from)?.name || tr('Teman');
@@ -237,6 +246,7 @@ function notify(message) {
 }
 
 async function testNotification() {
+  if (reminderBlocks.size) return { shown: false, error: 'Notifikasi ditunda selama layar terkunci atau perangkat tidur.' };
   if (!Notification.isSupported()) return { shown: false, error: 'Notifikasi desktop tidak tersedia pada sistem ini.' };
   if (peer.state.status === 'dnd') return { shown: false, error: 'Status Jangan ganggu sedang aktif.' };
   return new Promise(resolve => {
@@ -315,6 +325,9 @@ if (instanceLock) app.whenReady().then(async () => {
   for (const [event, reason] of [['lock-screen', 'locked'], ['suspend', 'suspended']]) powerMonitor.on(event, () => {
     reminderBlocks.add(reason);
     for (const entry of reminderNotifications.values()) entry.notification.close();
+    for (const entry of activeNotifications.values()) entry.notification.close();
+    for (const entry of pendingFileOffers.values()) entry.notification?.close();
+    callNotification?.close();
   });
   for (const [event, reason] of [['unlock-screen', 'locked'], ['resume', 'suspended']]) powerMonitor.on(event, () => {
     reminderBlocks.delete(reason);
@@ -322,6 +335,11 @@ if (instanceLock) app.whenReady().then(async () => {
     setImmediate(() => {
       if (reminderBlocks.size || !peer || quitting) return;
       const deferred = new Map(deferredReminders); deferredReminders.clear();
+      const messages = new Map(deferredMessages); deferredMessages.clear();
+      for (const [thread, id] of messages) {
+        const message = peer.state.messages.find(m => m.id === id);
+        if (message && peer.state.unread[thread]) notify(message);
+      }
       try { peer.reminders.tick(); } catch (error) { console.warn('Pengingat gagal disimpan:', error); }
       for (const type of ['request', 'due']) {
         const items = peer.state.reminders.filter(r => deferred.get(r.id) === type &&
@@ -368,7 +386,7 @@ if (instanceLock) app.whenReady().then(async () => {
       pendingFileOffers.set(id, entry);
       window.webContents.send('lumilan:file-offer', offer);
       const handled = notch?.file(offer);
-      const quiet = peer?.state.status === 'dnd' || peer?.state.mutedThreads.includes(offer.thread);
+      const quiet = reminderBlocks.size > 0 || peer?.state.status === 'dnd' || peer?.state.mutedThreads.includes(offer.thread);
       if (!handled && !quiet && settings.enabled && !Notification.isSupported() && !window.isVisible()) window.showInactive();
       if (!handled && !quiet && settings.enabled && Notification.isSupported()) {
         try {
@@ -400,7 +418,7 @@ if (instanceLock) app.whenReady().then(async () => {
     if (window && !window.isDestroyed()) window.webContents.send('lumilan:call', signal);
     if (signal.type !== 'offer') return;
     if (notch?.eligible() && notch.ready) return;
-    const quiet = peer.state.status === 'dnd' || peer.state.mutedThreads.includes(signal.peerId);
+    const quiet = reminderBlocks.size > 0 || peer.state.status === 'dnd' || peer.state.mutedThreads.includes(signal.peerId);
     if (!quiet && settings.enabled && !Notification.isSupported() && !window.isVisible()) window.showInactive();
     if (!quiet && settings.enabled && Notification.isSupported()) {
       try {
@@ -533,7 +551,9 @@ if (instanceLock) app.whenReady().then(async () => {
     if (openingThread === thread || thread === null) openingThread = undefined;
     if (readingWindow() && thread !== null && openingThread === undefined) { peer.markRead(thread); dismiss(thread); }
   });
-  handler('notification-settings', () => ({ ...settings, notchSupported: notch?.supported === true, supported: Notification.isSupported(), error: notificationError, tray: Boolean(tray), version: app.getVersion(), platform: process.platform }));
+  handler('notification-settings', () => ({ ...settings, notchSupported: notch?.supported === true, supported: Notification.isSupported(),
+    error: process.platform === 'linux' && !linuxScreenLock?.supported ? 'Deteksi layar terkunci tidak tersedia. Notifikasi ditunda; periksa gdbus dan layanan ScreenSaver desktop.' : notificationError,
+    tray: Boolean(tray), version: app.getVersion(), platform: process.platform }));
   handler('startup-settings', startupStatus);
   handler('set-language', value => {
     if (value !== 'auto' && !Object.hasOwn(locales, value)) throw new Error('Bahasa tidak didukung.');
@@ -585,7 +605,7 @@ if (instanceLock) app.whenReady().then(async () => {
     },
   });
   notch = new LumiNotch({ BrowserWindow, ipcMain, screen, powerMonitor, notchSession, root: here,
-    getSettings: () => settings, getPeer: () => peer, getMain: () => window, reveal, decideFile,
+    getSettings: () => settings, getPeer: () => peer, getMain: () => mainPresented ? window : undefined, reveal, decideFile,
     acceptCall: id => window.webContents.send('lumilan:notch-accept-call', id),
     savePosition: position => {
       settings.notchPosition = position;
@@ -595,6 +615,7 @@ if (instanceLock) app.whenReady().then(async () => {
     }, onFailure: updateTrayMenu,
   });
   // Create the companion only when the main window first moves into the background.
+  if (process.platform === 'linux') linuxScreenLock = new LinuxScreenLock(powerMonitor);
   for (const event of ['hide', 'show', 'minimize', 'restore', 'enter-full-screen', 'leave-full-screen']) window.on(event, () => notch.sync());
   if (process.platform !== 'darwin') window.removeMenu();
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -623,7 +644,7 @@ if (instanceLock) app.whenReady().then(async () => {
   window.on('close', event => {
     if (!quitting && settings.background && tray) { event.preventDefault(); window.hide(); }
   });
-  window.once('ready-to-show', () => window.show());
+  window.once('ready-to-show', () => { mainPresented = true; window.show(); });
   checkUpdates = startUpdates({
     app, updater: autoUpdater, dialog,
     getWindow: () => { reveal(); return window; },
@@ -642,6 +663,7 @@ app.on('before-quit', () => {
   quitting = true; clearTimeout(positionSaveTimer);
   if (settingsPath && settings) { try { persistSettings(); } catch (error) { console.warn('Pengaturan tidak dapat disimpan:', error); } }
   notch?.dispose();
+  linuxScreenLock?.dispose();
   for (const entry of pendingFileOffers.values()) entry.decide(false); peer?.stop().catch(() => {});
 });
 app.on('window-all-closed', () => app.quit());

@@ -53,7 +53,7 @@ export class LumiNotch {
   eligible() {
     const s = this.getSettings(), main = this.getMain();
     return this.supported && s.notch !== false && s.enabled && !this.locked && Date.now() >= this.pausedUntil &&
-      this.getPeer()?.state.status !== 'dnd' && main && !main.isDestroyed() && (!main.isVisible() || main.isMinimized()) && !main.isFullScreen();
+      this.getPeer()?.state.status !== 'dnd' && main && !main.isDestroyed() && (!main.isVisible() || main.isMinimized());
   }
 
   later(callback, ms) {
@@ -78,7 +78,10 @@ export class LumiNotch {
       ...notchBounds(this.screen.getPrimaryDisplay(), 'hidden'), show: false, frame: false, transparent: true,
       minWidth: 1, minHeight: 1,
       backgroundColor: '#00000000', resizable: false, movable: false, minimizable: false, maximizable: false,
-      fullscreenable: false, skipTaskbar: true, focusable: false, hasShadow: false,
+      // X11 cannot change focusable later; showInactive preserves automatic focus,
+      // while an explicit expansion must still accept keyboard input.
+      fullscreenable: false, skipTaskbar: true, focusable: process.platform === 'linux', hasShadow: false,
+      ...(process.platform === 'darwin' ? { type: 'panel' } : {}),
       title: 'Lumi · Lumilan Chat',
       webPreferences: { preload: join(this.root, 'notch-preload.cjs'), session: this.notchSession, sandbox: true, contextIsolation: true,
         nodeIntegration: false, webSecurity: true, backgroundThrottling: true, autoplayPolicy: 'no-user-gesture-required' },

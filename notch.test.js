@@ -24,7 +24,7 @@ function fixture() {
   const display = { id: 1, workArea: { x: 0, y: 0, width: 1920, height: 1080 } };
   const screen = new EventEmitter(); Object.assign(screen, { getPrimaryDisplay: () => display, getAllDisplays: () => [display], getDisplayNearestPoint: () => display, getCursorScreenPoint: () => ({ x: 500, y: 0 }) });
   const ipcMain = new EventEmitter(); Object.assign(ipcMain, { handle: (name, fn) => { ipcMain[name] = fn; }, removeHandler: name => { delete ipcMain[name]; } });
-  const main = { visible: false, isDestroyed: () => false, isVisible: () => main.visible, isMinimized: () => false, isFullScreen: () => false };
+  const main = { visible: false, minimized: false, fullScreen: false, isDestroyed: () => false, isVisible: () => main.visible, isMinimized: () => main.minimized, isFullScreen: () => main.fullScreen };
   const settings = { notch: true, enabled: true, preview: false, silent: true, language: 'id' };
   const peer = { state: { status: 'active', mutedThreads: [] }, trusted: new Map([['alice', { name: 'Alice' }]]), sendCall: async () => { peer.activeCall = null; } };
   const decisions = [], opens = [], accepts = [], pending = new Set(['f1']);
@@ -88,9 +88,10 @@ test('Lumi redacts queued content immediately and obeys DND, mute, visibility an
     assert(!JSON.stringify(notch.snapshot()).includes('secret'));
     settings.preview = true; assert(notch.snapshot().selected.body.includes('secret'));
     settings.preview = false; assert(!JSON.stringify(notch.snapshot()).includes('Alice'));
-    await notch.action({ type: 'expand' }); assert.equal(notch.win.focusable, process.platform !== 'linux');
+    await notch.action({ type: 'expand' }); assert.equal(notch.win.focusable, true);
     main.visible = true; assert.equal(notch.sync(), false); assert.equal(notch.win.visible, false);
-    assert.equal(notch.win.focusable, false, 'A later automatic notification could still take native focus');
+    assert.equal(notch.win.focusable, process.platform === 'linux');
+    assert.equal(notch.win.isFocused(), false, 'A later automatic notification could still take native focus');
     main.visible = false; peer.state.status = 'dnd'; assert.equal(notch.sync(), false);
     peer.state.status = 'active'; settings.enabled = false; assert.equal(notch.sync(), false);
     settings.enabled = true; settings.notch = false; assert.equal(notch.sync(), false);
@@ -191,7 +192,7 @@ test('Lumi automatically hides manual and automatic previews without deleting pe
     notch.setMode('expanded'); // Also used by the tray's Show Lumi action.
     notch.pointerInside = true; // A stationary cursor must not keep the panel open indefinitely.
     t.mock.timers.tick(4000); assert.equal(notch.mode, 'hidden');
-    await notch.action({ type: 'expand' }); assert.equal(notch.win.isFocused(), process.platform !== 'linux');
+    await notch.action({ type: 'expand' }); assert.equal(notch.win.isFocused(), true);
     t.mock.timers.tick(4000); assert.equal(notch.mode, 'hidden');
     assert.equal(notch.win.isFocused(), false, 'The closed preview kept keyboard focus');
     assert.equal(notch.win.ignored, process.platform !== 'linux', 'The hidden transparent area still intercepts mouse clicks');
@@ -272,16 +273,24 @@ test('Lumi focus respects Windows/macOS, X11 and Wayland capabilities', async t 
           assert.equal(notch.file({ id: 'f1', thread: 'alice', name: 'Test.zip', size: 100 }), false);
           return;
         }
-        assert.equal(notch.win.options.focusable, false);
+        assert.equal(notch.win.options.focusable, platform === 'linux');
+        assert.equal(notch.win.options.type, platform === 'darwin' ? 'panel' : undefined, 'macOS needs a native panel to follow Spaces and fullscreen apps');
         assert.equal(notch.win.isFocused(), false, 'Automatic notifications must not steal focus');
         await notch.action({ type: 'expand' });
-        assert.equal(notch.win.focusable, platform !== 'linux');
-        assert.equal(notch.win.isFocused(), platform !== 'linux');
+        assert.equal(notch.win.focusable, true);
+        assert.equal(notch.win.isFocused(), true);
         assert.equal(notch.win.ignored, false, 'Manual expansion must allow pointer input');
         context.main.visible = true; notch.sync();
         assert.equal(notch.win.visible, false);
-        assert.equal(notch.win.focusable, false);
+        assert.equal(notch.win.focusable, platform === 'linux');
         assert.equal(notch.win.isFocused(), false);
+        context.main.fullScreen = true;
+        assert.equal(notch.message({}, 'alice', 'Alice', 'Visible fullscreen chat'), false);
+        context.main.visible = false;
+        assert.equal(notch.message({}, 'alice', 'Alice', 'Hidden fullscreen chat'), true, 'A hidden fullscreen flag must not suppress background notifications');
+        context.main.visible = true; context.main.minimized = true;
+        assert.equal(notch.message({}, 'alice', 'Alice', 'Minimized fullscreen chat'), true);
+        assert.equal(notch.win.isFocused(), false, 'Background notifications must keep the panel inactive');
       } finally {
         notch?.dispose();
         Object.defineProperty(process, 'platform', platformDescriptor);

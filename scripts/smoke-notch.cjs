@@ -1,6 +1,7 @@
 // Real packaged Electron UI + a real encrypted LAN peer. Isolated profiles only, no production test IPC.
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } = require('node:fs');
 const { createServer } = require('node:net');
 const { tmpdir } = require('node:os');
@@ -8,6 +9,14 @@ const { join, resolve, dirname, basename } = require('node:path');
 const { randomUUID } = require('node:crypto');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const desktopCall = async (name, path, method, ...args) => (await promisify(execFile)('gdbus',
+  ['call', '--session', '--dest', name, '--object-path', path, '--method', method, ...args], { timeout: 5000, maxBuffer: 65536 })).stdout;
+const setLocked = async (browser, locked) => {
+  if (process.platform === 'linux' && process.env.LUMILAN_DESKTOP_FIXTURE === '1') {
+    await desktopCall('org.gnome.ScreenSaver', '/org/gnome/ScreenSaver', 'org.gnome.ScreenSaver.SetActive', String(locked));
+    await until(() => browser.evaluate(`smokeLocked===${locked}`), 'native D-Bus lock event');
+  } else await browser.evaluate(`smokeElectron.powerMonitor.emit('${locked ? 'lock' : 'unlock'}-screen')`);
+};
 async function until(check, label, ms = 12000) {
   const end = Date.now() + ms;
   while (Date.now() < end) { const value = await check(); if (value) return value; await delay(100); }
@@ -50,7 +59,8 @@ async function main() {
   const inspectorServer = createServer(); inspectorServer.listen(0, '127.0.0.1');
   const inspectorPort = await new Promise(resolve => inspectorServer.once('listening', () => resolve(inspectorServer.address().port)));
   await new Promise(resolve => inspectorServer.close(resolve));
-  const child = spawn(executable, [`--remote-debugging-port=${port}`, `--inspect=127.0.0.1:${inspectorPort}`, `--user-data-dir=${profile}`, '--lumilan-ui-smoke', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'], {
+  const child = spawn(executable, [`--remote-debugging-port=${port}`, `--inspect=127.0.0.1:${inspectorPort}`, `--user-data-dir=${profile}`, '--lumilan-ui-smoke', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream',
+    ...(process.platform === 'linux' ? [`--ozone-platform=${process.env.XDG_SESSION_TYPE === 'wayland' ? 'wayland' : 'x11'}`] : [])], {
     cwd: root, windowsHide: true, env: { ...process.env, APPDATA: profile, LOCALAPPDATA: profile, ELECTRON_ENABLE_LOGGING: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let logs = '', launchError, peer, third, appPage, notchPage, browser; const failures = [];
@@ -69,6 +79,14 @@ async function main() {
     const inspectPages = await (await fetch(`http://127.0.0.1:${inspectorPort}/json/list`)).json();
     browser = await connect(inspectPages[0].webSocketDebuggerUrl, failures, false);
     await browser.evaluate(`globalThis.smokeElectron=process.getBuiltinModule('module').createRequire(${JSON.stringify(join(root,'package.json'))})('electron'); globalThis.smokeMain=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/index.html')`);
+    await browser.evaluate("globalThis.smokeLocked=false;smokeElectron.powerMonitor.on('lock-screen',()=>smokeLocked=true);smokeElectron.powerMonitor.on('unlock-screen',()=>smokeLocked=false)");
+    // CI has no microphone/TCC interaction. Exercise real WebRTC with fake devices;
+    // the signed package's audio entitlement is verified separately in the workflow.
+    if (process.platform === 'darwin') {
+      await browser.evaluate('smokeElectron.systemPreferences.askForMediaAccess=async()=>true');
+      console.log('macOS smoke: fake microphone and test-only TCC gate; physical microphone permission remains a device check');
+    }
+    if (process.platform === 'linux') await until(() => appPage.evaluate("window.lumilan.notificationSettings().then(s=>!s.error)"), 'Linux desktop lock service available');
     await until(() => appPage.evaluate("!!window.lumilan && document.readyState==='complete' && !document.querySelector('#join-screen').hidden"), 'renderer ready');
     await appPage.evaluate("document.querySelector('#join-name').value='Notch Smoke'; document.querySelector('#join-form').requestSubmit()");
     await until(() => appPage.evaluate("!document.querySelector('#app').hidden"), 'chat loaded');
@@ -85,6 +103,32 @@ async function main() {
     await third.start(); third.rename('Citra LAN'); await third.connectAddress(appState.addresses[0]);
     console.log('Notch smoke: peer connected');
     await until(() => appPage.evaluate(`window.lumilan.state().then(s=>s.peers.some(p=>p.id===${JSON.stringify(peer.id)}))`), 'encrypted peer connected');
+    if (process.platform === 'linux' && process.env.XDG_SESSION_TYPE === 'wayland') {
+      assert.equal((await appPage.evaluate('window.lumilan.notificationSettings()')).notchSupported, false);
+      await browser.evaluate('smokeMain.minimize()');
+      const history = () => desktopCall('org.freedesktop.Notifications', '/org/freedesktop/Notifications', 'dev.lumilan.Smoke.History');
+      const count = async () => Number(/(?:uint32 )?(\d+)/.exec(await desktopCall('org.freedesktop.Notifications', '/org/freedesktop/Notifications', 'dev.lumilan.Smoke.Count'))[1]);
+      await peer.sendMessage('Wayland native fallback', appState.me.id);
+      await until(async () => (await history()).includes('Wayland native fallback'), 'Wayland real notification D-Bus delivery');
+      assert.equal(await browser.evaluate("smokeElectron.BrowserWindow.getAllWindows().some(w=>w.webContents.getURL()==='lumilan://app/notch.html')"), false);
+      const beforeLock = await count();
+      await setLocked(browser, true); await browser.evaluate("smokeElectron.powerMonitor.emit('suspend')");
+      await peer.sendMessage('Wayland deferred private chat', appState.me.id);
+      const reminder = await appPage.evaluate("window.lumilan.createReminder({title:'Wayland private reminder',dueAt:Date.now()+500}).then(rs=>rs.find(r=>r.title==='Wayland private reminder'))");
+      await until(() => appPage.evaluate(`window.lumilan.reminders().then(rs=>rs.find(r=>r.id==='${reminder.id}')?.status==='due')`), 'Wayland blocked deadline');
+      await browser.evaluate("smokeElectron.powerMonitor.emit('resume')"); await delay(250);
+      assert.equal(await count(), beforeLock, 'Wayland exposed a locked notification');
+      await appPage.evaluate('window.lumilan.setNotificationSettings({enabled:true,preview:false,silent:true,background:true,notch:true})');
+      await setLocked(browser, false);
+      await until(async () => (await count()) === beforeLock + 2, 'Wayland coalesced chat and reminder after unlock');
+      assert(!(await history()).includes('private'), 'Wayland ignored updated preview privacy');
+      await browser.evaluate("smokeElectron.powerMonitor.emit('resume')"); await delay(250);
+      assert.equal(await count(), beforeLock + 2, 'Wayland repeated deferred alerts');
+      assert.deepEqual(failures, []);
+      console.log('Wayland: native renderer, real D-Bus notification fallback, no overlay, lock/suspend, reminder recovery and privacy passed');
+      await appPage.evaluate('setTimeout(()=>window.lumilan.quit(),100);true'); browser.close(); browser = null;
+      await until(() => child.exitCode !== null, 'Wayland quit'); return;
+    }
     const background = async () => {
       await browser.evaluate('smokeMain.close()');
       await until(() => browser.evaluate('!smokeMain.isVisible() && !smokeMain.isFocused()'), 'window hidden to tray and native focus released');
@@ -371,7 +415,7 @@ async function main() {
     const recovery = await appPage.evaluate("window.lumilan.createReminder({title:'Locked deadline recovery',dueAt:Date.now()+3600000}).then(rs=>rs.find(r=>r.title==='Locked deadline recovery'))");
     const deferredCanceled = await appPage.evaluate("window.lumilan.createReminder({title:'Canceled while locked',dueAt:Date.now()+3600000}).then(rs=>rs.find(r=>r.title==='Canceled while locked'))");
     await appPage.evaluate("globalThis.recoveryAlerts=[];globalThis.stopRecoveryAlerts=window.lumilan.onReminder(e=>recoveryAlerts.push(e))");
-    await browser.evaluate("smokeElectron.powerMonitor.emit('lock-screen');smokeElectron.powerMonitor.emit('suspend')");
+    await setLocked(browser, true); await browser.evaluate("smokeElectron.powerMonitor.emit('suspend')");
     for (const r of [recovery, deferredCanceled]) await appPage.evaluate(`window.lumilan.changeReminder('${r.id}','snooze',{dueAt:Date.now()+500})`);
     await until(()=>appPage.evaluate(`window.lumilan.reminders().then(rs=>[${JSON.stringify(recovery.id)},${JSON.stringify(deferredCanceled.id)}].every(id=>rs.find(r=>r.id===id)?.status==='due'))`),'deadlines persist while locked');
     await appPage.evaluate(`window.lumilan.changeReminder('${deferredCanceled.id}','cancel')`);
@@ -380,7 +424,7 @@ async function main() {
     assert.equal(await notchPage.evaluate('document.visibilityState'),'hidden','Resume exposed a locked notch');
     assert.equal(await appPage.evaluate('recoveryAlerts.length'),0,'Resume alerted before screen unlock');
     await appPage.evaluate("window.lumilan.setNotificationSettings({enabled:true,preview:false,silent:true,background:true,notch:true})");
-    await browser.evaluate("smokeElectron.powerMonitor.emit('unlock-screen')");
+    await setLocked(browser, false);
     await until(()=>appPage.evaluate('recoveryAlerts.length===1'),'deferred reminder alerted after unlock');
     const recovered = await until(()=>notchPage.evaluate("window.lumi.state().then(s=>s.items.find(i=>i.key==='reminder:due'))"),'deferred due summary in Lumi');
     assert.equal(recovered.count,1,'Canceled deferred reminder was replayed');
@@ -418,7 +462,10 @@ async function main() {
     console.log(`Notch idle renderer: ${(busySeconds / 4 * 100).toFixed(2)}% task time; ${(heap / 1024 / 1024).toFixed(2)} MiB JS heap; no running animation`);
     const nativeMetrics = await browser.evaluate(nativeExpression);
     assert(nativeMetrics && nativeMetrics.cpu.percentCPUUsage < 5, 'Native renderer CPU budget exceeded');
-    console.log(`Notch native process: ${nativeMetrics.cpu.percentCPUUsage.toFixed(2)}% CPU; ${((nativeMetrics.memory?.workingSetSize || 0) / 1024).toFixed(1)} MiB working set`);
+    const nativeMemory = process.platform === 'linux'
+      ? await browser.evaluate("(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');const s=process.getBuiltinModule('fs').readFileSync('/proc/'+w.webContents.getOSProcessId()+'/status','utf8');return Number(s.match(/^VmRSS:\\s+(\\d+) kB/m)?.[1])})()")
+      : nativeMetrics.memory?.workingSetSize;
+    console.log(`Notch native process: ${nativeMetrics.cpu.percentCPUUsage.toFixed(2)}% CPU; ${Number.isFinite(nativeMemory) ? (nativeMemory / 1024).toFixed(1) + ' MiB ' + (process.platform === 'linux' ? 'RSS' : 'working set') : 'native memory unavailable'}`);
     await notchPage.evaluate("window.lumi.action({type:'peek'})");
     await click('mascot'); await click('pause');
     assert.equal(await notchPage.evaluate('document.visibilityState'), 'hidden', 'Pause did not hide window');
@@ -426,6 +473,40 @@ async function main() {
     assert.equal(await notchPage.evaluate('document.visibilityState'), 'hidden', 'Incoming message canceled pause');
     await appPage.evaluate("window.lumilan.setNotificationSettings({enabled:true,preview:true,silent:true,background:true,notch:false})");
     await until(() => browser.evaluate("!smokeElectron.BrowserWindow.getAllWindows().some(w=>w.webContents.getURL()==='lumilan://app/notch.html')"), 'disabled companion releases renderer');
+    // Record routing without relying on OS permission/signing or sending test banners to the user's desktop.
+    await browser.evaluate("globalThis.nativeAttempts=[]; globalThis.nativeShow=smokeElectron.Notification.prototype.show; smokeElectron.Notification.prototype.show=function(){nativeAttempts.push({title:this.title,body:this.body});this.emit('show')}");
+    await peer.sendMessage('Background system fallback', appState.me.id);
+    if (await browser.evaluate('smokeElectron.Notification.isSupported()')) {
+      await until(() => browser.evaluate("nativeAttempts.some(n=>n.body==='Background system fallback')"), 'background native notification route');
+      assert((await appPage.evaluate('window.lumilan.state()')).unread[peer.id] > 0, 'Background fallback marked the message read');
+    }
+    await browser.evaluate(`smokeMain.show(); smokeMain.focus(); smokeMain.webContents.send('lumilan:open-thread',${JSON.stringify(peer.id)})`);
+    await until(() => browser.evaluate('smokeMain.isVisible() && smokeMain.isFocused()'), 'focused chat for notification routing');
+    await until(() => appPage.evaluate("document.getElementById('message-input').placeholder.includes('Alice LAN')"), 'active conversation for notification routing');
+    await appPage.evaluate(`window.lumilan.currentThread(${JSON.stringify(peer.id)})`);
+    const attempts = await browser.evaluate('nativeAttempts.length');
+    await peer.sendMessage('Already reading this conversation', appState.me.id);
+    await until(() => appPage.evaluate("document.getElementById('messages').textContent.includes('Already reading this conversation')"), 'active chat message rendered');
+    assert.equal(await browser.evaluate('nativeAttempts.length'), attempts, 'Focused active chat sent a redundant notification');
+    assert.equal((await appPage.evaluate('window.lumilan.state()')).unread[peer.id] || 0, 0);
+    await setLocked(browser, true); await browser.evaluate("smokeElectron.powerMonitor.emit('suspend')");
+    await peer.sendMessage('First locked chat', appState.me.id);
+    await peer.sendMessage('Latest locked private chat', appState.me.id);
+    await until(() => appPage.evaluate(`window.lumilan.state().then(s=>s.unread[${JSON.stringify(peer.id)}]===2)`), 'locked focused chat stays unread');
+    assert.equal(await browser.evaluate('nativeAttempts.length'), attempts, 'Locked chat showed a native notification');
+    await setLocked(browser, false); await delay(150);
+    assert.equal(await browser.evaluate('nativeAttempts.length'), attempts, 'Unlock bypassed suspend');
+    await browser.evaluate('smokeMain.hide()');
+    await appPage.evaluate('window.lumilan.setNotificationSettings({enabled:true,preview:false,silent:true,background:true,notch:false})');
+    await browser.evaluate("smokeElectron.powerMonitor.emit('resume')");
+    if (await browser.evaluate('smokeElectron.Notification.isSupported()')) {
+      await until(() => browser.evaluate(`nativeAttempts.length===${attempts + 1}`), 'locked chats coalesced once after resume');
+      assert.equal(await browser.evaluate('nativeAttempts.at(-1).body'), 'Pesan baru diterima', 'Deferred chat ignored current privacy');
+      await browser.evaluate("smokeElectron.powerMonitor.emit('resume')"); await delay(150);
+      assert.equal(await browser.evaluate('nativeAttempts.length'), attempts + 1, 'Resume repeated deferred chats');
+    }
+    await browser.evaluate('smokeElectron.Notification.prototype.show=nativeShow');
+    console.log('Notifications: background system fallback routing and focused conversation suppression passed (OS banner delivery not asserted)');
     const unexpected = failures.filter(text => text !== 'Permissions policy violation: microphone is not allowed in this document.');
     assert.deepEqual(unexpected, [], `Renderer errors: ${unexpected.join('; ')}`);
     console.log('Notch: idle resource budget, reduced motion, keyboard position, reset, pause, lazy renderer and disable cleanup passed');

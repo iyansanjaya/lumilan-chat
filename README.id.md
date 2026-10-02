@@ -32,9 +32,13 @@ GIF yang dikirim bergerak dalam pratinjau chat lokal setelah file diterima. Undu
 
 **Notch Lumi** menampilkan pesan, panggilan masuk, dan permintaan file di tepi atas layar saat Lumilan diminimalkan atau berjalan di tray. Pratinjau ringkasnya tersembunyi otomatis setelah beberapa detik; permintaan yang belum dijawab tetap tersedia. Anda dapat memindahkan, menjeda, atau mematikannya di **Pengaturan → Notifikasi**. Ketersediaannya mengikuti lingkungan desktop perangkat.
 
+Saat diam, Lumi berupa garis tipis di tepi atas; pilih **Tampilkan Lumi** dari tray untuk membuka panelnya. Lumi memakai panel native macOS yang mengikuti Space pada Intel dan Apple Silicon, tanpa memerlukan notch fisik pada layar. Saat Lumi menampilkan pesan, notifikasi sistem tidak diduplikasi. Notifikasi sistem macOS memerlukan aplikasi bertanda tangan; paket Actions bawaan belum ditandatangani. Pesan pada percakapan yang sedang dilihat di jendela berfokus ditandai dibaca tanpa notifikasi; mute, Jangan ganggu, dan pengaturan notifikasi tetap berlaku.
+
 Untuk subnet lokal yang saling memiliki rute tetapi perangkatnya tidak muncul otomatis, buka **Hubungkan perangkat** pada perangkat tujuan, salin kode perangkatnya, lalu tempel pada perangkat lain. Keduanya harus dapat terhubung lewat TCP port **40754**. Kode memuat alamat IPv4 privat, port, dan ID perangkat yang diautentikasi. Aplikasi tidak memakai relay internet atau layanan chat global.
 
 **Pengingat** tersedia di daftar sebelah kiri untuk diri sendiri atau permintaan ke kontak pribadi. Penerima memilih jadwal dan memberikan persetujuan. Pengingat berjalan selama Lumilan aktif, termasuk di tray; jadwal terlewat tetap terlihat saat aplikasi dibuka kembali. Kedua perangkat perlu versi terbaru untuk permintaan ke kontak.
+
+Deteksi layar terkunci di Linux memerlukan `gdbus` dan layanan ScreenSaver GNOME, KDE/freedesktop, atau Xfce. Pada Debian/Ubuntu, `gdbus` tersedia dalam paket `libglib2.0-bin`. Notifikasi dan Lumi ditunda jika keadaan lock tidak dapat diamati; Pengaturan menjelaskan alasannya. Notifikasi chat digabung per percakapan setelah lock dan suspend sama-sama berakhir, mengikuti mute dan pengaturan pratinjau terbaru. X11 mendukung keyboard ketika Lumi dibuka manual; Wayland memakai notifikasi sistem. Paket macOS bertanda tangan menyertakan entitlement mikrofon, dengan izin diminta di jendela utama. Actions menjalankan tes UI paket pada Mac Intel, Apple Silicon dan Linux X11/Wayland, tetapi izin audio fisik, banner desktop sebenarnya dan sleep perangkat tetap perlu diperiksa di perangkat. Pembaruan otomatis Linux memerlukan AppImage dan `latest-linux.yml` diterbitkan bersama dalam rilis.
 
 ## Privasi dan batasan jaringan
 
