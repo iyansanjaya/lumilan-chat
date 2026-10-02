@@ -2,6 +2,15 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('lumilan', {
   state: () => ipcRenderer.invoke('lumilan:state'),
+  reminders: () => ipcRenderer.invoke('lumilan:reminders'),
+  onReminder: callback => {
+    const listener=(_event,value)=>callback(value);
+    ipcRenderer.on('lumilan:reminder',listener);
+    return ()=>ipcRenderer.removeListener('lumilan:reminder',listener);
+  },
+  reminderSource: id => ipcRenderer.invoke('lumilan:reminder-source',id),
+  createReminder: value => ipcRenderer.invoke('lumilan:create-reminder', value),
+  changeReminder: (id, action, value) => ipcRenderer.invoke('lumilan:change-reminder', id, action, value),
   rename: name => ipcRenderer.invoke('lumilan:rename', name),
   setProfile: profile => ipcRenderer.invoke('lumilan:set-profile', profile),
   setContactLabel: (id, label) => ipcRenderer.invoke('lumilan:set-contact-label', id, label),
@@ -13,6 +22,12 @@ contextBridge.exposeInMainWorld('lumilan', {
   react: (thread, id, emoji) => ipcRenderer.invoke('lumilan:react', thread, id, emoji),
   typing: (thread, active) => ipcRenderer.invoke('lumilan:typing', thread, active),
   callState: () => ipcRenderer.invoke('lumilan:call-state'),
+  reportCall: state => ipcRenderer.invoke('lumilan:report-call', state),
+  onNotchAcceptCall: callback => {
+    const listener = (_event, id) => callback(id);
+    ipcRenderer.on('lumilan:notch-accept-call', listener);
+    return () => ipcRenderer.removeListener('lumilan:notch-accept-call', listener);
+  },
   call: packet => ipcRenderer.invoke('lumilan:call', packet),
   callMicrophone: () => ipcRenderer.invoke('lumilan:call-microphone'),
   onCall: callback => {

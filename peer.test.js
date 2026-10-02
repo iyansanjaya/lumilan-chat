@@ -20,6 +20,42 @@ async function until(predicate, timeout = 5000) {
   }
 }
 
+test('persetujuan file yang gagal disiapkan mengakhiri kartu transfer penerima', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-consent-failure-'));
+  const receiver = new LumilanPeer({ dataDir: root, discovery: false, listen: '/ip4/127.0.0.1/tcp/0', acceptFile: async () => true });
+  try {
+    await receiver.start();
+    const sender = peerIdFromPrivateKey(await generateKeyPair('Ed25519')).toString();
+    receiver.state.trusted.push({ id: sender, name: 'Pengirim' });
+    const events = [];
+    receiver.on('file-transfer', event => events.push(event));
+    const id = randomUUID();
+    const collision = join(receiver.filesDir, `.upload-${id}.part`);
+    writeFileSync(collision, 'existing file must stay intact');
+    await assert.rejects(receiver.beginIncomingFile(sender, { id, to: receiver.id, name: 'Test.bin', size: 1 }), { code: 'EEXIST' });
+    assert.deepEqual(events, [{ id, status: 'canceled' }], 'The receiver UI was left waiting after accepted file setup failed');
+    assert.equal(receiver.pendingFileOffers.size, 0);
+    assert.equal(receiver.incomingFiles.size, 0);
+    assert.equal(readFileSync(collision, 'utf8'), 'existing file must stay intact');
+
+    events.length = 0;
+    let resolveConsent;
+    receiver.acceptFile = () => new Promise(resolve => { resolveConsent = resolve; });
+    const canceledId = randomUUID();
+    const receiving = receiver.beginIncomingFile(sender, { id: canceledId, to: receiver.id, name: 'Canceled.bin', size: 1 });
+    await receiver.cancelIncomingFile(canceledId, sender);
+    resolveConsent(true);
+    await assert.rejects(receiving, /Pengiriman dibatalkan/);
+    assert.deepEqual(events, [{ id: canceledId, status: 'canceled' }], 'Cancellation must end the card once, even when acceptance arrives later');
+    assert.equal(receiver.pendingFileOffers.size, 0);
+    assert.equal(receiver.incomingFiles.size, 0);
+    assert(!existsSync(join(receiver.filesDir, `.upload-${canceledId}.part`)));
+  } finally {
+    await receiver.stop();
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
 test('mDNS mengirim pada setiap antarmuka LAN, bukan adaptor VPN saja', async () => {
   const interfaces = lanInterfaces({
     Tailscale: [{ family: 'IPv4', address: '100.91.124.75', internal: false }],

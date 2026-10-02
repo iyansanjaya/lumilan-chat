@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-*/
 data/
 .npm-cache/
 .electron-cache/
@@ -8,6 +9,7 @@ data/
 *.log
 .env
 .bun-task-temp/
+/coucou
 
 # graphify - commit graph & laporan, ignore cache/path lokal mesin
 /graphify-out/*

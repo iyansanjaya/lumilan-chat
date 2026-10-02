@@ -30,7 +30,11 @@ Pada pembukaan pertama, paket terpasang yang mendukung fitur ini mengaktifkan bu
 
 GIF yang dikirim bergerak dalam pratinjau chat lokal setelah file diterima. Unduh lampirannya untuk melihat file asli.
 
+**Notch Lumi** menampilkan pesan, panggilan masuk, dan permintaan file di tepi atas layar saat Lumilan diminimalkan atau berjalan di tray. Pratinjau ringkasnya tersembunyi otomatis setelah beberapa detik; permintaan yang belum dijawab tetap tersedia. Anda dapat memindahkan, menjeda, atau mematikannya di **Pengaturan → Notifikasi**. Ketersediaannya mengikuti lingkungan desktop perangkat.
+
 Untuk subnet lokal yang saling memiliki rute tetapi perangkatnya tidak muncul otomatis, buka **Hubungkan perangkat** pada perangkat tujuan, salin kode perangkatnya, lalu tempel pada perangkat lain. Keduanya harus dapat terhubung lewat TCP port **40754**. Kode memuat alamat IPv4 privat, port, dan ID perangkat yang diautentikasi. Aplikasi tidak memakai relay internet atau layanan chat global.
+
+**Pengingat** tersedia di daftar sebelah kiri untuk diri sendiri atau permintaan ke kontak pribadi. Penerima memilih jadwal dan memberikan persetujuan. Pengingat berjalan selama Lumilan aktif, termasuk di tray; jadwal terlewat tetap terlihat saat aplikasi dibuka kembali. Kedua perangkat perlu versi terbaru untuk permintaan ke kontak.
 
 ## Privasi dan batasan jaringan
 

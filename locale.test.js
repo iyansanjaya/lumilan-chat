@@ -21,6 +21,9 @@ test('bahasa otomatis mengikuti wilayah, sedangkan pilihan manual tetap berlaku'
     assert.ok(translate(language, 'Ruang: {name}', { name: 'Tim' }).includes('Tim'));
   }
   for (const language of ['en', 'ms', 'es', 'ja', 'ko', 'zh-Hans', 'zh-Hant']) {
+    assert.match(translate(language,'{due} jatuh tempo · {requests} permintaan',{due:2,requests:3}),/2.*3/);
+    assert(!translate(language,'Waktu lokal perangkat: {zone}',{zone:'Asia/Jakarta'}).includes('{zone}'));
+    if(language!=='en') assert.notEqual(translate(language,'Judul pengingat'),'Reminder title');
     assert.match(translate(language, 'File maks. 2 GB'), /2 GB/);
     assert.match(translate(language, 'File harus berukuran 1 B–2 GB.'), /2 GB/);
     assert.match(translate(language, 'Perbarui Lumilan Chat pada perangkat penerima untuk mengirim file di atas 100 MB.'), /100 MB/);

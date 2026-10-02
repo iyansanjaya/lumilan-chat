@@ -1,6 +1,6 @@
 {
   "name": "lumilan-chat",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "description": "Pesan langsung antarperangkat di jaringan lokal",
   "author": "Iyan Sanjaya",
   "private": true,
@@ -13,6 +13,7 @@
     "start": "electron .",
     "test": "node --test",
     "smoke:ui": "node scripts/smoke-ui.cjs",
+    "smoke:notch": "node scripts/smoke-notch.cjs",
     "pack": "electron-builder --dir --publish never",
     "dist": "electron-builder --publish never",
     "release": "node scripts/prepare-release.mjs && electron-builder --publish always"
@@ -24,10 +25,13 @@
     "asarUnpack": ["**/node_modules/sharp/**/*", "**/node_modules/@img/**/*"],
     "files": [
       "main.js",
+      "notch.js",
+      "notch-preload.cjs",
       "startup-default.js",
       "updates.js",
       "preload.cjs",
       "peer.js",
+      "reminders.js",
       "preview-image.js",
       "discovery.js",
       "public/**/*",

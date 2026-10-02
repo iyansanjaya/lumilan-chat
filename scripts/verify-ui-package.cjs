@@ -15,7 +15,7 @@ const asar = platform === 'darwin'
   ? join(dist, directory, 'Lumilan Chat.app', 'Contents', 'Resources', 'app.asar')
   : join(dist, directory, 'resources', 'app.asar');
 const files = new Set(listPackage(asar).map(path => path.replaceAll('\\', '/').replace(/^\/+/, '')));
-for (const file of ['main.js', 'startup-default.js', 'preload.cjs', 'peer.js', 'discovery.js', 'preview-image.js', 'public/index.html', 'public/app.css', 'public/app.js', 'public/avatar.js', 'public/i18n.js', 'public/message-format.js', 'public/voice-call.js', 'public/fonts/PublicSans.ttf', 'build/icon.png']) {
+for (const file of ['main.js', 'notch.js', 'notch-preload.cjs', 'startup-default.js', 'preload.cjs', 'peer.js', 'reminders.js', 'discovery.js', 'preview-image.js', 'public/index.html', 'public/notch.html', 'public/notch.css', 'public/notch.js', 'public/app.css', 'public/app.js', 'public/reminders.js', 'public/avatar.js', 'public/i18n.js', 'public/message-format.js', 'public/voice-call.js', 'public/fonts/PublicSans.ttf', 'build/icon.png']) {
   if (!files.has(file)) throw new Error(`Missing ${file} in ${asar}`);
   if (!extractFile(asar, join(...file.split('/'))).equals(readFileSync(file))) throw new Error(`Packaged ${file} differs from source`);
 }

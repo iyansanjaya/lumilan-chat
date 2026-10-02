@@ -30,7 +30,11 @@ On first launch, supported installed builds enable opening Lumilan Chat at compu
 
 Sent GIFs play in a local chat preview after the file is received. Download the attachment to view the original.
 
+**Lumi notch** shows messages, incoming calls, and file requests at the top of the screen while Lumilan is minimized or running in the tray. Its compact previews hide automatically after a few seconds; unanswered requests remain available. You can move or pause it, or turn it off in **Settings → Notifications**. Availability depends on your desktop environment.
+
 For a routed local subnet where devices do not appear automatically, open **Connect a device** on the destination, copy its device code, and paste it on the other device. Both sides must be reachable over TCP port **40754**. A code includes the private IPv4 address, port, and authenticated device ID. The app has no internet relay or global chat service.
+
+**Reminders** in the left sidebar supports personal schedules and requests to direct contacts. The recipient chooses a time and gives consent. Reminders run while Lumilan is active, including in the tray; missed schedules remain visible when the app reopens. Both devices need the latest build for contact requests.
 
 ## Privacy and network limits
 

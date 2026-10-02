@@ -11,6 +11,7 @@ import { yamux } from '@libp2p/yamux';
 import { identify } from '@libp2p/identify';
 import { multiaddr } from '@multiformats/multiaddr';
 import { LanDiscovery, addressPriority, localAddress, localPeer, networkSignature } from './discovery.js';
+import { Reminders } from './reminders.js';
 
 const PROFILE = '/lumilan/profile/1.0.0';
 const DATA = '/lumilan/data/1.0.0';
@@ -123,7 +124,7 @@ export class LumilanPeer extends EventEmitter {
     this.keyPath = join(dataDir, 'identity.key');
     this.filesDir = join(dataDir, 'files');
     // ponytail: riwayat kecil disimpan sebagai satu JSON; pindah ke SQLite jika pemakaian bertahun-tahun membuatnya besar.
-    this.state = { name: '', status: 'active', about: '', avatar: '', trusted: [], contactLabels: {}, rooms: [], declinedRooms: [], leftRooms: [], roomTombstones: [], archivedThreads: {}, pendingFileDeletes: [], messages: [], unread: {}, announcementsEnabled: true, announcementRoomCreated: false, mutedAnnouncements: [], mutedThreads: [] };
+    this.state = { name: '', status: 'active', about: '', avatar: '', trusted: [], contactLabels: {}, reminders: [], reminderTombstones: [], rooms: [], declinedRooms: [], leftRooms: [], roomTombstones: [], archivedThreads: {}, pendingFileDeletes: [], messages: [], unread: {}, announcementsEnabled: true, announcementRoomCreated: false, mutedAnnouncements: [], mutedThreads: [] };
     this.node = null;
     this.identity = null;
     this.discovered = new Map();
@@ -134,6 +135,7 @@ export class LumilanPeer extends EventEmitter {
     this.announcementTimes = new Map();
     this.typing = new Map();
     this.activeCall = null;
+    this.reminders = new Reminders(this);
   }
 
   get id() { return this.node?.peerId.toString() || this.identity; }
@@ -202,6 +204,7 @@ export class LumilanPeer extends EventEmitter {
       if (this.trusted.has(id)) {
         this.sendTo(id, { type: 'hello', ...this.profile() }).catch(() => {});
         this.syncRoomsWith(id).catch(() => {});
+        this.reminders.syncRemote(id);
       }
       else if (this.discovered.has(id)) this.probePeer(id).catch(() => {});
     });
@@ -213,6 +216,7 @@ export class LumilanPeer extends EventEmitter {
       setImmediate(() => { if (this.activeCall?.peerId === from && !this.online.has(from)) this.finishCall('offline'); });
     });
     await this.node.start();
+    this.reminders.start();
     for (const peer of this.state.trusted) this.dialKnown(peer.id, peer.addresses || []).catch(() => {});
     return this;
   }
@@ -238,6 +242,7 @@ export class LumilanPeer extends EventEmitter {
   }
 
   async stop() {
+    this.reminders.stop();
     this.finishCall('offline');
     for (const item of this.typing.values()) clearTimeout(item.timer);
     this.typing.clear();
@@ -292,13 +297,13 @@ export class LumilanPeer extends EventEmitter {
       }
     }
     return {
-      stats, recentFiles,
+      stats, recentFiles, reminders: this.reminders.list(),
       me: { id: this.id, name: this.state.name, status: this.state.status, about: this.state.about, avatar: this.state.avatar },
       addresses: this.addresses,
       rooms: this.state.rooms.map(room => ({ id: room.id, name: room.name, owner: room.owner, pending: room.pending,
         members: room.members, onlineMembers: room.members.filter(id => id === this.id || online.has(id)),
         invited: room.owner === this.id ? room.invited : undefined })),
-      contacts: this.state.trusted.map(peer => ({ id: peer.id, name: peer.name, avatar: cleanAvatar(peer.avatar) })),
+      contacts: this.state.trusted.map(peer => ({ id: peer.id, name: peer.name, avatar: cleanAvatar(peer.avatar), reminders: peer.reminders === true })),
       contactLabels: this.state.contactLabels,
       archivedThreads: Object.entries(this.state.archivedThreads).map(([id, name]) => ({ id, name })),
       announcementsEnabled: this.state.announcementsEnabled,
@@ -306,7 +311,7 @@ export class LumilanPeer extends EventEmitter {
       mutedAnnouncements: this.state.mutedAnnouncements,
       mutedThreads: this.state.mutedThreads,
       peers: this.state.trusted.filter(peer => online.has(peer.id)).map(peer => ({
-        id: peer.id, name: peer.name, online: true, status: cleanStatus(peer.status), about: cleanAbout(peer.about), avatar: cleanAvatar(peer.avatar), announcements: peer.announcements === true, voiceCalls: peer.voiceCalls === true,
+      id: peer.id, name: peer.name, online: true, status: cleanStatus(peer.status), about: cleanAbout(peer.about), avatar: cleanAvatar(peer.avatar), announcements: peer.announcements === true, voiceCalls: peer.voiceCalls === true, reminders: peer.reminders === true,
       })),
       messages: visibleMessages.slice(-1000),
       typing: this.typingList(),
@@ -325,7 +330,7 @@ export class LumilanPeer extends EventEmitter {
     return this.snapshot();
   }
 
-  profile() { return { name: this.state.name, status: this.state.status, about: this.state.about, avatar: this.state.avatar, fileChunks: true, maxFileSize: MAX_STREAM_FILE, roomFiles: true, reactions: true, voiceCalls: true, callErrorReason: true, announcements: this.state.announcementsEnabled }; }
+  profile() { return { name: this.state.name, status: this.state.status, about: this.state.about, avatar: this.state.avatar, fileChunks: true, maxFileSize: MAX_STREAM_FILE, roomFiles: true, reactions: true, voiceCalls: true, callErrorReason: true, reminders: true, announcements: this.state.announcementsEnabled }; }
 
   broadcastProfile() {
     if (!this.state.name) return;
@@ -405,10 +410,12 @@ export class LumilanPeer extends EventEmitter {
       avatar: cleanAvatar(profile.avatar ?? previous?.avatar), fileChunks: profile.fileChunks === true,
       maxFileSize: peerFileLimit(profile), roomFiles: profile.roomFiles === true, reactions: profile.reactions === true,
       voiceCalls: profile.voiceCalls === true, callErrorReason: profile.callErrorReason === true,
+      reminders: profile.reminders === true,
       announcements: profile.announcements === true,
     };
     this.state.trusted = this.state.trusted.filter(item => item.id !== id).concat(peer);
     this.save();
+    this.reminders.syncRemote(id);
   }
 
   archiveThread(thread) {
@@ -691,6 +698,9 @@ export class LumilanPeer extends EventEmitter {
       else if (data?.type === 'reaction') this.receiveReaction(from, data);
       else if (data?.type === 'typing') this.receiveTyping(from, data);
       else if (data?.type === 'call') this.receiveCall(from, data);
+      else if (data?.type === 'reminder-request') { const reminder = this.reminders.receiveRequest(from, data); await writeStream(stream,{ok:true,reminder}); return; }
+      else if (data?.type === 'reminder-status') this.reminders.receiveStatus(from, data);
+      else if (data?.type === 'reminder-cancel') { const reminder = this.reminders.receiveCancel(from,data.id,data.expiresAt); await writeStream(stream,{ok:true,reminder}); return; }
       else if (data?.type === 'file') { stream.inactivityTimeout = 300_000; await this.receiveFile(from, data); }
       else if (data?.type === 'file-start') { stream.inactivityTimeout = 300_000; await this.beginIncomingFile(from, data.message); }
       else if (data?.type === 'file-chunk') await this.receiveFileChunk(from, data);
@@ -904,6 +914,9 @@ export class LumilanPeer extends EventEmitter {
       this.incomingFiles.set(message.id, { ...message, from, path, handle, hash: createHash('sha256'), received: 0, timer: null });
       this.emit('file-transfer', { id: message.id, status: 'receiving', received: 0, total: message.size });
       this.resetIncomingTimer(message.id);
+    } catch (error) {
+      if (!offer.canceled) this.emit('file-transfer', { id: message.id, status: 'canceled' });
+      throw error;
     } finally { this.pendingFileOffers.delete(message.id); }
   }
 
