@@ -6,6 +6,11 @@ if [[ "${1:-}" != inner ]]; then
 fi
 mode="${2:-x11}"
 test "$mode" = x11 || test "$mode" = wayland
+# Electron loads libnotify dynamically; a notification server alone is insufficient.
+python3 -c 'import ctypes; ctypes.CDLL("libnotify.so.4")' || {
+  echo "Native notification smoke requires libnotify.so.4 (Ubuntu: install libnotify4)." >&2
+  exit 1
+}
 runtime="$(mktemp -d)"
 export HOME="$runtime/home" XDG_CONFIG_HOME="$runtime/config" XDG_CACHE_HOME="$runtime/cache"
 export XDG_RUNTIME_DIR="$runtime/run" XDG_SESSION_TYPE="$mode" LUMILAN_DESKTOP_FIXTURE=1

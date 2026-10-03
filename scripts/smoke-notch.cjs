@@ -59,9 +59,11 @@ async function main() {
   const inspectorServer = createServer(); inspectorServer.listen(0, '127.0.0.1');
   const inspectorPort = await new Promise(resolve => inspectorServer.once('listening', () => resolve(inspectorServer.address().port)));
   await new Promise(resolve => inspectorServer.close(resolve));
+  if (process.env.LUMILAN_SMOKE_SOFTWARE_RENDERING === '1') console.log('Notch smoke: software rendering (sandbox enabled)');
   const child = spawn(executable, [`--remote-debugging-port=${port}`, `--inspect=127.0.0.1:${inspectorPort}`, `--user-data-dir=${profile}`, '--lumilan-ui-smoke', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream',
+    ...(process.env.LUMILAN_SMOKE_SOFTWARE_RENDERING === '1' ? ['--disable-gpu'] : []),
     ...(process.platform === 'linux' ? [`--ozone-platform=${process.env.XDG_SESSION_TYPE === 'wayland' ? 'wayland' : 'x11'}`] : [])], {
-    cwd: root, windowsHide: true, env: { ...process.env, APPDATA: profile, LOCALAPPDATA: profile, ELECTRON_ENABLE_LOGGING: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: root, env: { ...process.env, APPDATA: profile, LOCALAPPDATA: profile, ELECTRON_ENABLE_LOGGING: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let logs = '', launchError, peer, third, appPage, notchPage, browser; const failures = [];
   child.once('error', error => { launchError = error; });
@@ -105,6 +107,8 @@ async function main() {
     await until(() => appPage.evaluate(`window.lumilan.state().then(s=>s.peers.some(p=>p.id===${JSON.stringify(peer.id)}))`), 'encrypted peer connected');
     if (process.platform === 'linux' && process.env.XDG_SESSION_TYPE === 'wayland') {
       assert.equal((await appPage.evaluate('window.lumilan.notificationSettings()')).notchSupported, false);
+      assert.equal(await browser.evaluate('smokeElectron.Notification.isSupported()'), true,
+        'Wayland native notifications unavailable: check libnotify.so.4 and the private D-Bus notification service');
       await browser.evaluate('smokeMain.minimize()');
       const history = () => desktopCall('org.freedesktop.Notifications', '/org/freedesktop/Notifications', 'dev.lumilan.Smoke.History');
       const count = async () => Number(/(?:uint32 )?(\d+)/.exec(await desktopCall('org.freedesktop.Notifications', '/org/freedesktop/Notifications', 'dev.lumilan.Smoke.Count'))[1]);
@@ -443,11 +447,21 @@ async function main() {
     await notchPage.evaluate('window.lumi.action({type:"expand"})');
     assert.equal(await notchPage.evaluate('document.getAnimations().length'), 0, 'Reduced motion ignored');
     await notchPage.send('Emulation.setEmulatedMedia', { features: [] });
-    await notchPage.evaluate("document.getElementById('drag').focus()");
-    const before = await notchPage.evaluate('screenX');
-    await notchPage.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowRight', code: 'ArrowRight' });
-    await until(() => notchPage.evaluate(`screenX>${before}`), 'keyboard reposition');
+    // Earlier fixtures move toward the screen edge. A 20 px move can be clamped there;
+    // the later auto-hide resize must never be mistaken for successful keyboard movement.
     await click('reset');
+    await until(() => appPage.evaluate('window.lumilan.notificationSettings().then(s=>s.notchPosition?.fraction===.5)'), 'centered keyboard fixture');
+    await notchPage.evaluate("document.getElementById('drag').focus()");
+    const before = await browser.evaluate("smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').getBounds()");
+    await notchPage.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowRight', code: 'ArrowRight' });
+    await notchPage.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowRight', code: 'ArrowRight' });
+    await until(async () => {
+      const bounds = await browser.evaluate("smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').getBounds()");
+      assert.equal(await notchPage.evaluate('document.body.dataset.mode'), 'expanded', 'Keyboard reposition collapsed the panel');
+      return bounds.width === before.width && Math.abs(bounds.x - before.x - 20) <= 1;
+    }, 'keyboard reposition by 20 px without resizing');
+    await click('reset');
+    await until(() => appPage.evaluate('window.lumilan.notificationSettings().then(s=>s.notchPosition?.fraction===.5)'), 'reset button restores center');
     await notchPage.evaluate('window.lumi.action({type:"collapse"})');
     await notchPage.send('Performance.enable');
     const nativeExpression = "(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return smokeElectron.app.getAppMetrics().find(m=>m.pid===w.webContents.getOSProcessId())})()";

@@ -32,11 +32,12 @@ async function main() {
 
   const tempRoot = realpathSync(tmpdir());
   const profile = mkdtempSync(join(tempRoot, 'lumilan-ui-smoke-'));
+  if (process.env.LUMILAN_SMOKE_SOFTWARE_RENDERING === '1') console.log('Smoke: software rendering (sandbox enabled)');
   const child = spawn(executable, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--lumilan-ui-smoke',
+    ...(process.env.LUMILAN_SMOKE_SOFTWARE_RENDERING === '1' ? ['--disable-gpu'] : []),
     ...(platform === 'linux' ? [`--ozone-platform=${process.env.XDG_SESSION_TYPE === 'wayland' ? 'wayland' : 'x11'}`] : [])], {
     cwd: root,
     env: { ...process.env, APPDATA: profile, LOCALAPPDATA: profile, ELECTRON_ENABLE_LOGGING: '1' },
-    windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let launchError;
@@ -378,17 +379,36 @@ async function main() {
     assert.equal((await sharp(Buffer.from(gifPreview.split(',')[1], 'base64')).metadata()).pages, 2);
     const gifPosition = await evaluate(`(() => { const image = [...document.querySelectorAll('#messages .message')]
       .find(item => item.textContent.includes('smoke-animated.gif')).querySelector('.image-preview');
-      const bounds = image.getBoundingClientRect();
-      return { left: Math.floor(bounds.left + bounds.width / 2), top: Math.floor(bounds.top + bounds.height / 2) }; })()`);
-    const playbackColors = new Set();
-    for (let frame = 0; frame < 8; frame++) {
-      const screenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
-      const pixel = await sharp(Buffer.from(screenshot.data, 'base64'))
-        .extract({ left: gifPosition.left, top: gifPosition.top, width: 1, height: 1 }).raw().toBuffer();
-      playbackColors.add(pixel.subarray(0, 3).join(','));
-      await delay(90);
+      image.scrollIntoView({ block: 'center' }); const bounds = image.getBoundingClientRect();
+      return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2, width: innerWidth, height: innerHeight }; })()`);
+    // Screenshot latency can repeatedly sample one phase of a loop. Inspect actual
+    // compositor frames, acknowledging promptly so capture does not stall playback.
+    const gifFrames = [], playbackColors = new Set(); let red = false, white = false;
+    const onGifFrame = event => {
+      const message = JSON.parse(event.data);
+      if (message.method !== 'Page.screencastFrame') return;
+      if (gifFrames.length < 8) gifFrames.push(message.params.data);
+      send('Page.screencastFrameAck', { sessionId: message.params.sessionId }).catch(error => failures.push(error.message));
+    };
+    socket.addEventListener('message', onGifFrame);
+    try {
+      await send('Page.startScreencast', { format: 'png', maxWidth: gifPosition.width, maxHeight: gifPosition.height, everyNthFrame: 1 });
+      const playbackDeadline = Date.now() + 5000;
+      while (Date.now() < playbackDeadline && !(red && white)) {
+        const frame = gifFrames.shift();
+        if (!frame) { await delay(20); continue; }
+        const screenshot = sharp(Buffer.from(frame, 'base64')), size = await screenshot.metadata();
+        const pixel = await screenshot.extract({ left: Math.floor(gifPosition.x * size.width / gifPosition.width),
+          top: Math.floor(gifPosition.y * size.height / gifPosition.height), width: 1, height: 1 }).raw().toBuffer();
+        playbackColors.add(pixel.subarray(0, 3).join(','));
+        red ||= pixel[0] > 220 && pixel[1] < 30 && pixel[2] < 30;
+        white ||= pixel[0] > 220 && pixel[1] > 220 && pixel[2] > 220;
+      }
+    } finally {
+      await send('Page.stopScreencast');
+      socket.removeEventListener('message', onGifFrame);
     }
-    assert(playbackColors.size >= 2, `Animated GIF did not move in Chromium: ${JSON.stringify([...playbackColors])}`);
+    assert(red && white, `Animated GIF did not move in Chromium: ${JSON.stringify([...playbackColors])}`);
     const gifDialog = await evaluate(`(() => { const row = [...document.querySelectorAll('#messages .message')]
       .find(item => item.textContent.includes('smoke-animated.gif')); row.querySelector('.image-preview-button').click();
       return { open: document.querySelector('#image-dialog').open,
@@ -411,6 +431,7 @@ async function main() {
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     assert(await evaluate("!document.querySelector('#image-dialog').open"), 'Escape did not close the thumbnail dialog');
+    assert.equal(failures.length, 0, `Renderer errors: ${failures.join('; ')}`);
     passed = true;
     console.log('Packaged UI rendered: welcome, chat, details, settings, room, contact dialog, call, avatar, animated GIF preview, and older-message reactions without scroll jumps');
   } finally {

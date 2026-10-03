@@ -74,7 +74,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libopenjp2-tools dbus-x11 libglib2.0-bin python3-dbus python3-gi xvfb x11-utils openbox trayer weston libgbm1 libnss3 libgtk-3-0 libasound2t64
+          sudo apt-get install --no-install-recommends -y libopenjp2-tools libnotify4 dbus-x11 libglib2.0-bin python3-dbus python3-gi xvfb x11-utils openbox trayer weston libgbm1 libnss3 libgtk-3-0 libasound2t64
           # Ubuntu's AppArmor policy otherwise blocks Chromium's user-namespace sandbox.
           # Keep Electron sandboxing enabled on this disposable runner.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -157,6 +157,10 @@ jobs:
       - name: Smoke packaged macOS UI and Lumi
         if: matrix.platform == 'macos'
         shell: bash
+        env:
+          # Hosted Intel runners can lack a usable EGL/GPU display. Exercise the
+          # real compositor in software without changing the distributed app.
+          LUMILAN_SMOKE_SOFTWARE_RENDERING: "1"
         run: |
           set -euo pipefail
           bun run smoke:ui
