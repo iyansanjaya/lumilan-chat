@@ -34,7 +34,9 @@ Direct device connections use **libp2p Noise** to encrypt traffic and authentica
 
 ## Updates and help
 
-Installed apps can check Releases from **Settings → Check for updates**. On macOS, the app currently checks for a release and directs you to download and install the DMG manually. Automatic installation on macOS requires signed packages and update metadata published with the release.
+Installed apps can check Releases from **Settings → Check for updates**. Windows installers and Linux AppImages can download updates and offer **Later** or **Restart and install**. On macOS, the app checks for a release and directs you to download and install the DMG manually; automatic installation is currently unavailable, including in signed builds.
+
+Enable desktop notifications for alerts while minimized. To keep receiving messages after closing the window, enable **Keep running in tray**; a tray must be available. Enabled and ready Lumi replaces the system banner; loading, paused, disabled, or unavailable Lumi uses system notifications. Linux Wayland uses this system fallback. Mute and Do not disturb suppress alerts; screen lock and suspend defer them.
 
 If **Test system notification** does not appear, check Lumilan Chat's notification permissions and Do not disturb settings on Windows, macOS, or your Linux desktop. A successful test means the system accepted the notification; it does not guarantee that it appeared on screen.
 

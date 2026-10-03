@@ -34,7 +34,9 @@ Koneksi langsung antarperangkat memakai **libp2p Noise** untuk mengenkripsi lalu
 
 ## Pembaruan dan bantuan
 
-Aplikasi yang telah dipasang dapat memeriksa pembaruan dari halaman Releases melalui **Pengaturan → Periksa pembaruan**. Pada macOS, aplikasi saat ini memeriksa rilis dan mengarahkan Anda untuk mengunduh serta memasang DMG secara manual. Pemasangan otomatis macOS memerlukan paket bertanda tangan dan metadata pembaruan yang diterbitkan bersama rilis.
+Aplikasi yang telah dipasang dapat memeriksa pembaruan dari halaman Releases melalui **Pengaturan → Periksa pembaruan**. Installer Windows dan AppImage Linux dapat mengunduh pembaruan lalu menawarkan **Nanti** atau **Mulai ulang dan pasang**. Pada macOS, aplikasi memeriksa rilis dan mengarahkan Anda untuk mengunduh serta memasang DMG secara manual; pemasangan otomatis saat ini belum tersedia, termasuk pada build bertanda tangan.
+
+Aktifkan notifikasi desktop untuk menerima pemberitahuan saat diminimalkan. Agar tetap menerima pesan setelah jendela ditutup, aktifkan **Tetap berjalan di tray**; tray harus tersedia. Lumi yang aktif dan siap menggantikan banner sistem; saat Lumi dimuat, dijeda, dinonaktifkan, atau tidak tersedia, aplikasi memakai notifikasi sistem. Linux Wayland memakai fallback sistem ini. Mute dan Jangan ganggu mematikan pemberitahuan; layar terkunci dan suspend menundanya.
 
 Jika **Uji notifikasi sistem** tidak terlihat, periksa izin notifikasi Lumilan Chat dan Jangan Ganggu di pengaturan Windows, macOS, atau desktop Linux. Hasil uji yang menyatakan sistem menerima notifikasi tidak menjamin pemberitahuan tampil di layar.
 
