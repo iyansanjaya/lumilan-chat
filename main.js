@@ -644,7 +644,15 @@ if (instanceLock) app.whenReady().then(async () => {
   window.on('close', event => {
     if (!quitting && settings.background && tray) { event.preventDefault(); window.hide(); }
   });
-  window.once('ready-to-show', () => { mainPresented = true; window.show(); });
+  const presentMain = () => {
+    if (mainPresented) return;
+    mainPresented = true;
+    window.show();
+  };
+  window.once('ready-to-show', presentMain);
+  // A hidden Wayland window can wait for its first frame until it is mapped.
+  if (process.platform === 'linux' && process.env.XDG_SESSION_TYPE === 'wayland')
+    window.webContents.once('did-finish-load', presentMain);
   checkUpdates = startUpdates({
     app, updater: autoUpdater, dialog,
     getWindow: () => { reveal(); return window; },

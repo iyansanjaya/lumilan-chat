@@ -86,7 +86,7 @@ async function main() {
       const id = ++sequence;
       pending.set(id, { resolve, reject });
       socket.send(JSON.stringify({ id, method, params }));
-    }), timeout, `${method} timed out`);
+    }), timeout, `${method} timed out: ${(params.expression || '').slice(0, 160)}`);
     await send('Runtime.enable');
     await send('Log.enable');
     await send('Network.enable');
@@ -99,11 +99,19 @@ async function main() {
           returnByValue: true,
         });
         state = result.result.value;
-        if (state?.appVisible || state?.joinVisible) break;
+        if (state?.joinVisible) {
+          const form = await send('Runtime.evaluate', { expression: "document.querySelector('#join-form')" });
+          if (form.result.objectId) {
+            const { listeners } = await send('DOMDebugger.getEventListeners', { objectId: form.result.objectId });
+            await send('Runtime.releaseObject', { objectId: form.result.objectId });
+            state.joinReady = listeners.some(listener => listener.type === 'submit');
+          }
+        }
+        if (state?.appVisible || state?.joinReady) break;
       } catch { /* The page is reloading. */ }
       await delay(200);
     }
-    assert(state?.joinVisible, `Welcome screen did not render: ${JSON.stringify(state)}; ${failures.join('; ')}; ${logs}`);
+    assert(state?.joinVisible && state.joinReady, `Welcome screen did not initialize: ${JSON.stringify(state)}; ${failures.join('; ')}; ${logs}`);
     await send('Runtime.evaluate', {
       expression: "document.querySelector('#join-name').value = 'UI Smoke'; document.querySelector('#join-form').requestSubmit()",
     });
@@ -119,12 +127,19 @@ async function main() {
     assert(state?.appVisible && state.name === 'UI Smoke', `Chat screen did not render: ${JSON.stringify(state)}; ${failures.join('; ')}; ${logs}`);
     const chatScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
     writeFileSync(join(dist, 'ui-smoke-chat.png'), Buffer.from(chatScreenshot.data, 'base64'));
-    const evaluate = async expression => {
-      const result = await send('Runtime.evaluate', { expression, returnByValue: true });
+    const evaluate = async (expression, awaitPromise = false) => {
+      const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise });
       assert(!result.exceptionDetails, `UI inspection failed: ${result.exceptionDetails?.text}`);
       return result.result.value;
     };
-    await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 800, deviceScaleFactor: 1, mobile: false });
+    const setViewport = async (width, height) => {
+      await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+      // The CDP reply can precede resize handlers/layout. Wait for rendering, not wall-clock time.
+      const size = await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() =>
+        resolve({ width: innerWidth, height: innerHeight, visibility: document.visibilityState }))))`, true);
+      assert(size.width === width && size.height === height, `Viewport did not resize: ${JSON.stringify(size)}`);
+    };
+    await setViewport(1100, 800);
     const detailLayout = await evaluate(`(() => {
       document.documentElement.dataset.theme = 'light';
       const section = document.querySelector('#contact-label-section');
@@ -169,7 +184,7 @@ async function main() {
       await delay(200);
     }
     assert(settingsOpen, `Settings did not open: ${failures.join('; ')}; ${logs}`);
-    await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: false });
+    await setViewport(375, 812);
     const narrow = await evaluate(`(() => { const dialog = document.querySelector('#settings-dialog');
       document.querySelector('#test-notification-button').textContent = 'Uji notifikasi sistem sekarang';
       document.querySelector('#notifications-form button[type="submit"]').textContent = 'Simpan semua pengaturan notifikasi';
@@ -189,11 +204,11 @@ async function main() {
       `Top bar overflows a narrow window: ${JSON.stringify(narrowShell)}`);
     const narrowChatScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
     writeFileSync(join(dist, 'ui-audit-chat-narrow.png'), Buffer.from(narrowChatScreenshot.data, 'base64'));
-    await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 700, deviceScaleFactor: 1, mobile: false });
+    await setViewport(320, 700);
     const minimumShell = await evaluate(`(() => { const topbar = document.querySelector('.topbar');
       return { topbarOverflow: topbar.scrollWidth > topbar.clientWidth, pageOverflow: document.documentElement.scrollWidth > innerWidth }; })()`);
     assert(!minimumShell.topbarOverflow && !minimumShell.pageOverflow, `Top bar overflows at 320 px: ${JSON.stringify(minimumShell)}`);
-    await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 800, deviceScaleFactor: 1, mobile: false });
+    await setViewport(1100, 800);
     await evaluate("document.querySelector('#settings-dialog').showModal()");
     const avatarResult = await send('Runtime.evaluate', {
       expression: "(async () => { const canvas = document.createElement('canvas'); canvas.width = canvas.height = 2; canvas.getContext('2d').fillRect(0, 0, 2, 2); const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png')); const { readAvatar } = await import('/avatar.js'); return readAvatar(new File([blob], 'smoke.png', { type: 'image/png' }), value => value); })()",
@@ -221,7 +236,7 @@ async function main() {
       document.querySelector('#contact-label-dialog-remove').hidden = false`);
     const labelScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
     writeFileSync(join(dist, 'ui-audit-label-dialog-dark.png'), Buffer.from(labelScreenshot.data, 'base64'));
-    await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 700, deviceScaleFactor: 1, mobile: false });
+    await setViewport(320, 700);
     const transientControls = await evaluate(`(() => {
       document.querySelector('#contact-label-dialog').close();
       document.body.classList.remove('show-list');
@@ -262,13 +277,13 @@ async function main() {
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 });
     const keyboardTop = await evaluate("document.querySelector('#call-panel').getBoundingClientRect().top");
     assert.equal(keyboardTop, dragged.top - 20, 'Arrow keys did not move the call card');
-    await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 240, deviceScaleFactor: 1, mobile: false });
-    await delay(150);
+    await setViewport(320, 240);
     const resized = await evaluate(`(() => { const rect = document.querySelector('#call-panel').getBoundingClientRect();
-      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, height: innerHeight }; })()`);
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, height: innerHeight,
+        visibility: document.visibilityState, position: document.querySelector('#call-panel').style.cssText }; })()`);
     assert(resized.left >= 8 && resized.top >= 8 && resized.right <= 312 && resized.bottom <= 232,
       `Dragged call card escaped after resize: ${JSON.stringify(resized)}`);
-    await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 700, deviceScaleFactor: 1, mobile: false });
+    await setViewport(320, 700);
     const callScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
     writeFileSync(join(dist, 'ui-audit-call-dragged.png'), Buffer.from(callScreenshot.data, 'base64'));
     await evaluate("document.documentElement.dataset.theme = 'light'");
@@ -277,7 +292,7 @@ async function main() {
     await evaluate("document.documentElement.dataset.theme = 'dark'");
     await evaluate("document.querySelector('#call-dismiss').click()");
     assert(await evaluate("document.querySelector('#call-panel').hidden"), 'Call dismissal stopped working after dragging');
-    await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 800, deviceScaleFactor: 1, mobile: false });
+    await setViewport(1100, 800);
     await evaluate("document.querySelector('#notes-button').click()");
     const notesResult = await send('Runtime.evaluate', {
       expression: "(async () => { for (let i = 0; i < 40; i++) await window.lumilan.note('Pesan lama untuk uji posisi ' + i); return true })()",
