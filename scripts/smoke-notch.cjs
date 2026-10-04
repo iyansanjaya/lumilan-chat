@@ -620,27 +620,51 @@ async function main() {
     // Hold the first chunk so cross-window consent must update at exactly 0%.
     const chunkGate = Promise.withResolvers(), sendTo = peer.sendTo.bind(peer), consentController = new AbortController();
     let chunkWaiting = false;
-    peer.sendTo = async (target, packet) => {
+    const staleConsent = [], consentObjectGroup = 'file-consent-callbacks';
+    peer.sendTo = async (target, packet, options) => {
       if (packet.type === 'file-chunk') { chunkWaiting = true; await chunkGate.promise; }
-      return sendTo(target, packet);
+      return sendTo(target, packet, options);
     };
     try {
       sending = peer.sendFilePath(source, appState.me.id, { signal: consentController.signal }); sending.catch(() => {});
       const acceptedOffer = await until(async () => { const s = await selected(); return s?.kind === 'file' && s.actionable && s; }, 'second file offer');
       await browser.evaluate(`smokeMain.webContents.send('lumilan:open-thread',${JSON.stringify(peer.id)})`);
       await until(() => appPage.evaluate("document.querySelector('.incoming-transfer .incoming-transfer-actions')?.children.length===2"), 'main chat file consent buttons');
+      // Retain actual renderer callbacks before Lumi replaces their consent row.
+      for (const [label, index] of [['Accept', 1], ['Decline', 0]]) {
+        const button = await appPage.send('Runtime.evaluate', {
+          expression: `document.querySelectorAll('.incoming-transfer .incoming-transfer-actions button')[${index}]`,
+          objectGroup: consentObjectGroup,
+        });
+        assert(!button.exceptionDetails && button.result.objectId, `Missing ${label} consent button`);
+        const { listeners } = await appPage.send('DOMDebugger.getEventListeners', { objectId: button.result.objectId });
+        const objectId = listeners.find(listener => listener.type === 'click')?.handler?.objectId;
+        assert(objectId, `${label} consent button has no click callback`);
+        staleConsent.push({ label, objectId });
+      }
       await click('accept');
       await until(() => chunkWaiting, 'first chunk held after acceptance');
       const active = (await appPage.evaluate('window.lumilan.fileOffers()')).find(item => item.id === acceptedOffer.key.slice('file:'.length));
       assert(active?.status === 'receiving' && active.received === 0, 'Transfer was not held at 0%');
       await until(() => appPage.evaluate("!!document.querySelector('.incoming-transfer progress') && !document.querySelector('.incoming-transfer .incoming-transfer-actions')"), 'Lumi acceptance removes main consent buttons at 0%');
+      for (const { label, objectId } of staleConsent) {
+        const result = await appPage.send('Runtime.callFunctionOn', {
+          objectId, functionDeclaration: 'function(){return this();}', awaitPromise: true, returnByValue: true,
+        });
+        assert(!result.exceptionDetails, `Stale ${label} callback failed: ${JSON.stringify(result.exceptionDetails)}`);
+        assert(await appPage.evaluate("!!document.querySelector('.incoming-transfer progress') && !document.querySelector('.incoming-transfer .incoming-transfer-actions')"),
+          `Stale ${label} callback removed the receiving row or restored consent buttons`);
+      }
+      console.log('Main consent: stale Accept/Decline callbacks preserve the active 0% transfer');
       await assert.rejects(appPage.evaluate(`window.lumilan.decideFile(${JSON.stringify(active.id)},false)`), /tidak tersedia/);
       await assert.rejects(notchPage.evaluate(`window.lumi.action({type:'accept',key:${JSON.stringify(acceptedOffer.key)}})`));
     } catch (error) {
       consentController.abort(error); throw error;
     } finally {
       chunkGate.resolve(); peer.sendTo = sendTo;
+      const released = await Promise.allSettled([appPage.send('Runtime.releaseObjectGroup', { objectGroup: consentObjectGroup })]);
       await sending.catch(error => { if (!consentController.signal.aborted) throw error; });
+      for (const result of released) assert.equal(result.status, 'fulfilled', `Consent callback cleanup failed: ${result.reason?.message}`);
     }
     const files = await appPage.evaluate(`window.lumilan.listFiles(${JSON.stringify(peer.id)},0)`);
     assert(files.items?.some(f => f.name === 'sample.bin') || files.some?.(f => f.name === 'sample.bin'), JSON.stringify(files));
