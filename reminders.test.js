@@ -16,6 +16,19 @@ function fixture(t) {
   return {peer,reminders,advance:ms=>{now+=ms;},get now(){return now;},get saved(){return saved;}};
 }
 const packet=(f,extra={})=>({type:'reminder-request',id:randomUUID(),to:'self',title:'Rapat',note:'Catatan',dueAt:f.now+3600_000,createdAt:f.now,expiresAt:f.now+3600_000,...extra});
+test('new contact reminders require an online capable peer; offline creation never changes storage',t=>{
+  const f=fixture(t);
+  assert.throws(()=>f.reminders.create({title:'Offline',to:'other',dueAt:f.now+10000}),/offline/);
+  assert.equal(f.reminders.records.length,0);
+  assert.equal(f.saved,undefined);
+  f.peer.online.add('other');
+  f.reminders.create({title:'Online',to:'other',dueAt:f.now+10000});
+  f.peer.online.delete('other');
+  assert.equal(f.reminders.records.length,1,'Disconnect discarded an in-flight request');
+  assert.throws(()=>f.reminders.create({title:'Disconnected',to:'other',dueAt:f.now+10000}),/offline/);
+  f.reminders.create({title:'Myself remains local',dueAt:f.now+10000});
+  assert.equal(f.reminders.records.length,2);
+});
 async function until(check) {const end=Date.now()+6000;while(!check()){if(Date.now()>end)throw new Error('Reminder did not synchronize');await new Promise(r=>setTimeout(r,20));}}
 
 test('pengingat lokal tahan restart, terlewat sekali, tunda, selesai, dan gagal simpan tanpa kehilangan data',t=>{
@@ -73,7 +86,7 @@ test('jawaban pending yang terlambat tidak membatalkan pembatalan lokal; accepta
 });
 
 test('selisih jam kecil didukung, status palsu ditolak, dan restart menggabungkan jadwal yang terlewat',t=>{
-  const f=fixture(t);f.reminders.create({title:'Clock skew',to:'other',dueAt:f.now+3600000});const r=f.reminders.records[0];
+  const f=fixture(t);f.peer.online.add('other');f.reminders.create({title:'Clock skew',to:'other',dueAt:f.now+3600000});const r=f.reminders.records[0];
   assert.throws(()=>f.reminders.receiveStatus('other',{id:r.id,status:'accepted',dueAt:f.now+1000,decidedAt:f.now+120000}),/valid/);
   f.reminders.receiveStatus('attacker',{id:r.id,status:'accepted',dueAt:f.now+1000,decidedAt:f.now});assert.equal(r.status,'queued');
   f.reminders.receiveStatus('other',{id:r.id,status:'accepted',dueAt:f.now-1000,decidedAt:f.now-2000});assert.equal(r.status,'accepted');
@@ -101,18 +114,21 @@ test('jawaban jaringan dari proses yang dihentikan tidak menulis ulang penyimpan
 });
 
 test('riwayat pembatalan offline dapat dihapus setelah permintaannya kedaluwarsa',t=>{
-  const f=fixture(t);f.reminders.create({title:'Canceled offline',to:'other',dueAt:f.now+1000});const r=f.reminders.records[0];f.reminders.change(r.id,'cancel');
+  const f=fixture(t);f.peer.online.add('other');f.reminders.create({title:'Canceled offline',to:'other',dueAt:f.now+1000});f.peer.online.delete('other');const r=f.reminders.records[0];f.reminders.change(r.id,'cancel');
   assert.throws(()=>f.reminders.change(r.id,'delete'),/menghapus/);f.advance(1001);f.reminders.tick();assert.equal(r.cancelPending,false);
   f.reminders.change(r.id,'delete');assert.equal(f.reminders.records.length,0);assert.equal(f.reminders.timer,null);
 });
 
-test('peer LAN mengirim antrean offline setelah restart, menyinkronkan keputusan, dan mempertahankan jadwal penerima',async()=>{
+test('peer LAN retries an in-flight request after restart, synchronizes decisions and preserves recipient ownership',async()=>{
   const root=mkdtempSync(join(tmpdir(),'lumilan-reminders-'));let a,b;
   try{
     a=new LumilanPeer({dataDir:join(root,'a'),discovery:false,listen:'/ip4/127.0.0.1/tcp/0'});b=new LumilanPeer({dataDir:join(root,'b'),discovery:false,listen:'/ip4/127.0.0.1/tcp/0'});
     await Promise.all([a.start(),b.start()]);a.rename('Alice');b.rename('Bob');await a.connectAddress(b.snapshot().addresses[0]);await until(()=>a.trusted.get(b.id)?.reminders && b.trusted.get(a.id)?.reminders);
     await a.stop();a=new LumilanPeer({dataDir:join(root,'a'),discovery:false,listen:'/ip4/127.0.0.1/tcp/0'});await a.start();
-    a.online.delete(b.id);a.reminders.create({title:'Offline request',to:b.id,dueAt:Date.now()+3600000});const id=a.state.reminders[0].id;assert.equal(a.state.reminders[0].status,'queued');
+    await a.connectAddress(b.snapshot().addresses[0]);await until(()=>a.online.has(b.id));
+    const originalSend=a.sendTo;a.sendTo=async()=>{throw new Error('Connection dropped during delivery');};
+    a.reminders.create({title:'In-flight request',to:b.id,dueAt:Date.now()+3600000});const id=a.state.reminders[0].id;
+    await until(()=>!a.reminders.syncing.size);a.sendTo=originalSend;assert.equal(a.state.reminders[0].status,'queued');
     await a.stop();a=new LumilanPeer({dataDir:join(root,'a'),discovery:false,listen:'/ip4/127.0.0.1/tcp/0'});await a.start();await a.connectAddress(b.snapshot().addresses[0]);
     await until(()=>b.state.reminders?.some(r=>r.id===id));await until(()=>a.state.reminders[0].status==='pending');
     b.reminders.change(id,'accept',{dueAt:Date.now()+7200000});await until(()=>a.state.reminders[0].status==='accepted');

@@ -60,6 +60,7 @@ export class Reminders {
     if (this.records.length >= 512) throw new Error('Batas 512 pengingat tercapai. Hapus riwayat pengingat yang selesai.');
     const data = this.fields(value), to = value.to || this.peer.id;
     if (to !== this.peer.id && (!this.peer.trusted.has(to) || this.peer.trusted.get(to).reminders !== true)) throw new Error('Kontak belum mendukung pengingat. Gunakan versi Lumilan terbaru pada kedua perangkat.');
+    if (to !== this.peer.id && !this.peer.online.has(to)) throw new Error('Penerima sedang offline.');
     if (to !== this.peer.id && this.records.filter(r => r.to === to && ['queued', 'pending'].includes(r.status)).length >= 10) throw new Error('Maksimal 10 permintaan pengingat yang belum dijawab per kontak.');
     const now = this.now(), r = { ...data, id: randomUUID(), kind: to === this.peer.id ? 'local' : 'outgoing', from: this.peer.id, to,
       createdAt: now, status: to === this.peer.id ? 'scheduled' : 'queued', ...(to !== this.peer.id ? { expiresAt: Math.min(data.dueAt, now + 7 * DAY), decision: 'pending' } : {}) };

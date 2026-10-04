@@ -51,4 +51,6 @@ else
   test -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
 fi
 node scripts/smoke-ui.cjs
-for attempt in 1 2 3; do node scripts/smoke-notch.cjs; done
+repetitions="${LUMILAN_NOTCH_SMOKE_REPEATS:-3}"
+case "$repetitions" in 1|2|3) ;; *) echo 'Smoke repetitions must be 1, 2, or 3.' >&2; exit 1 ;; esac
+for ((attempt=1; attempt<=repetitions; attempt++)); do node scripts/smoke-notch.cjs; done

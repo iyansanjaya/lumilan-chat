@@ -7,6 +7,7 @@ import { copyFile } from 'node:fs/promises';
 import electronUpdater from 'electron-updater';
 import { LumilanPeer } from './peer.js';
 import { previewImage } from './preview-image.js';
+import { stageClipboardImage, inspectClipboardImage } from './clipboard-image.js';
 import { languageForRegion, languageSettings, locales, translate } from './public/i18n.js';
 import { startUpdates } from './updates.js';
 import { clearPendingDefaultStartup, enableDefaultStartup } from './startup-default.js';
@@ -43,6 +44,8 @@ let pendingThread;
 let openingThread;
 let checkUpdates = () => Promise.resolve();
 let activeUpload;
+let activeUploadDone;
+let quitWaiting = false;
 const pendingFileOffers = new Map();
 let deletingHistory = 0;
 const previewRequests = new Set();
@@ -185,6 +188,15 @@ function notifyReminder(event) {
 
 function readingWindow() {
   return !reminderBlocks.size && window && !window.isDestroyed() && window.isVisible() && !window.isMinimized() && window.isFocused();
+}
+
+function mainWindowVisible() {
+  return Boolean(window && !window.isDestroyed() && window.isVisible() && !window.isMinimized());
+}
+
+function publishWindowVisibility() {
+  if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
+    window.webContents.send('lumilan:window-visible', mainWindowVisible());
 }
 
 function updateBadge() {
@@ -452,6 +464,7 @@ if (instanceLock) app.whenReady().then(async () => {
   updateBadge();
 
   handler('state', () => peer.snapshot());
+  handler('window-visible', mainWindowVisible);
   handler('rename', name => peer.rename(name));
   handler('set-profile', value => peer.setProfile(value));
   handler('set-contact-label', (id, label) => peer.setContactLabel(id, label));
@@ -497,10 +510,14 @@ if (instanceLock) app.whenReady().then(async () => {
     peer.setThreadMuted(thread, muted);
     if (muted) dismiss(thread);
   });
-  handler('file', async (path, to) => {
+  handler('file', async (path, to, clipboardBytes) => {
+    if (quitting) throw new Error('Pengiriman dibatalkan.');
     if (activeUpload) throw new Error('Pengiriman file lain masih berlangsung.');
     const controller = new AbortController();
     activeUpload = controller;
+    let finishUpload;
+    activeUploadDone = new Promise(resolve => { finishUpload = resolve; });
+    let clipboardFile;
     let lastProgressAt = 0;
     const reportProgress = (sent, total, status) => {
       const now = Date.now();
@@ -509,11 +526,30 @@ if (instanceLock) app.whenReady().then(async () => {
       if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-progress', { sent, total, status });
     };
     try {
+      if (clipboardBytes !== undefined) {
+        if (path !== '' || typeof to !== 'string' || !to || to === 'announcements') throw new Error('Penerima atau file tidak valid.');
+        clipboardFile = await stageClipboardImage(clipboardBytes, peer.filesDir);
+        path = clipboardFile.path;
+        if (controller.signal.aborted) throw controller.signal.reason;
+      }
       return await peer.sendFilePath(path, to, { signal: controller.signal, onStatus: status => {
         if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-progress', { status });
       }, onProgress: (sent, total) => reportProgress(sent, total),
       onPreparationProgress: (sent, total) => reportProgress(sent, total, 'preparing') });
-    } finally { activeUpload = undefined; }
+    } finally {
+      try { await clipboardFile?.dispose(); }
+      catch (error) { console.warn('Gagal membersihkan staging clipboard:', error?.code || 'error'); }
+      finally { activeUpload = undefined; finishUpload(); }
+    }
+  });
+  let clipboardValidationPending = false;
+  handler('clipboard-image', async bytes => {
+    if (clipboardValidationPending) throw new Error('Pengiriman file lain masih berlangsung.');
+    clipboardValidationPending = true;
+    try {
+      const { metadata } = await inspectClipboardImage(bytes);
+      return { width: metadata.width, height: metadata.pageHeight || metadata.height, frames: metadata.pages || 1 };
+    } finally { clipboardValidationPending = false; }
   });
   handler('file-offers', () => [
     ...[...pendingFileOffers.values()].map(item => ({ ...item.offer, status: 'offered', received: 0 })),
@@ -617,6 +653,7 @@ if (instanceLock) app.whenReady().then(async () => {
   // Create the companion only when the main window first moves into the background.
   if (process.platform === 'linux') linuxScreenLock = new LinuxScreenLock(powerMonitor);
   for (const event of ['hide', 'show', 'minimize', 'restore', 'enter-full-screen', 'leave-full-screen']) window.on(event, () => notch.sync());
+  for (const event of ['hide', 'show', 'minimize', 'restore']) window.on(event, publishWindowVisibility);
   if (process.platform !== 'darwin') window.removeMenu();
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (['https://iyansanjaya.com/', 'https://trakteer.id/iyansanjaya/tip', 'https://ko-fi.com/iyansanjaya', 'https://github.com/iyansanjaya/lumilan-chat/issues'].includes(url)) {
@@ -635,6 +672,7 @@ if (instanceLock) app.whenReady().then(async () => {
     if (peer.activeCall) peer.sendCall({ action: 'end', id: peer.activeCall.id, peerId: peer.activeCall.peerId }).catch(() => {});
   });
   window.webContents.on('did-finish-load', () => {
+    publishWindowVisibility();
     if (pendingThread !== undefined) {
       window.webContents.send('lumilan:open-thread', pendingThread);
       pendingThread = undefined;
@@ -667,8 +705,14 @@ if (instanceLock) app.whenReady().then(async () => {
   app.quit();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', event => {
+  if (quitWaiting) { event.preventDefault(); return; }
   quitting = true; clearTimeout(positionSaveTimer);
+  if (activeUpload) {
+    event.preventDefault(); quitWaiting = true;
+    activeUpload.abort(new Error('Pengiriman dibatalkan.'));
+    activeUploadDone.then(() => { quitWaiting = false; app.quit(); });
+  }
   if (settingsPath && settings) { try { persistSettings(); } catch (error) { console.warn('Pengaturan tidak dapat disimpan:', error); } }
   notch?.dispose();
   linuxScreenLock?.dispose();

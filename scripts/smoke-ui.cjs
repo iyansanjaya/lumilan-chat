@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
-const { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } = require('node:fs');
+const { mkdtempSync, readdirSync, realpathSync, writeFileSync } = require('node:fs');
+const { rm } = require('node:fs/promises');
 const { createServer } = require('node:net');
 const { tmpdir } = require('node:os');
 const { basename, dirname, join, resolve } = require('node:path');
@@ -40,11 +41,13 @@ async function main() {
     env: { ...process.env, APPDATA: profile, LOCALAPPDATA: profile, ELECTRON_ENABLE_LOGGING: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  // exit can precede worker/stdio shutdown; register close before the child can exit.
+  const childClosed = new Promise(resolve => child.once('close', resolve));
   let launchError;
   child.once('error', error => { launchError = error; });
   let logs = '';
-  for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => { logs = (logs + chunk).slice(-8000); });
-  let socket;
+  for (const stream of [child.stdout, child.stderr]) stream?.on('data', chunk => { logs = (logs + chunk).slice(-8000); });
+  let socket, quit;
   let passed = false;
   try {
     let page;
@@ -133,6 +136,7 @@ async function main() {
       assert(!result.exceptionDetails, `UI inspection failed: ${result.exceptionDetails?.text}`);
       return result.result.value;
     };
+    quit = () => evaluate('setTimeout(()=>window.lumilan.quit(),100);true');
     const setViewport = async (width, height) => {
       await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
       // The CDP reply can precede resize handlers/layout. Wait for rendering, not wall-clock time.
@@ -224,13 +228,28 @@ async function main() {
       document.documentElement.dataset.theme = 'light'; document.querySelector('#create-room-button').click();
       const dialog = document.querySelector('#room-dialog'); const select = getComputedStyle(document.querySelector('#room-type'));
       const rect = dialog.getBoundingClientRect();
+      const gap = document.querySelector('#room-type').getBoundingClientRect().top - document.querySelector('label[for="room-type"]').getBoundingClientRect().bottom;
       return { open: dialog.open, right: rect.right, viewport: innerWidth, overflow: dialog.scrollWidth > dialog.clientWidth,
-        appearance: select.appearance, arrow: select.backgroundImage, paddingRight: parseFloat(select.paddingRight) }; })()`);
+        gap, appearance: select.appearance, arrow: select.backgroundImage, paddingRight: parseFloat(select.paddingRight) }; })()`);
     assert(roomLayout.open && roomLayout.right <= roomLayout.viewport && !roomLayout.overflow &&
-      roomLayout.appearance === 'none' && roomLayout.arrow !== 'none' && roomLayout.paddingRight >= 32,
+      roomLayout.gap >= 6.5 && roomLayout.appearance === 'none' && roomLayout.arrow !== 'none' && roomLayout.paddingRight >= 32,
       `Room dialog or select control is inconsistent: ${JSON.stringify(roomLayout)}`);
     const roomScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
     writeFileSync(join(dist, 'ui-audit-room-light.png'), Buffer.from(roomScreenshot.data, 'base64'));
+    await setViewport(320, 700);
+    for (const theme of ['light', 'dark']) {
+      const narrowRoom = await evaluate(`(() => {
+        document.documentElement.dataset.theme = '${theme}';
+        const label = document.querySelector('label[for="room-type"]');
+        label.textContent = 'Tipo de sala para conversar con dispositivos de la red local';
+        const input = document.querySelector('#room-type');
+        return { gap: input.getBoundingClientRect().top - label.getBoundingClientRect().bottom,
+          overflow: document.documentElement.scrollWidth > innerWidth || document.querySelector('#room-dialog').scrollWidth > document.querySelector('#room-dialog').clientWidth };
+      })()`);
+      assert(narrowRoom.gap >= 6.5 && !narrowRoom.overflow, `Room label overlaps at 320 px in ${theme}: ${JSON.stringify(narrowRoom)}`);
+    }
+    await evaluate("document.querySelector('label[for=\"room-type\"]').textContent='Jenis Ruang'");
+    await setViewport(1100, 800);
     await evaluate(`document.querySelector('#room-dialog').close(); document.documentElement.dataset.theme = 'dark';
       document.querySelector('#contact-label-dialog').showModal();
       document.querySelector('#contact-label-dialog-input').value = 'pc rdp';
@@ -255,11 +274,13 @@ async function main() {
       const results = buttons.map(button => { const rect = button.getBoundingClientRect(); const css = getComputedStyle(button);
         return { text: button.textContent.trim(), height: rect.height, left: rect.left, right: rect.right, font: parseFloat(css.fontSize) }; });
       const callRect = call.getBoundingClientRect();
-      const value = { buttons: results, callLeft: callRect.left, callRight: callRect.right, overflow: document.documentElement.scrollWidth > innerWidth };
+      const motion = call.getAnimations().map(animation => ({ timing: animation.effect.getTiming(), frames: animation.effect.getKeyframes() }));
+      const value = { buttons: results, callLeft: callRect.left, callRight: callRect.right, overflow: document.documentElement.scrollWidth > innerWidth,
+        motionSafe: motion.every(({ timing, frames }) => timing.iterations === 1 && timing.duration <= 180 && frames.every(frame => !frame.transform || frame.transform === 'none')) };
       fixture.remove();
       return value;
     })()`);
-    assert(transientControls.callLeft >= 0 && transientControls.callRight <= 320 && !transientControls.overflow &&
+    assert(transientControls.callLeft >= 0 && transientControls.callRight <= 320 && !transientControls.overflow && transientControls.motionSafe &&
       transientControls.buttons.every(button => button.height >= 38 && button.font >= 12 && button.left >= 0 && button.right <= 320),
       `Call, invitation, or file controls overflow or are too small: ${JSON.stringify(transientControls)}`);
     const dragStart = await evaluate(`(() => { const card = document.querySelector('#call-panel').getBoundingClientRect();
@@ -424,27 +445,193 @@ async function main() {
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 4, y: 4, button: 'left', clickCount: 1 });
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 4, y: 4, button: 'left', clickCount: 1 });
     assert(await evaluate("!document.querySelector('#image-dialog').open"), 'Clicking the backdrop did not close the thumbnail dialog');
-    await delay(50);
-    assert(await evaluate("!document.querySelector('#image-dialog-image').hasAttribute('src')"), 'Closed thumbnail dialog retained its image');
+    const waitPreviewRelease = () => evaluate(`new Promise(resolve => {
+      const image = document.querySelector('#image-dialog-image');
+      if (!image.hasAttribute('src')) return resolve(true);
+      const observer = new MutationObserver(() => { if (!image.hasAttribute('src')) finish(true); });
+      const timer = setTimeout(() => finish(false), 3000);
+      const finish = released => { clearTimeout(timer); observer.disconnect(); resolve(released); };
+      observer.observe(image, { attributes: true, attributeFilter: ['src'] });
+    })`, true);
+    assert(await waitPreviewRelease(), 'Closed thumbnail dialog retained its image');
     await evaluate(`document.querySelector('.message .image-preview-button').click()`);
     assert(await evaluate("document.querySelector('#image-dialog').open"), 'Thumbnail dialog could not reopen after backdrop dismissal');
+    const quickReopen = await evaluate(`new Promise(resolve => {
+      const dialog = document.querySelector('#image-dialog'), image = document.querySelector('#image-dialog-image'), src = image.getAttribute('src');
+      dialog.addEventListener('close', () => resolve({ open: dialog.open, samePreview: !!src && image.getAttribute('src') === src }), { once: true });
+      // The native close event is queued, so a new modal can precede its callback.
+      dialog.close(); dialog.showModal();
+    })`, true);
+    assert(quickReopen.open && quickReopen.samePreview, `Queued close cleared a reopened thumbnail: ${JSON.stringify(quickReopen)}`);
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     assert(await evaluate("!document.querySelector('#image-dialog').open"), 'Escape did not close the thumbnail dialog');
+    assert(await waitPreviewRelease(), 'Escape-closed thumbnail retained its image after a quick reopen');
+    const pressKey = async (key, code, windowsVirtualKeyCode) => {
+      // Enter's generated character is needed for native HTML button activation.
+      const text = key === 'Enter' ? '\r' : undefined;
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, text, unmodifiedText: text });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode });
+    };
+    const capturePolish = async name => {
+      if (process.env.LUMILAN_UI_SCREENSHOTS !== '1') return;
+      await evaluate("Promise.all(document.getAnimations().filter(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {})))", true);
+      const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
+      writeFileSync(join(dist, `ui-polish-${name}.png`), Buffer.from(shot.data, 'base64'));
+    };
+    const originalTheme = await evaluate('document.documentElement.dataset.theme');
+    await setViewport(1100, 800);
+    await evaluate(`(() => { const input = document.querySelector('#message-input'); input.value = 'AB';
+      input.setSelectionRange(1, 1); input.dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('#emoji-button').click(); })()`);
+    const emojiLayout = await evaluate(`(() => { const picker = document.querySelector('#emoji-picker');
+      const buttons = [...picker.querySelectorAll('button')], bounds = picker.getBoundingClientRect();
+      return { open: !picker.hidden, count: buttons.length, unique: new Set(buttons.map(b => b.dataset.emoji)).size,
+        accessible: picker.getAttribute('role') === 'group' && !!picker.getAttribute('aria-label') && buttons.every(b => !!b.getAttribute('aria-label')),
+        focusedFirst: document.activeElement === buttons[0], expanded: document.querySelector('#emoji-button').getAttribute('aria-expanded'),
+        scrollable: picker.scrollHeight > picker.clientHeight, overflowX: picker.scrollWidth > picker.clientWidth,
+        finiteMotion: picker.getAnimations().every(a => a.effect.getTiming().iterations === 1 && a.effect.getTiming().duration <= 180),
+        top: bounds.top, left: bounds.left, right: bounds.right, bottom: bounds.bottom }; })()`);
+    assert(emojiLayout.open && emojiLayout.count >= 64 && emojiLayout.unique === emojiLayout.count && emojiLayout.accessible &&
+      emojiLayout.focusedFirst && emojiLayout.expanded === 'true' && emojiLayout.scrollable && !emojiLayout.overflowX && emojiLayout.finiteMotion &&
+      emojiLayout.top >= 7 && emojiLayout.left >= 0 && emojiLayout.right <= 1100 && emojiLayout.bottom <= 800,
+    `Expanded emoji picker is inaccessible, clipped or not scrollable: ${JSON.stringify(emojiLayout)}`);
+    await pressKey('ArrowDown', 'ArrowDown', 40);
+    assert(await evaluate("document.activeElement === document.querySelectorAll('#emoji-picker button')[8]"), 'Emoji ArrowDown did not move one grid row');
+    await pressKey('Home', 'Home', 36);
+    assert(await evaluate("document.activeElement === document.querySelector('#emoji-picker button')"), 'Emoji Home did not return to the first choice');
+    await pressKey('End', 'End', 35);
+    const lastEmoji = await evaluate(`(() => { const picker = document.querySelector('#emoji-picker');
+      const last = picker.lastElementChild, a = last.getBoundingClientRect(), b = picker.getBoundingClientRect();
+      return { emoji: last.dataset.emoji, focused: document.activeElement === last, scroll: picker.scrollTop,
+        inside: a.top >= b.top && a.bottom <= b.bottom + 1 }; })()`);
+    assert(lastEmoji.focused && lastEmoji.scroll > 0 && lastEmoji.inside, `Last emoji is unreachable: ${JSON.stringify(lastEmoji)}`);
+    const emojiMessageCount = await evaluate("document.querySelectorAll('#messages .message').length");
+    await pressKey('Enter', 'Enter', 13);
+    const insertedEmoji = await evaluate(`(() => { const input = document.querySelector('#message-input');
+      return { value: input.value, caret: input.selectionStart, focused: document.activeElement === input,
+        closed: document.querySelector('#emoji-picker').hidden, expanded: document.querySelector('#emoji-button').getAttribute('aria-expanded'),
+        count: document.querySelectorAll('#messages .message').length }; })()`);
+    assert(insertedEmoji.value === `A${lastEmoji.emoji}B` && insertedEmoji.caret === 1 + lastEmoji.emoji.length &&
+      insertedEmoji.focused && insertedEmoji.closed && insertedEmoji.expanded === 'false' && insertedEmoji.count === emojiMessageCount,
+    `Choosing an emoji altered the caret, sent a message or left the picker open: ${JSON.stringify(insertedEmoji)}`);
+    await evaluate("document.querySelector('#emoji-button').click()");
+    await pressKey('Escape', 'Escape', 27);
+    assert(await evaluate("document.querySelector('#emoji-picker').hidden && document.activeElement === document.querySelector('#emoji-button')"),
+      'Emoji Escape did not close and restore trigger focus');
+    await evaluate("document.querySelector('#emoji-button').click()");
+    await setViewport(320, 480);
+    const shortEmoji = await evaluate(`(() => { const picker = document.querySelector('#emoji-picker'), r = picker.getBoundingClientRect();
+      return { open: !picker.hidden, top: r.top, bottom: r.bottom, left: r.left, right: r.right,
+        scrollable: picker.scrollHeight > picker.clientHeight, overflow: document.documentElement.scrollWidth > innerWidth }; })()`);
+    assert(shortEmoji.open && shortEmoji.top >= 7 && shortEmoji.bottom <= 480 && shortEmoji.left >= 0 && shortEmoji.right <= 320 &&
+      shortEmoji.scrollable && !shortEmoji.overflow, `Emoji picker escaped after resizing: ${JSON.stringify(shortEmoji)}`);
+    await pressKey('Escape', 'Escape', 27);
+    await evaluate("document.querySelector('#message-input').value = ''; document.querySelector('#message-input').dispatchEvent(new Event('input', { bubbles: true }))");
+
+    for (const theme of ['light', 'dark']) {
+      await evaluate(`document.documentElement.dataset.theme = '${theme}'`);
+      for (const [width, height] of [[1100, 800], [375, 812], [320, 700]]) {
+        await setViewport(width, height);
+        await evaluate("document.querySelector('#settings-dialog').showModal()");
+        const settingsSpacing = await evaluate(`(() => { const dialog = document.querySelector('#settings-dialog'), form = document.querySelector('#profile-form');
+          const a = dialog.getBoundingClientRect(), b = form.getBoundingClientRect(), s = getComputedStyle(dialog);
+          return { left: b.left - a.left, right: a.right - b.right, gutter: dialog.offsetWidth - dialog.clientWidth - parseFloat(s.borderLeftWidth) - parseFloat(s.borderRightWidth),
+            scrollable: dialog.scrollHeight > dialog.clientHeight, overflow: dialog.scrollWidth > dialog.clientWidth,
+            inside: a.left >= 0 && a.right <= innerWidth }; })()`);
+        assert(settingsSpacing.inside && !settingsSpacing.overflow && settingsSpacing.scrollable &&
+          Math.abs(settingsSpacing.left - settingsSpacing.right) <= 1 && Math.abs(settingsSpacing.left - 29) <= 1 &&
+          Math.abs(settingsSpacing.right - 29) <= 1 && Math.abs(settingsSpacing.gutter - 9) <= 1,
+        `Settings padding/scrollbar is asymmetric (${theme}, ${width}px): ${JSON.stringify(settingsSpacing)}`);
+        if (width !== 375) await capturePolish(`settings-${theme}-${width}`);
+        await evaluate("document.querySelector('#settings-dialog').close()");
+      }
+      await setViewport(1100, 800);
+      await pressKey('Tab', 'Tab', 9);
+      await evaluate("document.querySelector('#message-input').focus()");
+      await evaluate("Promise.all(document.getAnimations().filter(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {})))", true);
+      const borders = await evaluate(`(() => {
+        const luminance = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number).map(n => n / 255)
+          .map(n => n <= .04045 ? n / 12.92 : ((n + .055) / 1.055) ** 2.4).reduce((sum, n, i) => sum + n * [.2126, .7152, .0722][i], 0);
+        const contrast = (a, b) => (Math.max(luminance(a), luminance(b)) + .05) / (Math.min(luminance(a), luminance(b)) + .05);
+        const input = document.querySelector('#message-input'), inputStyle = getComputedStyle(input), focus = getComputedStyle(input.closest('.composer'));
+        // Resolve the 2px target in the same native DPI/zoom context as the UI.
+        const probe = document.createElement('span'); probe.style.cssText = 'position:fixed;visibility:hidden;outline:2px solid';
+        document.body.append(probe); const targetWidth = parseFloat(getComputedStyle(probe).outlineWidth); probe.remove();
+        const typedWidth = input.closest('.composer').computedStyleMap?.().get('outline-width')?.value;
+        const surface = getComputedStyle(document.querySelector('.conversation-header')).backgroundColor, chat = getComputedStyle(document.querySelector('.conversation')).backgroundColor;
+        const own = getComputedStyle(document.querySelector('.message.own .bubble'));
+        const selected = getComputedStyle(document.querySelector('#notes-button'));
+        const borderRgb = own.borderTopColor.match(/[\\d.]+/g).slice(0, 3).map(Number);
+        return { visibleFocus: input.matches(':focus-visible'), focusWidth: parseFloat(focus.outlineWidth), targetWidth, typedWidth, dpr: devicePixelRatio,
+          focusSurface: contrast(focus.outlineColor, surface), focusChat: contrast(focus.outlineColor, chat),
+          selection: contrast(selected.borderTopColor, selected.backgroundColor), outgoing: contrast(own.borderTopColor, own.backgroundColor),
+          outgoingNearWhite: borderRgb.every(n => n > 220), inputTransitions: inputStyle.transitionDuration.split(',').map(parseFloat),
+          inputProperties: inputStyle.transitionProperty.split(',').map(s => s.trim()) }; })()`);
+      assert(borders.visibleFocus && borders.targetWidth > 0 && borders.focusWidth + .01 >= borders.targetWidth &&
+        borders.focusSurface >= 3 && borders.focusChat >= 3 &&
+        borders.selection >= 3 && borders.outgoing >= 2 && (theme !== 'dark' || !borders.outgoingNearWhite) &&
+        borders.inputTransitions.every(seconds => seconds <= .18) && borders.inputProperties.every(property => ['color', 'background-color', 'border-color', 'outline-color'].includes(property)),
+      `Focus/selection/outgoing contrast or transitions failed (${theme}): ${JSON.stringify(borders)}`);
+      console.log(`UI focus (${theme}): ${JSON.stringify({ resolvedWidth: borders.focusWidth, target2px: borders.targetWidth, typedWidth: borders.typedWidth, dpr: borders.dpr })}`);
+      await capturePolish(`chat-${theme}`);
+      await evaluate("document.querySelector('#emoji-button').click()");
+      await capturePolish(`emoji-${theme}`);
+      await pressKey('Escape', 'Escape', 27);
+    }
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+    await evaluate("document.querySelector('#emoji-button').click(); document.querySelector('#settings-dialog').showModal()");
+    const reducedMotion = await evaluate(`(() => {
+      const controls = ['#emoji-picker', '#emoji-button', '#message-input', '#settings-dialog', '#call-panel'].map(selector => getComputedStyle(document.querySelector(selector)));
+      const backdrop = getComputedStyle(document.querySelector('#settings-dialog'), '::backdrop');
+      const animations = document.getAnimations().filter(animation => animation.playState === 'running').map(animation => ({
+        name: animation.animationName || animation.transitionProperty || animation.constructor.name,
+        target: animation.effect?.target?.id || animation.effect?.target?.tagName || animation.effect?.target?.constructor.name,
+        pseudo: animation.effect?.pseudoElement, timing: animation.effect?.getTiming() }));
+      return { styles: controls.every(style => style.animationName === 'none' && style.transitionDuration.split(',').every(time => parseFloat(time) === 0)),
+        backdrop: backdrop.animationName === 'none' && backdrop.transitionDuration.split(',').every(time => parseFloat(time) === 0),
+        running: animations.length, animations }; })()`);
+    assert(reducedMotion.styles && reducedMotion.backdrop && reducedMotion.running === 0, `Reduced motion still animates UI: ${JSON.stringify(reducedMotion)}`);
+    await evaluate("document.querySelector('#settings-dialog').close(); document.querySelector('#emoji-button').click()");
+    await send('Emulation.setEmulatedMedia', { features: [] });
+    await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(originalTheme)}`);
+    await delay(300);
+    assert.equal(await evaluate("document.getAnimations().filter(animation => animation.playState === 'running').length"), 0, 'Closed UI controls animate while idle');
+    await send('Performance.enable');
+    const idleBefore = Object.fromEntries((await send('Performance.getMetrics')).metrics.map(metric => [metric.name, metric.value]));
+    await delay(1000);
+    const idleAfter = Object.fromEntries((await send('Performance.getMetrics')).metrics.map(metric => [metric.name, metric.value]));
+    const idleHeap = idleAfter.JSHeapUsedSize / 1024 / 1024, idleTasks = idleAfter.TaskDuration - idleBefore.TaskDuration;
+    assert(Number.isFinite(idleHeap) && Number.isFinite(idleTasks) && idleHeap <= 96 && idleTasks <= .25,
+      `Renderer idle budget exceeded: ${JSON.stringify({ jsHeapMiB: idleHeap, taskSeconds: idleTasks })}`);
+    console.log(`UI polish: scrollable accessible emoji, symmetric Settings, focus/selection contrast and reduced motion passed; idle renderer JS heap ${idleHeap.toFixed(2)} MiB, task time ${idleTasks.toFixed(3)} s/1 s`);
     assert.equal(failures.length, 0, `Renderer errors: ${failures.join('; ')}`);
     passed = true;
     console.log('Packaged UI rendered: welcome, chat, details, settings, room, contact dialog, call, avatar, animated GIF preview, and older-message reactions without scroll jumps');
+  } catch (error) {
+    console.error('UI smoke failure:', error);
+    throw error;
   } finally {
     if (!passed) console.error(logs);
+    if (child.exitCode === null && child.signalCode === null && quit) {
+      await quit().catch(() => {});
+      await Promise.race([childClosed, delay(5000)]);
+    }
     socket?.close();
     if (child.exitCode === null && child.signalCode === null) {
-      const stopped = new Promise(resolve => child.once('exit', resolve));
       child.kill();
-      await Promise.race([stopped, delay(5000)]);
+    }
+    try { await bounded(childClosed, 10_000, 'Application process or stdio did not close before profile cleanup'); }
+    catch (error) {
+      console.error('Smoke shutdown state:', { pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode,
+        stdoutClosed: child.stdout?.closed, stderrClosed: child.stderr?.closed });
+      if (passed) console.error(logs);
+      child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
+      throw error;
     }
     assert.equal(dirname(profile), tempRoot);
     assert(basename(profile).startsWith('lumilan-ui-smoke-'));
-    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 }
 

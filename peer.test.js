@@ -1,16 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer, connect } from 'node:net';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { generateKeyPair } from '@libp2p/crypto/keys';
 import { peerIdFromPrivateKey } from '@libp2p/peer-id';
 import { multiaddr } from '@multiformats/multiaddr';
 import { LanDiscovery, lanInterfaces } from './discovery.js';
 import { LumilanPeer } from './peer.js';
+import { stageClipboardImage } from './clipboard-image.js';
+import sharp from 'sharp';
 
 async function until(predicate, timeout = 5000) {
   const deadline = Date.now() + timeout;
@@ -19,6 +21,54 @@ async function until(predicate, timeout = 5000) {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
 }
+
+test('startup recovery removes only owned clipboard stages and never follows directory links', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-clipboard-recovery-'));
+  let next;
+  t.after(async () => {
+    await next?.stop();
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+  const options = { dataDir: join(root, 'profile'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' };
+  const previous = new LumilanPeer(options);
+  mkdirSync(previous.filesDir, { recursive: true, mode: 0o700 });
+  const png = await sharp({ create: { width: 8, height: 8, channels: 4, background: '#ffd36d' } }).png().toBuffer();
+  const staged = await stageClipboardImage(png, previous.filesDir);
+  assert.deepEqual(readFileSync(staged.path), png);
+  const unrelated = ['.clipboard-', '.clipboard-ABCDE', '.clipboard-ABCDEFG', '.clipboard-ABC_12', 'lumilan-clipboard-ABC123'];
+  for (const name of unrelated) {
+    mkdirSync(join(previous.filesDir, name));
+    writeFileSync(join(previous.filesDir, name, 'keep.txt'), 'unrelated');
+  }
+  writeFileSync(join(previous.filesDir, '.clipboard-FILE12'), 'regular file is not a stage');
+  const external = join(root, 'outside');
+  mkdirSync(external);
+  writeFileSync(join(external, 'keep.txt'), 'outside private file root');
+  const link = join(previous.filesDir, '.clipboard-LINK12');
+  try {
+    symlinkSync(external, link, process.platform === 'win32' ? 'junction' : 'dir');
+    symlinkSync(external, join(dirname(staged.path), 'outside-link'), process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  catch (error) {
+    if (!['EPERM', 'EACCES', 'ENOSYS'].includes(error.code)) throw error;
+    t.diagnostic(`Directory link unavailable: ${error.code}`);
+  }
+  next = new LumilanPeer(options);
+  await next.start();
+  assert(!existsSync(staged.path), 'Previous process clipboard stage survived recovery');
+  assert(!existsSync(link), 'Recovery left an owned directory link');
+  assert.equal(readFileSync(join(external, 'keep.txt'), 'utf8'), 'outside private file root');
+  assert.equal(readFileSync(join(next.filesDir, '.clipboard-FILE12'), 'utf8'), 'regular file is not a stage');
+  for (const name of unrelated) assert.equal(readFileSync(join(next.filesDir, name, 'keep.txt'), 'utf8'), 'unrelated');
+  const liveStage = await stageClipboardImage(png, next.filesDir);
+  await next.stop();
+  await next.start();
+  assert.deepEqual(readFileSync(liveStage.path), png, 'Network rebind removed a live clipboard stage');
+  await next.stop();
+  next = new LumilanPeer(options);
+  await next.start();
+  assert(!existsSync(liveStage.path), 'A fresh peer instance failed to recover an orphan stage');
+});
 
 test('persetujuan file yang gagal disiapkan mengakhiri kartu transfer penerima', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lumilan-consent-failure-'));

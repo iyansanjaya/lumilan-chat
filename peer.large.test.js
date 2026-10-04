@@ -19,7 +19,12 @@ test('file tepat 5 GB berhasil dikirim dan diverifikasi', { skip: process.env.LU
     writeFileSync(source, '');
     truncateSync(source, 5 * 1024 ** 3);
     let progress = 0;
-    const result = await a.sendFilePath(source, b.id, { onProgress: sent => { progress = sent; } });
+    let reported = -1;
+    const result = await a.sendFilePath(source, b.id, { onProgress: sent => {
+      progress = sent;
+      const percent = Math.floor(sent / (5 * 1024 ** 3) * 10) * 10;
+      if (percent > reported) { reported = percent; console.log(`5 GB transfer: ${percent}%`); }
+    } });
     assert.equal(result.delivered, 1);
     assert.equal(progress, 5 * 1024 ** 3);
     assert.equal(statSync(b.filePath(result.message.id).path).size, 5 * 1024 ** 3);

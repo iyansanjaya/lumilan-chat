@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statfsSync, writeFileSync } from 'node:fs';
-import { open, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { open, readFile, rename, rm, stat, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createLibp2p } from 'libp2p';
 import { generateKeyPair, privateKeyFromProtobuf, privateKeyToProtobuf } from '@libp2p/crypto/keys';
@@ -146,8 +146,15 @@ export class LumilanPeer extends EventEmitter {
 
   async start() {
     mkdirSync(this.filesDir, { recursive: true, mode: 0o700 });
-    for (const name of readdirSync(this.filesDir)) if (/^\.(?:upload|outgoing)-[0-9a-f-]{36}\.part$/.test(name) || /^[0-9a-f-]{36}\.thumb\.webp\.\d+\.tmp$/.test(name)) {
-      await unlink(join(this.filesDir, name)).catch(error => console.warn('Gagal membersihkan transfer lama:', error));
+    for (const entry of readdirSync(this.filesDir, { withFileTypes: true })) {
+      // Only a fresh instance recovers clipboard stages; network rebind must preserve live uploads.
+      if (!this.identity && /^\.clipboard-[A-Za-z0-9]{6}$/.test(entry.name) && (entry.isDirectory() || entry.isSymbolicLink())) {
+        // rm removes a symlink itself; recovery never traverses its target.
+        await rm(join(this.filesDir, entry.name), { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
+          .catch(error => console.warn('Gagal membersihkan gambar clipboard lama:', error));
+      } else if (/^\.(?:upload|outgoing)-[0-9a-f-]{36}\.part$/.test(entry.name) || /^[0-9a-f-]{36}\.thumb\.webp\.\d+\.tmp$/.test(entry.name)) {
+        await unlink(join(this.filesDir, entry.name)).catch(error => console.warn('Gagal membersihkan transfer lama:', error));
+      }
     }
     if (existsSync(this.path)) this.state = JSON.parse(readFileSync(this.path, 'utf8'));
     this.state.unread ||= {};

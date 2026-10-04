@@ -1,7 +1,22 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+function clipboardBytes(file) {
+  // Use isolated-world Blob accessors, not attributes/methods supplied by the renderer.
+  const type = Object.getOwnPropertyDescriptor(Blob.prototype, 'type').get.call(file);
+  const size = Object.getOwnPropertyDescriptor(Blob.prototype, 'size').get.call(file);
+  if (!/^image\/(png|jpeg|webp|gif)$/.test(type) || !size || size > 20 * 1024 * 1024)
+    throw new Error('Gambar clipboard harus berukuran 1 B–20 MB.');
+  return Blob.prototype.arrayBuffer.call(file);
+}
+
 contextBridge.exposeInMainWorld('lumilan', {
   state: () => ipcRenderer.invoke('lumilan:state'),
+  windowVisible: () => ipcRenderer.invoke('lumilan:window-visible'),
+  onWindowVisible: callback => {
+    const listener = (_event, visible) => { if (typeof visible === 'boolean') callback(visible); };
+    ipcRenderer.on('lumilan:window-visible', listener);
+    return () => ipcRenderer.removeListener('lumilan:window-visible', listener);
+  },
   reminders: () => ipcRenderer.invoke('lumilan:reminders'),
   onReminder: callback => {
     const listener=(_event,value)=>callback(value);
@@ -52,7 +67,14 @@ contextBridge.exposeInMainWorld('lumilan', {
   setAnnouncements: enabled => ipcRenderer.invoke('lumilan:set-announcements', enabled),
   muteAnnouncementsFrom: (id, muted) => ipcRenderer.invoke('lumilan:mute-announcements-from', id, muted),
   setThreadMuted: (thread, muted) => ipcRenderer.invoke('lumilan:set-thread-muted', thread, muted),
-  file: (file, to) => ipcRenderer.invoke('lumilan:file', webUtils.getPathForFile(file), to),
+  file: async (file, to) => {
+    const path = webUtils.getPathForFile(file);
+    if (path) return ipcRenderer.invoke('lumilan:file', path, to);
+    return ipcRenderer.invoke('lumilan:file', '', to, await clipboardBytes(file));
+  },
+  clipboardImage: async file => {
+    return ipcRenderer.invoke('lumilan:clipboard-image', await clipboardBytes(file));
+  },
   cancelFile: () => ipcRenderer.invoke('lumilan:cancel-file'),
   fileOffers: () => ipcRenderer.invoke('lumilan:file-offers'),
   decideFile: (id, accepted) => ipcRenderer.invoke('lumilan:decide-file', id, accepted),

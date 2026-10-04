@@ -36,7 +36,7 @@ async function connect(url, failures, page = true) {
     pending.clear();
   });
   const send = (method, params = {}) => new Promise((resolve, reject) => {
-    const number = ++id; const timer = setTimeout(() => { pending.delete(number); reject(new Error(`${method} timed out: ${(params.expression || '').slice(0, 160)}`)); }, 15000);
+    const number = ++id; const timer = setTimeout(() => { pending.delete(number); reject(new Error(`${method} timed out: ${(params.expression || '').slice(0, 160)}`)); }, 30000);
     pending.set(number, { resolve, reject, timer }); socket.send(JSON.stringify({ id: number, method, params }));
   });
   const evaluate = async expression => {
@@ -44,7 +44,12 @@ async function connect(url, failures, page = true) {
     assert(!result.exceptionDetails, JSON.stringify(result.exceptionDetails)); return result.result.value;
   };
   if (page) { await send('Runtime.enable'); await send('Log.enable'); }
-  return { send, evaluate, close: () => { for (const p of pending.values()) { clearTimeout(p.timer); p.reject(new Error('Debugger closed')); } socket.close(); } };
+  return { send, evaluate, close: () => {
+    for (const p of pending.values()) { clearTimeout(p.timer); p.reject(new Error('Debugger closed')); }
+    if(socket.readyState===WebSocket.CLOSED)return Promise.resolve();
+    const closed=new Promise(resolve=>socket.addEventListener('close',resolve,{once:true}));socket.close();
+    return closed;
+  } };
 }
 
 async function main() {
@@ -80,7 +85,10 @@ async function main() {
     appPage = await connect(pages.find(p => p.url === 'lumilan://app/index.html').webSocketDebuggerUrl, failures);
     const inspectPages = await (await fetch(`http://127.0.0.1:${inspectorPort}/json/list`)).json();
     browser = await connect(inspectPages[0].webSocketDebuggerUrl, failures, false);
-    await browser.evaluate(`globalThis.smokeElectron=process.getBuiltinModule('module').createRequire(${JSON.stringify(join(root,'package.json'))})('electron'); globalThis.smokeMain=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/index.html')`);
+    await browser.evaluate(`globalThis.smokeElectron=process.getBuiltinModule('module').createRequire(${JSON.stringify(join(root,'package.json'))})('electron');true`);
+    // DevTools can advertise the page before the native window URL converges.
+    await until(() => browser.evaluate("(()=>{const main=smokeElectron.BrowserWindow.getAllWindows().find(w=>!w.isDestroyed()&&!w.webContents.isDestroyed()&&w.webContents.getURL()==='lumilan://app/index.html');if(!main)return false;globalThis.smokeMain=main;return true;})()"),
+      'native main window with exact application URL', 30000);
     await browser.evaluate("globalThis.smokeLocked=false;smokeElectron.powerMonitor.on('lock-screen',()=>smokeLocked=true);smokeElectron.powerMonitor.on('unlock-screen',()=>smokeLocked=false)");
     // CI has no microphone/TCC interaction. Exercise real WebRTC with fake devices;
     // the signed package's audio entitlement is verified separately in the workflow.
@@ -95,6 +103,112 @@ async function main() {
     console.log('Notch smoke: main renderer ready');
     await appPage.evaluate("document.querySelector('#language-select').value='id'; document.querySelector('#language-select').dispatchEvent(new Event('change'))");
     await until(() => appPage.evaluate("window.lumilan.notificationSettings().then(s=>s.language==='id')"), 'Indonesian language');
+    // Native OS clipboard -> Chromium paste -> sandboxed preload -> validated
+    // file path -> Personal notes. Preserve the user's clipboard, never log it.
+    const clipboardPng=await require('sharp')({create:{width:24,height:16,channels:4,background:'#ffd36d'}}).png().toBuffer();
+    await browser.evaluate("(async()=>{globalThis.savedClipboard=[];for(const item of await smokeElectron.clipboard.read()){const data={};for(const type of item.types)data[type]=await item.getType(type);if(Object.keys(data).length)savedClipboard.push(new smokeElectron.ClipboardItem(data));}})()");
+    try {
+      await appPage.evaluate("document.getElementById('notes-button').click();document.getElementById('message-input').value='9. First item';document.getElementById('message-input').focus();document.getElementById('message-input').setSelectionRange(13,13)");
+      await appPage.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+      await appPage.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+      assert.equal(await appPage.evaluate("document.getElementById('message-input').value"),'9. First item\n10. ','Enter did not continue list');
+      await appPage.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+      await appPage.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+      assert.equal(await appPage.evaluate("document.getElementById('message-input').value"),'9. First item\n','Empty list item did not end list');
+      await appPage.evaluate("document.getElementById('message-input').value='';document.getElementById('message-input').dispatchEvent(new Event('input',{bubbles:true}))");
+      await browser.evaluate(`(async()=>{await smokeElectron.clipboard.write([new smokeElectron.ClipboardItem({'image/png':new Blob([Buffer.from('${clipboardPng.toString('base64')}','base64')],{type:'image/png'})})]);smokeMain.webContents.paste()})()`);
+      await until(()=>appPage.evaluate("!document.getElementById('clipboard-preview').hidden && document.getElementById('clipboard-thumbnail').naturalWidth===24"),'native clipboard image preview');
+      const notesBefore=await appPage.evaluate("window.lumilan.state().then(s=>s.messages.filter(m=>m.note&&m.kind==='file').length)");
+      assert.equal(notesBefore,0,'Pasting transmitted image before Send');
+      await appPage.evaluate("document.getElementById('message-form').requestSubmit()");
+      await until(()=>appPage.evaluate("window.lumilan.state().then(s=>s.messages.some(m=>m.note&&m.kind==='file'))"),'pasted image stored through file pipeline');
+      await until(()=>appPage.evaluate("document.getElementById('clipboard-preview').hidden"),'sent clipboard preview released');
+      await assert.rejects(appPage.evaluate("window.lumilan.file(new File(['<svg/>'],'image.svg',{type:'image/svg+xml'}),'notes')"));
+      await assert.rejects(appPage.evaluate("window.lumilan.clipboardImage(new File(['<svg/>'],'fake.png',{type:'image/png'}))"));
+      await assert.rejects(appPage.evaluate("window.lumilan.clipboardImage(new File([new Uint8Array(20*1024*1024+1)],'oversize.png',{type:'image/png'}))"));
+      await assert.rejects(appPage.evaluate("globalThis.fakeClipboardRead=false;window.lumilan.clipboardImage({type:'image/png',size:1,arrayBuffer:()=>{globalThis.fakeClipboardRead=true;throw new Error('Untrusted file method executed')}})"));
+      assert.equal(await appPage.evaluate('fakeClipboardRead'),false,'Preload trusted a forged Blob method');
+      console.log('Native clipboard image preview/send, unsafe image rejection and list Enter behavior passed');
+      // Keep races deterministic in the packaged process. These inspector-only
+      // holds preserve real Sharp decoding and note storage after release.
+      const replacementPng=await require('sharp')({create:{width:31,height:17,channels:4,background:'#4169e1'}}).png().toBuffer();
+      const pasteFixture=(name,bytes=clipboardPng,type='image/png')=>appPage.evaluate(`{const data=new DataTransfer();data.items.add(new File([Uint8Array.from(atob('${bytes.toString('base64')}'),c=>c.charCodeAt(0))],${JSON.stringify(name)},{type:${JSON.stringify(type)}}));document.getElementById('message-input').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));}`);
+      const holdDecode=()=>browser.evaluate(`(async()=>{
+        // Sharp 0.35 has separate import/require factories. Production imports
+        // its ESM entry; hooking the CJS prototype would leave decoding running.
+        const path=process.getBuiltinModule('path');
+        const entry=process.getBuiltinModule('module').createRequire(path.join(smokeElectron.app.getAppPath(),'package.json')).resolve('sharp');
+        const moduleUrl=process.getBuiltinModule('url').pathToFileURL(path.join(path.dirname(entry),'index.mjs')).href;
+        const vm=process.getBuiltinModule('vm');
+        globalThis.smokeClipboardSharp=(await vm.runInThisContext('import('+JSON.stringify(moduleUrl)+')',{importModuleDynamically:vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER})).default;
+        globalThis.smokeOriginalClipboardStats=smokeClipboardSharp.prototype.stats;
+        globalThis.smokeClipboardDecodeHeld=false;
+        smokeClipboardSharp.prototype.stats=function(...args){
+          const image=this, original=smokeOriginalClipboardStats;
+          smokeClipboardSharp.prototype.stats=original;
+          smokeClipboardDecodeHeld=true;
+          let work;
+          return new Promise(resolve=>{globalThis.smokeReleaseClipboardDecode=()=>{
+            if(!work){work=Promise.resolve().then(()=>original.apply(image,args)).finally(()=>{smokeClipboardDecodeHeld=false});resolve(work)}
+            return work;
+          }});
+        };
+      })()`);
+      const decodeHeld=()=>until(()=>browser.evaluate('smokeClipboardDecodeHeld'), 'clipboard decoder held');
+      const releaseDecode=async()=>{
+        await browser.evaluate('(async()=>{await smokeReleaseClipboardDecode();return true})()');
+        await appPage.evaluate('window.lumilan.state()');
+      };
+      const previewWidth=width=>until(()=>appPage.evaluate(`!document.getElementById('clipboard-preview').hidden&&document.getElementById('clipboard-thumbnail').naturalWidth===${width}`),'clipboard replacement preview');
+      await holdDecode();await pasteFixture('first.png');await decodeHeld();
+      await pasteFixture('replacement.png',replacementPng);
+      await pasteFixture('invalid.svg',Buffer.from('<svg/>'),'image/svg+xml');
+      await releaseDecode();await previewWidth(31);
+      const replacementUrl=await appPage.evaluate("document.getElementById('clipboard-thumbnail').src");
+      await appPage.evaluate("document.getElementById('toast').textContent=''");
+      await pasteFixture('corrupt.png',Buffer.from('<svg/>'));
+      await until(()=>appPage.evaluate("document.getElementById('toast').textContent.includes('tidak valid')"),'invalid replacement rejected');
+      assert.equal(await appPage.evaluate("document.getElementById('clipboard-thumbnail').src"),replacementUrl,'Failed replacement discarded the existing draft');
+      await holdDecode();await pasteFixture('pending.png');await decodeHeld();
+      await pasteFixture('queued.png',replacementPng);
+      await appPage.evaluate("document.getElementById('clipboard-remove').click()");
+      await releaseDecode();
+      assert.equal(await appPage.evaluate("document.getElementById('clipboard-preview').hidden&&!document.getElementById('clipboard-thumbnail').hasAttribute('src')"),true,'Remove resurrected a pending clipboard draft');
+      await pasteFixture('sending.png');await previewWidth(24);
+      await browser.evaluate(`(async()=>{
+        const moduleUrl=process.getBuiltinModule('url').pathToFileURL(process.getBuiltinModule('path').join(smokeElectron.app.getAppPath(),'peer.js')).href;
+        const vm=process.getBuiltinModule('vm');
+        globalThis.smokeClipboardPeerPrototype=(await vm.runInThisContext('import('+JSON.stringify(moduleUrl)+')',{importModuleDynamically:vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER})).LumilanPeer.prototype;
+        globalThis.smokeOriginalNotesSave=smokeClipboardPeerPrototype.saveNoteFilePath;
+        globalThis.smokeNotesSaveHeld=false;
+        smokeClipboardPeerPrototype.saveNoteFilePath=function(...args){
+          const peer=this, original=smokeOriginalNotesSave;
+          smokeClipboardPeerPrototype.saveNoteFilePath=original;
+          smokeNotesSaveHeld=true;
+          let work;
+          return new Promise(resolve=>{globalThis.smokeReleaseNotesSave=()=>{
+            if(!work){work=Promise.resolve().then(()=>original.apply(peer,args)).finally(()=>{smokeNotesSaveHeld=false});resolve(work)}
+            return work;
+          }});
+        };
+      })()`);
+      await appPage.evaluate("document.getElementById('message-form').requestSubmit()");
+      await until(()=>browser.evaluate('smokeNotesSaveHeld'),'clipboard note storage held');
+      await holdDecode();await pasteFixture('next.png',replacementPng);await decodeHeld();
+      await browser.evaluate('(async()=>{await smokeReleaseNotesSave();return true})()');
+      await until(()=>appPage.evaluate("!document.getElementById('send-button').disabled&&document.getElementById('clipboard-preview').hidden"),'previous Send cleanup');
+      await releaseDecode();await previewWidth(31);
+      await appPage.evaluate("document.getElementById('clipboard-remove').click()");
+      console.log('Clipboard latest-paste queue, invalid replacement, Remove cancellation and Send/paste overlap passed');
+    } finally {
+      await browser.evaluate(`(async()=>{
+        if(globalThis.smokeClipboardSharp&&globalThis.smokeOriginalClipboardStats)smokeClipboardSharp.prototype.stats=smokeOriginalClipboardStats;
+        if(globalThis.smokeClipboardPeerPrototype&&globalThis.smokeOriginalNotesSave)smokeClipboardPeerPrototype.saveNoteFilePath=smokeOriginalNotesSave;
+        await globalThis.smokeReleaseClipboardDecode?.();await globalThis.smokeReleaseNotesSave?.();
+        for(const key of ['smokeClipboardSharp','smokeOriginalClipboardStats','smokeClipboardDecodeHeld','smokeReleaseClipboardDecode','smokeClipboardPeerPrototype','smokeOriginalNotesSave','smokeNotesSaveHeld','smokeReleaseNotesSave'])delete globalThis[key];
+      })()`);
+      await browser.evaluate("(async()=>{if(savedClipboard.length)await smokeElectron.clipboard.write(savedClipboard);else smokeElectron.clipboard.clear();delete globalThis.savedClipboard})()");
+    }
     await appPage.evaluate("window.lumilan.setNotificationSettings({enabled:true,preview:true,silent:true,background:true,notch:true})");
     assert.equal(await browser.evaluate("smokeElectron.BrowserWindow.getAllWindows().some(w=>w.webContents.getURL()==='lumilan://app/notch.html')"), false, 'Notch allocated a renderer before it was needed');
     const appState = await appPage.evaluate('window.lumilan.state()');
@@ -105,11 +219,240 @@ async function main() {
     await third.start(); third.rename('Citra LAN'); await third.connectAddress(appState.addresses[0]);
     console.log('Notch smoke: peer connected');
     await until(() => appPage.evaluate(`window.lumilan.state().then(s=>s.peers.some(p=>p.id===${JSON.stringify(peer.id)}))`), 'encrypted peer connected');
+    // Real peer presence drives the renderer; no fake snapshots or UI test bridge.
+    const originalPeerProfile = { name: peer.state.name, status: peer.state.status, about: peer.state.about, avatar: peer.state.avatar };
+    const originalUiTheme = await appPage.evaluate('document.documentElement.dataset.theme');
+    const personSelector = `.person[data-peer="${peer.id}"]`;
+    const rowExpression = `document.querySelector(${JSON.stringify(personSelector)})`;
+    const presenceCommands = [];
+    const recordPresenceCommand = command => {
+      presenceCommands.push({ at: Date.now(), ...command });
+      if (presenceCommands.length > 20) presenceCommands.shift();
+    };
+    const waitUiAnimations = () => appPage.evaluate("Promise.all(document.getAnimations().filter(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})))");
+    const changeMainLanguage = async language => {
+      await appPage.evaluate(`document.getElementById('language-select').value=${JSON.stringify(language)};document.getElementById('language-select').dispatchEvent(new Event('change'))`);
+      await until(() => appPage.evaluate(`document.documentElement.lang===${JSON.stringify(language)}`), `main ${language} labels`);
+    };
+    const mainViewport = async (width, height) => {
+      await appPage.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+      await appPage.evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+    };
+    const tooltipState = () => appPage.evaluate(`(()=>{const row=${rowExpression},tip=document.getElementById('presence-tooltip'),r=tip.getBoundingClientRect();
+      return {visible:!tip.hidden,text:tip.textContent,role:tip.getAttribute('role'),position:getComputedStyle(tip).position,
+        described:row?.getAttribute('aria-describedby'),bindings:document.querySelectorAll('[aria-describedby="presence-tooltip"]').length,
+        focused:document.activeElement===row,clamped:r.left>=7&&r.top>=7&&r.right<=innerWidth-7&&r.bottom<=innerHeight-7};})()`);
+    let lastPresencePointer;
+    const presenceDiagnostics = async () => {
+      const [native, renderer] = await Promise.all([
+        browser.evaluate("({visible:smokeMain.isVisible(),focused:smokeMain.isFocused(),minimized:smokeMain.isMinimized(),bounds:smokeMain.getBounds(),events:globalThis.smokePresenceNativeTrace?.slice(-20)})"),
+        appPage.evaluate(`(()=>{const describe=element=>({id:element?.id,tag:element?.tagName,peer:element?.closest?.('.person[data-peer]')?.dataset.peer});
+          const point=${JSON.stringify(lastPresencePointer || null)},row=${rowExpression},r=row?.getBoundingClientRect();
+          return{documentFocused:document.hasFocus(),documentHidden:document.hidden,visibility:document.visibilityState,pageHidden:document.documentElement.dataset.pageHidden,
+            active:describe(document.activeElement),bound:describe(document.querySelector('[aria-describedby="presence-tooltip"]')),
+            pointer:point,hitTarget:describe(point&&document.elementFromPoint(point.x,point.y)),row:describe(row),rowStatus:row?.dataset.status,
+            rowBounds:r&&{left:r.left,top:r.top,right:r.right,bottom:r.bottom},dialogs:[...document.querySelectorAll('dialog[open]')].map(d=>d.id),
+            trace:globalThis.smokePresenceTrace?.slice(-40)};})()`),
+      ]);
+      return { native, renderer, commands: presenceCommands.slice(-20) };
+    };
+    const assertTooltip = async (label, focused = false) => {
+      const tip = await tooltipState();
+      const valid = tip.visible && tip.text === label && tip.role === 'tooltip' && tip.position === 'fixed' && tip.described === 'presence-tooltip' &&
+        tip.bindings === 1 && tip.clamped && (!focused || tip.focused);
+      assert(valid, `Live presence tooltip failed: ${JSON.stringify({ tooltip: tip, ...(valid ? {} : { context: await presenceDiagnostics() }) })}`);
+    };
+    const movePointer = (x, y) => {
+      lastPresencePointer = { x, y };
+      recordPresenceCommand({ type: 'mouseMoved', x, y });
+      return appPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+    };
+    const focusPerson = () => {
+      recordPresenceCommand({ type: 'focusPerson' });
+      return appPage.evaluate(`${rowExpression}.focus({preventScroll:true})`);
+    };
+    try {
+      await browser.evaluate(`globalThis.smokePresenceNativeTrace=[];globalThis.smokePresenceNativeListeners=['focus','blur','show','hide','minimize','restore'].map(type=>{
+        const handler=()=>{smokePresenceNativeTrace.push({at:Date.now(),type,visible:smokeMain.isVisible(),focused:smokeMain.isFocused(),minimized:smokeMain.isMinimized()});
+          if(smokePresenceNativeTrace.length>20)smokePresenceNativeTrace.shift();};smokeMain.on(type,handler);return{type,handler};});true`);
+      await appPage.evaluate(`globalThis.smokePresenceTrace=[];globalThis.smokePresenceCapture=event=>{
+        const describe=element=>({id:element?.id,tag:element?.tagName,peer:element?.closest?.('.person[data-peer]')?.dataset.peer});
+        smokePresenceTrace.push({at:Date.now(),type:event.type,target:describe(event.target),related:describe(event.relatedTarget),
+          active:describe(document.activeElement),x:event.clientX,y:event.clientY,trusted:event.isTrusted,
+          key:['Tab','Escape','Home','End','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)?event.key:undefined,
+          documentFocused:document.hasFocus(),documentHidden:document.hidden,pageHidden:document.documentElement.dataset.pageHidden,
+          tooltipVisible:!document.getElementById('presence-tooltip').hidden,bound:document.querySelector('[aria-describedby="presence-tooltip"]')?.dataset.peer});
+        if(smokePresenceTrace.length>40)smokePresenceTrace.shift();};
+        for(const type of ['focusin','focusout','pointerover','pointerout','pointermove','pointerdown','keydown','keyup','visibilitychange'])document.addEventListener(type,smokePresenceCapture,true);
+        for(const type of ['resize','focus','blur'])window.addEventListener(type,smokePresenceCapture,true)`);
+      await browser.evaluate('smokeMain.show();smokeMain.focus()');
+      await mainViewport(1100, 800);
+      const ringTarget = await appPage.evaluate(`(()=>{const probe=document.createElement('span');probe.style.cssText='position:fixed;visibility:hidden;outline:2px solid;outline-offset:1px';
+        document.body.append(probe);const s=getComputedStyle(probe),result={width:parseFloat(s.outlineWidth),offset:parseFloat(s.outlineOffset),dpr:devicePixelRatio};probe.remove();return result;})()`);
+      assert(ringTarget.width > 0 && ringTarget.offset > 0, `Native outline calibration failed: ${JSON.stringify(ringTarget)}`);
+      peer.setProfile({ ...originalPeerProfile, status: 'active', about: '' });
+      await until(() => appPage.evaluate(`${rowExpression}?.dataset.status==='active'`), 'presence row ready');
+      await appPage.evaluate(`${rowExpression}.click()`);
+      const optionLabels = new Set();
+      for (const language of ['id', 'en', 'es', 'ja']) {
+        await changeMainLanguage(language);
+        const options = await appPage.evaluate(`(()=>{const menu=document.getElementById('thread-actions'),summary=menu.querySelector('summary'),icon=summary.querySelector('[data-icon="More"] svg'),r=icon?.getBoundingClientRect();
+          return {visible:!menu.hidden,label:summary.lastElementChild.textContent.trim(),icons:summary.querySelectorAll('svg').length,width:r?.width,height:r?.height};})()`);
+        assert(options.visible && options.label && options.icons === 1 && options.width > 0 && options.height > 0,
+          `Conversation options lost its icon/label (${language}): ${JSON.stringify(options)}`);
+        optionLabels.add(options.label);
+      }
+      assert(optionLabels.size >= 3, 'Conversation options did not translate with the current language');
+      await changeMainLanguage('id');
+      const presenceLabels = { active: 'Aktif', busy: 'Sibuk', away: 'Pergi', dnd: 'Jangan ganggu' };
+      for (const [status, label] of Object.entries(presenceLabels)) {
+        await movePointer(1090, 790);
+        await appPage.evaluate("document.getElementById('people-search').focus()");
+        peer.setProfile({ ...originalPeerProfile, status, about: '' });
+        await until(() => appPage.evaluate(`${rowExpression}?.dataset.status===${JSON.stringify(status)}`), `live ${status} status`);
+        const appearance = await appPage.evaluate(`(()=>{const row=${rowExpression},avatar=row.querySelector('.avatar'),presence=row.querySelector('.presence'),label=presence.querySelector('.presence-label'),s=getComputedStyle(avatar),hidden=getComputedStyle(label),r=label.getBoundingClientRect();
+          return {status:row.dataset.status,avatarStatus:avatar.dataset.status,current:row.getAttribute('aria-current'),ring:parseFloat(s.outlineWidth),offset:parseFloat(s.outlineOffset),ringColor:s.outlineColor,
+            dotColor:getComputedStyle(presence,'::before').backgroundColor,dotWidth:parseFloat(getComputedStyle(presence,'::before').width),
+            hiddenLabel:r.width<=2&&r.height<=2&&hidden.overflow==='hidden'&&hidden.clipPath!=='none',a11y:label.textContent,
+            visibleStatus:[...presence.childNodes].filter(n=>n.nodeType===Node.TEXT_NODE).map(n=>n.textContent).join(''),title:row.hasAttribute('title')||presence.hasAttribute('title')};})()`);
+        assert(appearance.status === status && appearance.avatarStatus === status && appearance.current === 'true' &&
+          Math.abs(appearance.ring - ringTarget.width) <= .01 && Math.abs(appearance.offset - ringTarget.offset) <= .01 &&
+          appearance.ringColor === appearance.dotColor && appearance.dotWidth > 0 && appearance.hiddenLabel && appearance.a11y === label && !appearance.visibleStatus && !appearance.title,
+          `Direct-person presence is missing or exposes a duplicate status (${status}): ${JSON.stringify({ appearance, ringTarget })}`);
+        const bounds = await appPage.evaluate(`(()=>{const r=${rowExpression}.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2};})()`);
+        await movePointer(bounds.x, bounds.y);
+        await assertTooltip(label); // Next protocol evaluation: no hover-delay polling.
+        await movePointer(1090, 790);
+        assert.equal((await tooltipState()).visible, false, 'Presence tooltip remained after pointer leave');
+        await focusPerson();
+        await assertTooltip(label, true);
+      }
+      await appPage.evaluate("document.getElementById('people-search').focus()");
+      let tabReachedPerson = false;
+      for (let steps = 0; steps < 20 && !tabReachedPerson; steps++) {
+        await appPage.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+        await appPage.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+        tabReachedPerson = await appPage.evaluate(`document.activeElement===${rowExpression}`);
+      }
+      assert(tabReachedPerson && await appPage.evaluate(`${rowExpression}.matches(':focus-visible')`), 'Keyboard Tab could not reach the presence row visibly');
+      await assertTooltip(presenceLabels.dnd, true);
+      // Keep the focused peer bound across a real encrypted profile update.
+      peer.setProfile({ ...originalPeerProfile, status: 'busy', about: '' });
+      await until(() => appPage.evaluate(`${rowExpression}?.dataset.status==='busy'`), 'focused presence update');
+      await assertTooltip(presenceLabels.busy, true);
+      await appPage.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await appPage.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      assert.equal((await tooltipState()).visible, false, 'Escape did not dismiss presence tooltip');
+      peer.setProfile({ ...originalPeerProfile, status: 'away', about: '' });
+      await until(() => appPage.evaluate(`${rowExpression}?.dataset.status==='away'`), 'dismissed presence update');
+      const dismissedTip = await tooltipState();
+      const dismissedTrace = await appPage.evaluate(`(()=>{const describe=element=>({id:element?.id,tag:element?.tagName,peer:element?.closest?.('.person[data-peer]')?.dataset.peer});
+        const point=${JSON.stringify(lastPresencePointer)};return{active:describe(document.activeElement),bound:describe(document.querySelector('[aria-describedby="presence-tooltip"]')),
+          pointer:point,pointerTarget:describe(document.elementFromPoint(point.x,point.y)),trace:smokePresenceTrace.slice(-20)};})()`);
+      assert.equal(dismissedTip.visible, false, `Live render resurrected an Escape-dismissed tooltip: ${JSON.stringify({ tooltip: dismissedTip, lifecycle: dismissedTrace })}`);
+      await appPage.evaluate("document.getElementById('people-search').focus()");
+      await focusPerson();
+      await appPage.evaluate("document.getElementById('settings-button').click()");
+      await until(() => appPage.evaluate("document.getElementById('settings-dialog').open"), 'presence modal opened');
+      assert.equal((await tooltipState()).visible, false, 'Settings modal left a presence tooltip above it');
+      await appPage.evaluate("document.getElementById('settings-dialog').close();document.getElementById('people-search').focus()");
+      for (const theme of ['light', 'dark']) {
+        await appPage.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
+        await focusPerson();
+        await assertTooltip(presenceLabels.away, true);
+        await waitUiAnimations();
+        if (process.env.LUMILAN_UI_SCREENSHOTS === '1' || process.env.LUMILAN_README_SCREENSHOTS === '1') {
+          const shot = await appPage.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+          writeFileSync(join(dist, `ui-polish-tooltip-${theme}.png`), Buffer.from(shot.data, 'base64'));
+        }
+        await appPage.evaluate("document.getElementById('people-search').focus()");
+      }
+      await focusPerson();
+      await mainViewport(320, 700);
+      assert.equal((await tooltipState()).visible, false, 'Resize did not close presence tooltip');
+      await appPage.evaluate("document.getElementById('back-button').click();document.getElementById('people-search').focus()");
+      await focusPerson();
+      await assertTooltip(presenceLabels.away, true);
+      await mainViewport(1100, 400);
+      await appPage.evaluate(`${rowExpression}.scrollIntoView({block:'center'})`);
+      await appPage.evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+      assert(await appPage.evaluate("document.querySelector('.sidebar-list').scrollTop>0"), 'Short viewport did not exercise actual sidebar scrolling');
+      await appPage.evaluate("document.getElementById('people-search').focus()");
+      await focusPerson();
+      await assertTooltip(presenceLabels.away, true);
+      await appPage.evaluate("document.querySelector('.sidebar-list').scrollTop=0;new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))");
+      assert.equal((await tooltipState()).visible, false, 'Sidebar scrolling did not close presence tooltip');
+      await mainViewport(1100, 800);
+      await appPage.evaluate("document.getElementById('people-search').focus()");
+      await focusPerson();
+      await assertTooltip(presenceLabels.away, true);
+      await appPage.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await appPage.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      assert.equal((await tooltipState()).visible, false, 'Escape did not dismiss presence before disconnect');
+      await peer.stop();
+      await until(() => appPage.evaluate(`!${rowExpression}`), 'offline presence removed');
+      const offlineTip = await tooltipState();
+      assert(!offlineTip.visible && offlineTip.bindings === 0, 'Offline peer retained a stale actionable presence tooltip');
+      await peer.start();
+      peer.setProfile(originalPeerProfile);
+      await peer.connectAddress(appState.addresses[0]);
+      await until(() => appPage.evaluate(`Boolean(${rowExpression})`), 'same peer presence reconnected');
+      const restoredPresence = Object.hasOwn(presenceLabels, originalPeerProfile.status) ? originalPeerProfile.status : 'active';
+      await until(() => appPage.evaluate(`${rowExpression}?.dataset.status===${JSON.stringify(restoredPresence)}`), 'reconnected presence restored');
+      await focusPerson();
+      await assertTooltip(presenceLabels[restoredPresence], true);
+      console.log('Main UI: translated options icon, live status dot/ring and immediate accessible tooltip with lifecycle/viewport cleanup passed');
+    } finally {
+      peer.setProfile(originalPeerProfile);
+      await appPage.evaluate("if(globalThis.smokePresenceCapture){for(const type of ['focusin','focusout','pointerover','pointerout','pointermove','pointerdown','keydown','keyup','visibilitychange'])document.removeEventListener(type,smokePresenceCapture,true);for(const type of ['resize','focus','blur'])window.removeEventListener(type,smokePresenceCapture,true);delete globalThis.smokePresenceCapture}");
+      await browser.evaluate("for(const listener of globalThis.smokePresenceNativeListeners||[])smokeMain.removeListener(listener.type,listener.handler);delete globalThis.smokePresenceNativeListeners");
+      await changeMainLanguage('id');
+      await appPage.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(originalUiTheme)};document.querySelectorAll('dialog[open]').forEach(d=>d.close());document.getElementById('notes-button').click()`);
+      await appPage.send('Emulation.clearDeviceMetricsOverride');
+    }
+    peer.acceptFile = async () => true;
+    const pastedTransfer = await appPage.evaluate(`window.lumilan.file(new File([Uint8Array.from(atob('${clipboardPng.toString('base64')}'),c=>c.charCodeAt(0))],'clipboard.png',{type:'image/png'}),${JSON.stringify(peer.id)})`);
+    assert.equal(pastedTransfer.delivered,1,'In-memory clipboard image did not reach its LAN recipient');
+    assert.equal(peer.state.messages.find(m=>m.id===pastedTransfer.message.id)?.sha256,pastedTransfer.message.sha256,'Clipboard image integrity was not verified');
+    console.log('Clipboard image crossed the real encrypted LAN file approval and integrity pipeline');
+    const quitPendingClipboard = async () => {
+      // Exercise shutdown on every native desktop, including the Wayland fallback.
+      let releaseQuitOffer;
+      peer.acceptFile = () => new Promise(resolve => { releaseQuitOffer = resolve; });
+      try {
+        await appPage.evaluate(`window.lumilan.file(new File([Uint8Array.from(atob('${clipboardPng.toString('base64')}'),c=>c.charCodeAt(0))],'quit-pending.png',{type:'image/png'}),${JSON.stringify(peer.id)}).catch(()=>{});true`);
+        await until(() => Boolean(releaseQuitOffer), 'recipient consent pending before Quit');
+        const stagedClipboard = () => readdirSync(join(profile, 'lumilan', 'files')).filter(name => /^\.clipboard-[A-Za-z0-9]{6}$/.test(name));
+        assert.equal(stagedClipboard().length, 1, 'Pending clipboard image has no private staging directory');
+        // The Node inspector can hold process shutdown while it remains attached.
+        await browser.close(); browser = null;
+        await appPage.evaluate("document.querySelectorAll('dialog[open]').forEach(d=>d.close());setTimeout(()=>window.lumilan.quit(),100);true");
+        await until(() => child.exitCode !== null, 'explicit quit removes companion');
+        assert.equal(child.exitCode, 0, 'Quit exited abnormally');
+        assert.deepEqual(stagedClipboard(), [], 'Quit left a clipboard image staging directory');
+        console.log('Quit aborted pending clipboard transfer and removed private staging');
+      } finally { releaseQuitOffer?.(false); }
+    };
+    const assertMainMotionHidden = async () => {
+      await until(() => browser.evaluate('!smokeMain.isVisible()||smokeMain.isMinimized()'), 'native main hidden or minimized');
+      assert.equal(await browser.evaluate('smokeMain.webContents.backgroundThrottling'), false, 'Main window throttling changed and could interrupt calls');
+      await until(() => appPage.evaluate("window.lumilan.windowVisible().then(visible=>visible===false&&document.documentElement.dataset.pageHidden==='true')"), 'main hidden motion policy');
+      assert(await appPage.evaluate("['#emoji-picker','#message-input','#settings-dialog','#call-panel'].every(selector=>{const s=getComputedStyle(document.querySelector(selector));return s.animationPlayState.split(',').every(v=>v.trim()==='paused')&&s.transitionDuration.split(',').every(v=>parseFloat(v)===0)})"),
+        'Hidden main renderer did not pause control motion');
+    };
+    const assertMainMotionVisible = async () => {
+      await until(() => browser.evaluate('smokeMain.isVisible()&&!smokeMain.isMinimized()'), 'native main shown or restored');
+      assert.equal(await browser.evaluate('smokeMain.webContents.backgroundThrottling'), false, 'Showing the main window changed call throttling');
+      await until(() => appPage.evaluate("window.lumilan.windowVisible().then(visible=>visible===true&&document.documentElement.dataset.pageHidden==='false')"), 'main shown motion policy');
+      assert(await appPage.evaluate("['#emoji-picker','#message-input','#settings-dialog','#call-panel'].every(selector=>getComputedStyle(document.querySelector(selector)).animationPlayState.split(',').every(v=>v.trim()==='running'))"),
+        'Shown main renderer retained hidden animation pauses');
+    };
     if (process.platform === 'linux' && process.env.XDG_SESSION_TYPE === 'wayland') {
       assert.equal((await appPage.evaluate('window.lumilan.notificationSettings()')).notchSupported, false);
       assert.equal(await browser.evaluate('smokeElectron.Notification.isSupported()'), true,
         'Wayland native notifications unavailable: check libnotify.so.4 and the private D-Bus notification service');
       await browser.evaluate('smokeMain.minimize()');
+      await assertMainMotionHidden();
       const history = () => desktopCall('org.freedesktop.Notifications', '/org/freedesktop/Notifications', 'dev.lumilan.Smoke.History');
       const count = async () => Number(/(?:uint32 )?(\d+)/.exec(await desktopCall('org.freedesktop.Notifications', '/org/freedesktop/Notifications', 'dev.lumilan.Smoke.Count'))[1]);
       await peer.sendMessage('Wayland native fallback', appState.me.id);
@@ -129,23 +472,36 @@ async function main() {
       await browser.evaluate("smokeElectron.powerMonitor.emit('resume')"); await delay(250);
       assert.equal(await count(), beforeLock + 2, 'Wayland repeated deferred alerts');
       assert.deepEqual(failures, []);
+      await browser.evaluate('smokeMain.restore();smokeMain.show();smokeMain.focus()');
+      await assertMainMotionVisible();
       console.log('Wayland: native renderer, real D-Bus notification fallback, no overlay, lock/suspend, reminder recovery and privacy passed');
-      await appPage.evaluate('setTimeout(()=>window.lumilan.quit(),100);true'); browser.close(); browser = null;
-      await until(() => child.exitCode !== null, 'Wayland quit'); return;
+      await quitPendingClipboard(); return;
     }
     const background = async () => {
       await browser.evaluate('smokeMain.close()');
       await until(() => browser.evaluate('!smokeMain.isVisible() && !smokeMain.isFocused()'), 'window hidden to tray and native focus released');
     };
-    const click = async id => {
-      await until(() => notchPage.evaluate(`(()=>{const e=document.getElementById(${JSON.stringify(id)});const b=e.getBoundingClientRect();return b.width>0&&b.height>0&&!e.disabled})()`), `visible ${id}`);
-      // Native resize and renderer layout arrive separately; fractional Windows DPI can round DIP bounds by 1 px.
-      await until(async () => {
-        const bounds = await browser.evaluate("smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').getBounds()");
-        return notchPage.evaluate(`Math.abs(innerHeight-${bounds.height})<=2 && Math.abs(innerWidth-${bounds.width})<=2`);
-      }, 'notch layout after resize');
-      const point = await notchPage.evaluate(`(()=>{const b=document.getElementById(${JSON.stringify(id)}).getBoundingClientRect();return {x:b.x+b.width/2,y:b.y+b.height/2}})()`);
+    let hoverStep = 0;
+    const hoverNotchHeader = async () => {
+      const point = await notchPage.evaluate(`(()=>{const b=document.querySelector('header').getBoundingClientRect();return !document.hidden&&document.body.dataset.mode!=='hidden'&&b.width>0&&b.height>0&&{x:b.left+12+${hoverStep++ % 2},y:b.top+12}})()`);
+      assert(point, 'Notch disappeared while preparing a native control action');
       await notchPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
+    };
+    const click = async id => {
+      const modes = id === 'mascot' ? ['compact', 'expanded'] : ['expanded'];
+      await until(() => notchPage.evaluate(`(()=>{const e=document.getElementById(${JSON.stringify(id)});const b=e.getBoundingClientRect();return !document.hidden&&${JSON.stringify(modes)}.includes(document.body.dataset.mode)&&b.width>0&&b.height>0&&!e.disabled})()`), `visible ${id}`);
+      // Actual trusted pointer motion renews the production activity timer while
+      // native resize and renderer layout converge; auto-hide cannot satisfy this wait.
+      await hoverNotchHeader();
+      // Native resize and renderer layout arrive separately; fractional Windows DPI can round DIP bounds by 1 px.
+      const point = await until(async () => {
+        await hoverNotchHeader();
+        const native = await browser.evaluate("(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return {visible:w.isVisible(),bounds:w.getBounds()}})()");
+        assert(native.visible, `Notch auto-hid before native ${id} click`);
+        return notchPage.evaluate(`(()=>{const e=document.getElementById(${JSON.stringify(id)}),b=e.getBoundingClientRect(),p={x:b.x+b.width/2,y:b.y+b.height/2};return !document.hidden&&${JSON.stringify(modes)}.includes(document.body.dataset.mode)&&!e.disabled&&b.width>0&&b.height>0&&Math.abs(innerHeight-${native.bounds.height})<=2&&Math.abs(innerWidth-${native.bounds.width})<=2&&e.contains(document.elementFromPoint(p.x,p.y))&&p})()`);
+      }, `notch layout and hit target for ${id}`);
+      await notchPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
+      assert(await notchPage.evaluate(`(()=>{const e=document.getElementById(${JSON.stringify(id)});return !document.hidden&&${JSON.stringify(modes)}.includes(document.body.dataset.mode)&&!e.disabled&&e.contains(document.elementFromPoint(${point.x},${point.y}))})()`), `Native ${id} click lost its visible hit target`);
       await notchPage.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
       await notchPage.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
     };
@@ -180,9 +536,22 @@ async function main() {
     }
     await until(() => notchPage.evaluate("document.body.dataset.mode==='hidden'"), 'manual expanded panel auto hides', 20000);
     await until(() => browser.evaluate("!smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').isFocused()"), 'manual close releases native keyboard focus');
+    const automaticNotificationContext = async () => {
+      const [native, renderer] = await Promise.all([
+        browser.evaluate("(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return{mainVisible:smokeMain.isVisible(),mainFocused:smokeMain.isFocused(),mainMinimized:smokeMain.isMinimized(),notchVisible:w.isVisible(),notchFocused:w.isFocused(),events:notchTrace.slice(-12)}})()"),
+        notchPage.evaluate("({mode:document.body.dataset.mode,documentHidden:document.hidden,inputs:smokeInputs.slice(-20)})"),
+      ]);
+      return { native, renderer };
+    };
+    const beforeAutomaticNotification = await automaticNotificationContext();
+    assert(!beforeAutomaticNotification.native.mainVisible && !beforeAutomaticNotification.native.mainFocused,
+      `Main window was revealed during the manual-panel auto-hide check: ${JSON.stringify(beforeAutomaticNotification)}`);
     await peer.sendMessage('<img src=x onerror=alert(1)> hello from LAN', appState.me.id);
     await until(async () => (await selected())?.body.includes('hello from LAN'), 'message in notch');
-    assert.equal(await notchPage.evaluate('document.body.dataset.mode'), 'compact', 'Ordinary notification expanded automatically');
+    // The main-process state IPC can resolve before its renderer publication.
+    const automaticCard = await until(() => notchPage.evaluate("document.getElementById('body').textContent.includes('hello from LAN')&&({mode:document.body.dataset.mode})"), 'ordinary message rendered');
+    const automaticMode = automaticCard.mode;
+    assert.equal(automaticMode, 'compact', `Ordinary notification did not enter compact mode: ${automaticMode === 'compact' ? '' : JSON.stringify(await automaticNotificationContext())}`);
     await until(() => notchPage.evaluate('innerHeight<=70 && innerWidth<=302'), 'small compact notification');
     const focusState = await browser.evaluate("({visible:smokeMain.isVisible(),main:smokeMain.isFocused(),notch:smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').isFocused()})");
     assert.deepEqual(focusState, { visible:false,main:false,notch:false }, `Notification stole native window focus: ${JSON.stringify(focusState)}`);
@@ -333,17 +702,25 @@ async function main() {
     await browser.evaluate(`smokeMain.webContents.send('lumilan:state',${JSON.stringify(recipientFixture)})`);
     await appPage.evaluate("document.getElementById('reminder-new').click()");
     const recipientOptions = await appPage.evaluate("[...document.getElementById('reminder-recipient').options].map(o=>({id:o.value,label:o.textContent,disabled:o.disabled}))");
-    assert.equal(recipientOptions.length,3,'Historical incompatible contacts cluttered reminder recipients');
-    assert.deepEqual(new Set(recipientOptions.map(o=>o.id)),new Set([appState.me.id,peer.id,third.id]),'Same-name devices were merged or offline capable contact was lost');
-    assert.equal(new Set(recipientOptions.map(o=>o.label)).size,3,'Same-name device choices were ambiguous');
+    assert.equal(recipientOptions.length,2,'Offline or historical contacts cluttered reminder recipients');
+    assert.deepEqual(new Set(recipientOptions.map(o=>o.id)),new Set([appState.me.id,peer.id]),'Offline capable recipient was shown');
     assert(recipientOptions.every(o=>!o.disabled),'Unsupported recipients were left as disabled options');
+    const onlineFixture={...recipientFixture,peers:recipientState.peers};
+    await browser.evaluate(`smokeMain.webContents.send('lumilan:state',${JSON.stringify(onlineFixture)})`);
+    await until(()=>appPage.evaluate(`document.getElementById('reminder-recipient').querySelector('option[value="${third.id}"]')!==null`),'online capable recipient returns');
+    const onlineOptions=await appPage.evaluate("[...document.getElementById('reminder-recipient').options].map(o=>({id:o.value,label:o.textContent}))");
+    assert.equal(onlineOptions.length,3,'Same-name online devices were merged');
+    assert.equal(new Set(onlineOptions.map(o=>o.label)).size,3,'Same-name online choices were ambiguous');
     await appPage.evaluate(`document.getElementById('reminder-recipient').value=${JSON.stringify(third.id)}`);
     await browser.evaluate(`smokeMain.webContents.send('lumilan:state',${JSON.stringify(recipientFixture)})`);
-    assert.equal(await appPage.evaluate("document.getElementById('reminder-recipient').value"),third.id,'Refresh lost selected offline recipient');
-    const unsupportedFixture={...recipientFixture,contacts:recipientFixture.contacts.map(p=>p.id===third.id?{...p,reminders:false}:p)};
+    await until(()=>appPage.evaluate("document.getElementById('reminder-recipient').value===''") ,'disconnected selection becomes unavailable');
+    assert.equal(await appPage.evaluate(`document.getElementById('reminder-recipient').querySelector('option[value="${third.id}"]')`),null,'Offline name retained in picker');
+    await browser.evaluate(`smokeMain.webContents.send('lumilan:state',${JSON.stringify(onlineFixture)})`);
+    await appPage.evaluate(`document.getElementById('reminder-recipient').value=${JSON.stringify(third.id)}`);
+    const unsupportedFixture={...onlineFixture,contacts:onlineFixture.contacts.map(p=>p.id===third.id?{...p,reminders:false}:p)};
     await browser.evaluate(`smokeMain.webContents.send('lumilan:state',${JSON.stringify(unsupportedFixture)})`);
     await until(()=>appPage.evaluate("document.getElementById('reminder-recipient').selectedOptions[0]?.disabled"),'selected recipient loses capability');
-    assert.equal(await appPage.evaluate("document.getElementById('reminder-recipient').value"),third.id,'Recipient capability change silently switched target to self');
+    assert.equal(await appPage.evaluate("document.getElementById('reminder-recipient').value"),'','Recipient capability change silently switched target to self');
     const beforeRejectedRecipient=await appPage.evaluate('window.lumilan.reminders().then(rs=>rs.length)');
     await appPage.evaluate("document.getElementById('reminder-title').value='Unsupported recipient must not save';document.getElementById('reminder-form').requestSubmit()");
     await until(()=>appPage.evaluate("!document.getElementById('reminder-error').hidden"),'incompatible selected recipient explains failure');
@@ -445,6 +822,7 @@ async function main() {
     assert.equal(await notchPage.evaluate('document.getAnimations().filter(a=>a.playState==="running").length'), 0, 'Idle animations kept running');
     await notchPage.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
     await notchPage.evaluate('window.lumi.action({type:"expand"})');
+    await hoverNotchHeader();
     assert.equal(await notchPage.evaluate('document.getAnimations().length'), 0, 'Reduced motion ignored');
     await notchPage.send('Emulation.setEmulatedMedia', { features: [] });
     // Earlier fixtures move toward the screen edge. A 20 px move can be clamped there;
@@ -511,6 +889,7 @@ async function main() {
     await setLocked(browser, false); await delay(150);
     assert.equal(await browser.evaluate('nativeAttempts.length'), attempts, 'Unlock bypassed suspend');
     await browser.evaluate('smokeMain.hide()');
+    await assertMainMotionHidden();
     await appPage.evaluate('window.lumilan.setNotificationSettings({enabled:true,preview:false,silent:true,background:true,notch:false})');
     await browser.evaluate("smokeElectron.powerMonitor.emit('resume')");
     if (await browser.evaluate('smokeElectron.Notification.isSupported()')) {
@@ -521,23 +900,68 @@ async function main() {
     }
     await browser.evaluate('smokeElectron.Notification.prototype.show=nativeShow');
     console.log('Notifications: background system fallback routing and focused conversation suppression passed (OS banner delivery not asserted)');
+    await browser.evaluate('smokeMain.show();smokeMain.focus()');
+    await assertMainMotionVisible();
+    if (process.env.LUMILAN_README_SCREENSHOTS === '1') {
+      // Export real application pixels from this disposable, loopback-only demo.
+      await browser.evaluate(`smokeMain.show();smokeMain.focus();smokeMain.webContents.send('lumilan:open-thread',${JSON.stringify(peer.id)})`);
+      await appPage.evaluate(`(async()=>{const s=await window.lumilan.state();const ids=s.messages.filter(m=>!m.roomId&&!m.note&&((m.from===${JSON.stringify(peer.id)}&&m.to===s.me.id)||(m.to===${JSON.stringify(peer.id)}&&m.from===s.me.id))).map(m=>m.id);if(ids.length)await window.lumilan.deleteMessages(${JSON.stringify(peer.id)},ids);await window.lumilan.rename('Design Studio');document.querySelectorAll('dialog[open]').forEach(d=>d.close());document.querySelector('#language-select').value='en';document.querySelector('#language-select').dispatchEvent(new Event('change'));})()`);
+      peer.rename('Design team');
+      await until(()=>appPage.evaluate("document.getElementById('message-input').placeholder.includes('Design team')"),'demo peer name');
+      await appPage.evaluate("document.getElementById('call-dismiss').click()");
+      assert.match(await appPage.evaluate("document.getElementById('composer-key-hint').textContent"),/Enter to send/,'Composer hint did not follow the current language');
+      await peer.sendMessage('Good morning! The design review is ready. Everything stays on our local network.',appState.me.id);
+      await appPage.evaluate(`window.lumilan.message(${JSON.stringify('Perfect. Let’s review the updates together.\n\n1. Check the new layout\n2. Share feedback\n3. Plan our next steps')},${JSON.stringify(peer.id)})`);
+      await peer.sendMessage('Sounds good. You can also send files or start a voice call here.',appState.me.id);
+      await until(()=>appPage.evaluate("document.getElementById('messages').textContent.includes('Sounds good.')"),'demo conversation');
+      await until(()=>appPage.evaluate("[...document.querySelectorAll('#messages .bubble')].every(e=>getComputedStyle(e).opacity==='1')"),'demo message animations completed');
+      await appPage.send('Emulation.setDeviceMetricsOverride',{width:1100,height:760,deviceScaleFactor:1,mobile:false});
+      for (const theme of ['light','dark']) {
+        await appPage.evaluate(`document.documentElement.dataset.theme='${theme}';new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+        await waitUiAnimations();
+        const shot=await appPage.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        writeFileSync(join(dist,`readme-chat-${theme}.png`),Buffer.from(shot.data,'base64'));
+      }
+      await appPage.evaluate("document.getElementById('settings-button').click();new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))");
+      await waitUiAnimations();
+      const shot=await appPage.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      writeFileSync(join(dist,'readme-settings.png'),Buffer.from(shot.data,'base64'));
+      console.log('README: real light/dark chat and settings screenshots exported from isolated demo');
+    }
     const unexpected = failures.filter(text => text !== 'Permissions policy violation: microphone is not allowed in this document.');
     assert.deepEqual(unexpected, [], `Renderer errors: ${unexpected.join('; ')}`);
     console.log('Notch: idle resource budget, reduced motion, keyboard position, reset, pause, lazy renderer and disable cleanup passed');
-    await appPage.evaluate('setTimeout(()=>window.lumilan.quit(),100); true');
-    browser.close(); browser = null;
-    await until(() => child.exitCode !== null, 'explicit quit removes companion');
+    await quitPendingClipboard();
     console.log('Packaged notch smoke passed');
   } catch (error) {
     console.error('Notch smoke failure:', error);
+    // The main presence suite runs before the lazy notch renderer exists.
+    const presenceFailure = {};
+    if (browser) { try { presenceFailure.native = await browser.evaluate("({visible:smokeMain.isVisible(),focused:smokeMain.isFocused(),minimized:smokeMain.isMinimized(),events:globalThis.smokePresenceNativeTrace?.slice(-20)})"); } catch {} }
+    if (appPage) { try { presenceFailure.renderer = await appPage.evaluate("({documentFocused:document.hasFocus(),documentHidden:document.hidden,pageHidden:document.documentElement.dataset.pageHidden,active:{id:document.activeElement?.id,tag:document.activeElement?.tagName,peer:document.activeElement?.closest?.('.person[data-peer]')?.dataset.peer},trace:globalThis.smokePresenceTrace?.slice(-40)})"); } catch {} }
+    if (presenceFailure.native?.events?.length || presenceFailure.renderer?.trace?.length) {
+      console.error('Main presence events on failure', presenceFailure);
+      try { writeFileSync(join(dist, 'ui-polish-presence-failure.json'), JSON.stringify(presenceFailure, null, 2)); }
+      catch (diagnosticError) { console.error('Could not save presence diagnostics:', diagnosticError.code); }
+    }
     if (browser) { try { console.error('Native notch events', await browser.evaluate('notchTrace.slice(-16)')); } catch {} }
     if (notchPage) { try { console.error('Notch state on failure', await notchPage.evaluate('window.lumi.state().then(s=>({mode:s.mode,dom:document.body.dataset.mode,revision:s.revision,width:innerWidth,height:innerHeight,dpr:devicePixelRatio}))')); } catch {} }
     if (notchPage) { try { console.error('Notch input on failure', await notchPage.evaluate('smokeInputs')); } catch {} }
     console.error(logs); throw error;
   }
   finally {
-    browser?.close(); appPage?.close(); notchPage?.close(); await peer?.stop(); await third?.stop();
-    if (child.exitCode === null && child.signalCode === null) { child.kill(); await until(() => child.exitCode !== null || child.signalCode !== null, 'process stopped', 15000); }
+    if (child.exitCode === null && child.signalCode === null) {
+      try { await appPage?.evaluate('setTimeout(()=>window.lumilan.quit(),100);true'); } catch {}
+    }
+    await browser?.close(); appPage?.close(); notchPage?.close(); await peer?.stop(); await third?.stop();
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill();
+      try { await until(() => child.exitCode !== null || child.signalCode !== null, 'process stopped', 15000); }
+      catch (error) {
+        child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
+        throw error;
+      }
+    }
     assert.equal(dirname(profile), tempRoot); assert(basename(profile).startsWith('lumilan-notch-smoke-'));
     rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
