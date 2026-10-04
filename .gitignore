@@ -10,6 +10,7 @@ data/
 .env
 .bun-task-temp/
 /coucou
+/lumilan-web
 
 # graphify - commit graph & laporan, ignore cache/path lokal mesin
 /graphify-out/*

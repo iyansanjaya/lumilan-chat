@@ -529,7 +529,9 @@ async function main() {
     await pressKey('Escape', 'Escape', 27);
     await evaluate("document.querySelector('#message-input').value = ''; document.querySelector('#message-input').dispatchEvent(new Event('input', { bubbles: true }))");
 
-    for (const theme of ['light', 'dark']) {
+    // Exercise the runner's accessibility setting and both explicit motion modes.
+    for (const [theme, motion] of ['native', 'no-preference', 'reduce'].flatMap(motion => ['light', 'dark'].map(theme => [theme, motion]))) {
+      await send('Emulation.setEmulatedMedia', { features: motion === 'native' ? [] : [{ name: 'prefers-reduced-motion', value: motion }] });
       await evaluate(`document.documentElement.dataset.theme = '${theme}'`);
       for (const [width, height] of [[1100, 800], [375, 812], [320, 700]]) {
         await setViewport(width, height);
@@ -543,7 +545,7 @@ async function main() {
           Math.abs(settingsSpacing.left - settingsSpacing.right) <= 1 && Math.abs(settingsSpacing.left - 29) <= 1 &&
           Math.abs(settingsSpacing.right - 29) <= 1 && Math.abs(settingsSpacing.gutter - 9) <= 1,
         `Settings padding/scrollbar is asymmetric (${theme}, ${width}px): ${JSON.stringify(settingsSpacing)}`);
-        if (width !== 375) await capturePolish(`settings-${theme}-${width}`);
+        if (width !== 375) await capturePolish(`settings-${theme}-${width}-${motion}`);
         await evaluate("document.querySelector('#settings-dialog').close()");
       }
       await setViewport(1100, 800);
@@ -564,19 +566,29 @@ async function main() {
         const selected = getComputedStyle(document.querySelector('#notes-button'));
         const borderRgb = own.borderTopColor.match(/[\\d.]+/g).slice(0, 3).map(Number);
         return { visibleFocus: input.matches(':focus-visible'), focusWidth: parseFloat(focus.outlineWidth), targetWidth, typedWidth, dpr: devicePixelRatio,
+          visibility: document.visibilityState, pageHidden: document.documentElement.dataset.pageHidden,
+          reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
           focusSurface: contrast(focus.outlineColor, surface), focusChat: contrast(focus.outlineColor, chat),
           selection: contrast(selected.borderTopColor, selected.backgroundColor), outgoing: contrast(own.borderTopColor, own.backgroundColor),
           outgoingNearWhite: borderRgb.every(n => n > 220), inputTransitions: inputStyle.transitionDuration.split(',').map(parseFloat),
           inputProperties: inputStyle.transitionProperty.split(',').map(s => s.trim()) }; })()`);
+      assert(motion === 'native' || borders.reducedMotion === (motion === 'reduce'), `Motion emulation failed (${motion}): ${JSON.stringify(borders)}`);
+      // transition:none is required by the hidden/reduced-motion CSS policy.
+      const motionSuppressed = borders.reducedMotion || borders.pageHidden === 'true';
+      const validInputTransitions = motionSuppressed
+        ? borders.inputProperties.length === 1 && borders.inputProperties[0] === 'none' && borders.inputTransitions.every(seconds => seconds === 0)
+        : borders.inputTransitions.every(seconds => seconds >= 0 && seconds <= .18) &&
+          borders.inputProperties.every(property => ['color', 'background-color', 'border-color', 'outline-color'].includes(property));
       assert(borders.visibleFocus && borders.targetWidth > 0 && borders.focusWidth + .01 >= borders.targetWidth &&
         borders.focusSurface >= 3 && borders.focusChat >= 3 &&
-        borders.selection >= 3 && borders.outgoing >= 2 && (theme !== 'dark' || !borders.outgoingNearWhite) &&
-        borders.inputTransitions.every(seconds => seconds <= .18) && borders.inputProperties.every(property => ['color', 'background-color', 'border-color', 'outline-color'].includes(property)),
-      `Focus/selection/outgoing contrast or transitions failed (${theme}): ${JSON.stringify(borders)}`);
-      console.log(`UI focus (${theme}): ${JSON.stringify({ resolvedWidth: borders.focusWidth, target2px: borders.targetWidth, typedWidth: borders.typedWidth, dpr: borders.dpr })}`);
-      await capturePolish(`chat-${theme}`);
+        borders.selection >= 3 && borders.outgoing >= 2 && (theme !== 'dark' || !borders.outgoingNearWhite),
+      `Focus/selection/outgoing contrast failed (${theme}, ${motion}): ${JSON.stringify(borders)}`);
+      assert(validInputTransitions, `Input transitions failed (${theme}, ${motion}): ${JSON.stringify(borders)}`);
+      console.log(`UI focus/motion (${theme}, ${motion}): ${JSON.stringify({ resolvedWidth: borders.focusWidth, target2px: borders.targetWidth, typedWidth: borders.typedWidth, dpr: borders.dpr,
+        visibility: borders.visibility, pageHidden: borders.pageHidden, reducedMotion: borders.reducedMotion, inputTransitions: borders.inputTransitions, inputProperties: borders.inputProperties })}`);
+      await capturePolish(`chat-${theme}-${motion}`);
       await evaluate("document.querySelector('#emoji-button').click()");
-      await capturePolish(`emoji-${theme}`);
+      await capturePolish(`emoji-${theme}-${motion}`);
       await pressKey('Escape', 'Escape', 27);
     }
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
