@@ -136,6 +136,17 @@ async function main() {
       assert(!result.exceptionDetails, `UI inspection failed: ${result.exceptionDetails?.text}`);
       return result.result.value;
     };
+    const settleAnimations = () => evaluate(`(async () => {
+      // Later compositor frames or toast dismissal can start more finite effects.
+      // The CDP request's timeout bounds the whole wait; infinite effects stay visible to assertions.
+      for (;;) {
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const finite = document.getAnimations()
+          .filter(animation => animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);
+        if (!finite.length) return;
+        await Promise.all(finite.map(animation => animation.finished.catch(() => {})));
+      }
+    })()`, true);
     quit = () => evaluate('setTimeout(()=>window.lumilan.quit(),100);true');
     const setViewport = async (width, height) => {
       await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
@@ -377,6 +388,62 @@ async function main() {
     const bottomDistance = await evaluate("(() => { const list = document.querySelector('#messages'); return list.scrollHeight - list.scrollTop - list.clientHeight })()");
     assert.equal(noteCount, 42, 'Newest message did not render');
     assert(bottomDistance <= 2, `Chat did not follow new messages while already at the bottom: ${bottomDistance}`);
+    // Offscreen contacts must not give their visually hidden status labels a document-sized containing block.
+    const scrollState = await evaluate(`(() => {
+      const saved = { theme: document.documentElement.dataset.theme, list: document.body.classList.contains('show-list') };
+      for (let i = 0; i < 20; i++) {
+        const person = document.createElement('button'); person.type = 'button'; person.className = 'person';
+        person.dataset.scrollFixture = 'true'; person.dataset.status = 'active';
+        person.innerHTML = '<span class="avatar">S</span><span class="person-copy"><strong>Kontak uji ' + i + '</strong><small class="presence presence-active"><span class="presence-label">Aktif</span></small></span>';
+        document.querySelector('#people-list').append(person);
+        const file = document.createElement('div'); file.className = 'detail-row'; file.dataset.scrollFixture = 'true';
+        file.innerHTML = '<span class="detail-row-copy"><strong>File uji ' + i + '.png</strong><small>1 KiB</small></span>';
+        document.querySelector('#recent-files').append(file);
+      }
+      return saved;
+    })()`);
+    try {
+      for (const theme of ['light', 'dark']) {
+        for (const [width, height, list] of [[1100, 800, false], [1100, 480, false], [320, 700, false], [320, 700, true]]) {
+          await evaluate(`document.documentElement.dataset.theme = '${theme}'; document.body.classList.toggle('show-list', ${list})`);
+          await setViewport(width, height);
+          const scrollLayout = await evaluate(`(() => {
+            window.scrollTo(0, document.scrollingElement.scrollHeight);
+            const regions = ['#messages', '.sidebar-list', '.details'].map(selector => document.querySelector(selector))
+              .filter(element => element.clientHeight > 0);
+            const internal = regions.map(element => {
+              for (const region of regions) region.scrollTop = 0;
+              element.scrollTop = element.scrollHeight;
+              const independent = regions.filter(region => region !== element).every(region => region.scrollTop === 0);
+              return { name: element.id || element.className, top: element.scrollTop, independent };
+            });
+            const sidebar = document.querySelector('.sidebar-list');
+            if (sidebar.clientHeight) document.querySelector('#people-list [data-scroll-fixture]:last-child').focus();
+            const inside = selector => {
+              const element = document.querySelector(selector), bounds = element.getBoundingClientRect();
+              return !bounds.width || !bounds.height || bounds.top >= -1 && bounds.bottom <= innerHeight + 1;
+            };
+            return { height: innerHeight, documentHeight: document.scrollingElement.scrollHeight, scrollY,
+              controls: ['.topbar', '.sidebar-footer', '.conversation-header', '.composer-wrap'].every(inside),
+              detailsEnd: !document.querySelector('.details').clientHeight || inside('.details-footer'), internal,
+              focusedContact: !sidebar.clientHeight || document.activeElement === document.querySelector('#people-list [data-scroll-fixture]:last-child'),
+              statusLabels: [...document.querySelectorAll('[data-scroll-fixture] .presence-label')].every(label => label.textContent === 'Aktif') };
+          })()`);
+          assert(scrollLayout.documentHeight <= scrollLayout.height + 1 && scrollLayout.scrollY === 0 && scrollLayout.controls &&
+            scrollLayout.detailsEnd && scrollLayout.focusedContact && scrollLayout.statusLabels &&
+            scrollLayout.internal.every(region => region.top > 0 && region.independent),
+          `App document scrolls or internal content is unreachable (${theme}, ${width}x${height}, list=${list}): ${JSON.stringify(scrollLayout)}`);
+        }
+      }
+    } finally {
+      await evaluate(`document.querySelectorAll('[data-scroll-fixture]').forEach(element => element.remove());
+        document.documentElement.dataset.theme = ${JSON.stringify(scrollState.theme)};
+        document.body.classList.toggle('show-list', ${scrollState.list}); document.querySelector('#message-input').focus({ preventScroll: true });
+        document.querySelector('#messages').scrollTop = document.querySelector('#messages').scrollHeight;
+        document.querySelector('.sidebar-list').scrollTop = 0; document.querySelector('.details').scrollTop = 0; window.scrollTo(0, 0)`);
+      await setViewport(1100, 800);
+    }
+    console.log('UI scrolling: document stays within viewport; long contacts, messages and details scroll independently in light/dark and narrow windows');
     const gifPixels = Buffer.alloc(32 * 32 * 2 * 3);
     gifPixels.fill(255, 0, 32 * 32 * 3);
     for (let pixel = 32 * 32 * 3; pixel < gifPixels.length; pixel += 3) gifPixels[pixel] = 255;
@@ -475,7 +542,7 @@ async function main() {
     };
     const capturePolish = async name => {
       if (process.env.LUMILAN_UI_SCREENSHOTS !== '1') return;
-      await evaluate("Promise.all(document.getAnimations().filter(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {})))", true);
+      await settleAnimations();
       const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
       writeFileSync(join(dist, `ui-polish-${name}.png`), Buffer.from(shot.data, 'base64'));
     };
@@ -551,7 +618,7 @@ async function main() {
       await setViewport(1100, 800);
       await pressKey('Tab', 'Tab', 9);
       await evaluate("document.querySelector('#message-input').focus()");
-      await evaluate("Promise.all(document.getAnimations().filter(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {})))", true);
+      await settleAnimations();
       const borders = await evaluate(`(() => {
         const luminance = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number).map(n => n / 255)
           .map(n => n <= .04045 ? n / 12.92 : ((n + .055) / 1.055) ** 2.4).reduce((sum, n, i) => sum + n * [.2126, .7152, .0722][i], 0);
@@ -607,8 +674,12 @@ async function main() {
     await evaluate("document.querySelector('#settings-dialog').close(); document.querySelector('#emoji-button').click()");
     await send('Emulation.setEmulatedMedia', { features: [] });
     await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(originalTheme)}`);
-    await delay(300);
-    assert.equal(await evaluate("document.getAnimations().filter(animation => animation.playState === 'running').length"), 0, 'Closed UI controls animate while idle');
+    await settleAnimations();
+    const idleAnimations = await evaluate(`document.getAnimations().filter(animation => animation.playState === 'running').map(animation => ({
+      name: animation.animationName || animation.transitionProperty || animation.constructor.name,
+      target: animation.effect?.target?.id || animation.effect?.target?.className || animation.effect?.target?.tagName,
+      pending: animation.pending, currentTime: animation.currentTime, timing: animation.effect?.getTiming() }))`);
+    assert.deepEqual(idleAnimations, [], 'Closed UI controls animate while idle');
     await send('Performance.enable');
     const idleBefore = Object.fromEntries((await send('Performance.getMetrics')).metrics.map(metric => [metric.name, metric.value]));
     await delay(1000);
