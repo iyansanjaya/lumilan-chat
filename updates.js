@@ -78,7 +78,7 @@ export function startUpdates({ app, updater, dialog, getWindow, beforeInstall, t
         noLink: true,
       });
       if (response === 1) {
-        beforeInstall();
+        await beforeInstall();
         updater.quitAndInstall(false, true);
       }
     } finally { promptOpen = false; }

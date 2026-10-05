@@ -23,13 +23,14 @@ async function until(check, label, ms = 12000) {
   throw new Error(`Timed out: ${label}`);
 }
 async function connect(url, failures, page = true) {
-  const socket = new WebSocket(url), pending = new Map(); let id = 0;
+  const socket = new WebSocket(url), pending = new Map(), fileChoosers = []; let id = 0;
   await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
   socket.addEventListener('message', event => {
     const message = JSON.parse(event.data);
     if (message.id && pending.has(message.id)) { const p = pending.get(message.id); pending.delete(message.id); clearTimeout(p.timer); message.error ? p.reject(new Error(message.error.message)) : p.resolve(message.result); }
     if (message.method === 'Runtime.exceptionThrown') failures.push(message.params.exceptionDetails.text);
     if (message.method === 'Log.entryAdded' && message.params.entry.level === 'error') failures.push(message.params.entry.text);
+    if (message.method === 'Page.fileChooserOpened') fileChoosers.push(message.params);
   });
   socket.addEventListener('close', () => {
     for (const p of pending.values()) { clearTimeout(p.timer); p.reject(new Error('Debugger connection closed')); }
@@ -44,7 +45,7 @@ async function connect(url, failures, page = true) {
     assert(!result.exceptionDetails, JSON.stringify(result.exceptionDetails)); return result.result.value;
   };
   if (page) { await send('Runtime.enable'); await send('Log.enable'); }
-  return { send, evaluate, close: () => {
+  return { send, evaluate, fileChoosers, close: () => {
     for (const p of pending.values()) { clearTimeout(p.timer); p.reject(new Error('Debugger closed')); }
     if(socket.readyState===WebSocket.CLOSED)return Promise.resolve();
     const closed=new Promise(resolve=>socket.addEventListener('close',resolve,{once:true}));socket.close();
@@ -415,23 +416,109 @@ async function main() {
     assert.equal(pastedTransfer.delivered,1,'In-memory clipboard image did not reach its LAN recipient');
     assert.equal(peer.state.messages.find(m=>m.id===pastedTransfer.message.id)?.sha256,pastedTransfer.message.sha256,'Clipboard image integrity was not verified');
     console.log('Clipboard image crossed the real encrypted LAN file approval and integrity pipeline');
+    // A waiting consent request must leave both the composer and peer streams free.
+    const outgoingOffers = [];
+    peer.acceptFile = offer => new Promise(resolve => outgoingOffers.push({ id: offer.id, name: offer.name, resolve }));
+    // Match the main app's consent callback cleanup when the sender cancels.
+    const cancelOutgoingOffer = ({ id, status }) => {
+      if (status === 'canceled') outgoingOffers.find(offer => offer.id === id)?.resolve(false);
+    };
+    peer.on('file-transfer', cancelOutgoingOffer);
+    await changeMainLanguage('es');
+    await appPage.evaluate(`document.querySelector('.person[data-peer="${peer.id}"]').click()`);
+    const nativePickerPaths = [join(profile, 'pending-native.bin'),join(profile,'pending-native_日本語.txt')];
+    writeFileSync(nativePickerPaths[0],Buffer.alloc(21*1024*1024,0x5a));
+    writeFileSync(nativePickerPaths[1],'Native private picker');
+    await appPage.evaluate("document.getElementById('message-input').value='Draft survives private picker'");
+    await appPage.send('Page.enable');
+    await appPage.send('Page.setInterceptFileChooserDialog',{enabled:true});
+    const pickerPoint = await appPage.evaluate(`(()=>{const r=document.querySelector('#attach-button').getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2};})()`);
+    await appPage.send('Input.dispatchMouseEvent',{type:'mousePressed',...pickerPoint,button:'left',clickCount:1});
+    await appPage.send('Input.dispatchMouseEvent',{type:'mouseReleased',...pickerPoint,button:'left',clickCount:1});
+    const chooser = await until(()=>appPage.fileChoosers.at(-1),'native attachment picker');
+    assert.equal(chooser.mode,'selectMultiple','Attachment picker did not allow multiple files');
+    await appPage.send('DOM.setFileInputFiles',{backendNodeId:chooser.backendNodeId,files:nativePickerPaths});
+    await appPage.send('Page.setInterceptFileChooserDialog',{enabled:false});
+    await until(()=>outgoingOffers.length===2,'two independent native picker consent offers');
+    outgoingOffers.sort((a,b)=>nativePickerPaths.findIndex(path=>basename(path)===a.name)-nativePickerPaths.findIndex(path=>basename(path)===b.name));
+    assert(await appPage.evaluate("document.getElementById('message-input').value==='Draft survives private picker'"),'Native picker cleared draft');
+    await appPage.evaluate("document.getElementById('message-input').value=''");
+    for (let i = 2; i < 8; i++) {
+      await appPage.evaluate(`{const data=new DataTransfer();data.items.add(new File([Uint8Array.from(atob('${clipboardPng.toString('base64')}'),c=>c.charCodeAt(0))],'pending-${i}.png',{type:'image/png'}));document.getElementById('message-input').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));}`);
+      await until(() => appPage.evaluate("!document.getElementById('clipboard-preview').hidden"), 'outgoing image preview');
+      await appPage.evaluate("document.getElementById('message-form').requestSubmit()");
+      await until(() => outgoingOffers.length === i + 1, 'independent outgoing file offer');
+      assert(await appPage.evaluate("!document.getElementById('send-button').disabled&&!document.getElementById('attach-button').disabled&&document.getElementById('clipboard-preview').hidden"), 'Pending consent blocked the composer');
+    }
+    const freeChat = `chat-with-eight-pending-${randomUUID()}\n\nsatu\n\ndua`;
+    await appPage.evaluate(`document.getElementById('message-input').value=${JSON.stringify(freeChat)};document.getElementById('message-form').requestSubmit()`);
+    await until(() => peer.state.messages.some(message => message.text === freeChat), 'chat delivered while eight offers wait');
+    await until(() => appPage.evaluate("!document.getElementById('send-button').disabled"), 'composer released after chat');
+    assert(await appPage.evaluate(`window.lumilan.state().then(state=>{
+      const message=state.messages.find(item=>item.text===${JSON.stringify(freeChat)});
+      return message&&document.querySelector('#message-'+message.id+' .message-markdown')?.querySelectorAll('br').length===4;
+    })`), 'Outgoing private chat collapsed its blank lines');
+    const incomingLines = await peer.sendMessage('test\n\nsatu\n\ndua', appState.me.id);
+    await until(() => appPage.evaluate(`document.querySelector('#message-${incomingLines.message.id} .message-markdown')?.querySelectorAll('br').length===4`), 'incoming encrypted private multiline bubble');
+    console.log('Private messages: outgoing and incoming encrypted multiline chat retain blank lines');
+    const pendingRows = await appPage.evaluate("Array.from(document.querySelectorAll('#transfer-progress .transfer-progress'),row=>row.dataset.transferId)");
+    assert.equal(new Set(pendingRows).size, 8, 'Outgoing jobs reused progress/cancel IDs');
+    for (const theme of ['light', 'dark']) {
+      await changeMainLanguage('es');
+      await appPage.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
+      for (const [width, height] of [[1100,480],[320,700]]) {
+        await mainViewport(width, height);
+        const layout = await appPage.evaluate(`(()=>{const list=document.getElementById('transfer-progress'),form=document.getElementById('message-form').getBoundingClientRect();
+          return {height:document.documentElement.scrollHeight,viewport:innerHeight,y:scrollY,list:list.clientHeight,scroll:list.scrollHeight,
+            formTop:form.top,formBottom:form.bottom,controls:Array.from(list.querySelectorAll('.transfer-progress'),row=>{
+              const label=row.querySelector('span').getBoundingClientRect(),bar=row.querySelector('progress').getBoundingClientRect(),cancel=row.querySelector('button:last-child').getBoundingClientRect();
+              return label.right<=bar.left&&bar.right<=cancel.left&&cancel.right<=innerWidth;
+            })};})()`);
+        assert(layout.height <= layout.viewport + 1 && layout.y === 0 && layout.list <= 120 && layout.scroll > layout.list
+          && layout.formTop >= 0 && layout.formBottom <= height && layout.controls.every(Boolean), `Pending transfer rows overflowed the composer: ${JSON.stringify(layout)}`);
+      }
+    }
+    await mainViewport(1100,800);
+    await changeMainLanguage('id');
+    await appPage.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(originalUiTheme)}`);
+    outgoingOffers[1].resolve(true);
+    await until(() => appPage.evaluate(`!document.querySelector('[data-transfer-id="${pendingRows[1]}"]')`), 'second image finishes independently');
+    assert(peer.pendingFileOffers.size === 7, 'Accepting the second file changed another pending consent');
+    const secondReceived = peer.state.messages.at(-1);
+    assert(secondReceived.sha256 && secondReceived.kind === 'file', 'Second image did not complete integrity verification');
+    assert(nativePickerPaths.some(path=>basename(path)===secondReceived.name),'Accepted native picker file lost its original name');
+    await appPage.evaluate(`document.querySelector('[data-transfer-id="${pendingRows[2]}"] button:last-child').click()`);
+    await until(() => appPage.evaluate(`!document.querySelector('[data-transfer-id="${pendingRows[2]}"]')`), 'targeted outgoing cancellation');
+    assert(peer.pendingFileOffers.size === 6, 'Canceling the third file did not release its own consent');
+    outgoingOffers[0].resolve(false);
+    await until(() => appPage.evaluate(`!document.querySelector('[data-transfer-id="${pendingRows[0]}"] button:first-of-type').hidden`), 'declined file retained for retry');
+    peer.acceptFile = async () => true;
+    await appPage.evaluate(`document.querySelector('[data-transfer-id="${pendingRows[0]}"] button:first-of-type').click()`);
+    await until(() => appPage.evaluate(`!document.querySelector('[data-transfer-id="${pendingRows[0]}"]')&&document.querySelectorAll('#transfer-progress .transfer-progress').length===5`), 'retry of declined image completes');
+    for (let i = 3; i < 8; i++) outgoingOffers[i].resolve(false);
+    await until(() => appPage.evaluate("Array.from(document.querySelectorAll('#transfer-progress .transfer-progress button:first-of-type')).every(button=>!button.hidden)"), 'remaining declines settled');
+    await appPage.evaluate("document.querySelectorAll('#transfer-progress .transfer-progress button:last-child').forEach(button=>button.click())");
+    assert.equal(peer.pendingFileOffers.size, 0, 'Outgoing regression left pending consent');
+    peer.removeListener('file-transfer', cancelOutgoingOffer);
+    assert(await appPage.evaluate("document.getElementById('transfer-progress').hidden"), 'Outgoing regression left composer rows');
+    console.log('Outgoing files: eight independent consent requests, unblocked chat/images, second-first completion, targeted cancellation, retry and light/dark narrow layout passed');
     const quitPendingClipboard = async () => {
       // Exercise shutdown on every native desktop, including the Wayland fallback.
-      let releaseQuitOffer;
-      peer.acceptFile = () => new Promise(resolve => { releaseQuitOffer = resolve; });
+      const releaseQuitOffers = [];
+      peer.acceptFile = () => new Promise(resolve => { releaseQuitOffers.push(resolve); });
       try {
-        await appPage.evaluate(`window.lumilan.file(new File([Uint8Array.from(atob('${clipboardPng.toString('base64')}'),c=>c.charCodeAt(0))],'quit-pending.png',{type:'image/png'}),${JSON.stringify(peer.id)}).catch(()=>{});true`);
-        await until(() => Boolean(releaseQuitOffer), 'recipient consent pending before Quit');
+        for (let i = 0; i < 2; i++) await appPage.evaluate(`window.lumilan.file(new File([Uint8Array.from(atob('${clipboardPng.toString('base64')}'),c=>c.charCodeAt(0))],'quit-pending-${i}.png',{type:'image/png'}),${JSON.stringify(peer.id)}).catch(()=>{});true`);
+        await until(() => releaseQuitOffers.length === 2, 'two recipient consents pending before Quit');
         const stagedClipboard = () => readdirSync(join(profile, 'lumilan', 'files')).filter(name => /^\.clipboard-[A-Za-z0-9]{6}$/.test(name));
-        assert.equal(stagedClipboard().length, 1, 'Pending clipboard image has no private staging directory');
+        assert.equal(stagedClipboard().length, 2, 'Pending clipboard images have no private staging directories');
         // The Node inspector can hold process shutdown while it remains attached.
         await browser.close(); browser = null;
         await appPage.evaluate("document.querySelectorAll('dialog[open]').forEach(d=>d.close());setTimeout(()=>window.lumilan.quit(),100);true");
         await until(() => child.exitCode !== null, 'explicit quit removes companion');
         assert.equal(child.exitCode, 0, 'Quit exited abnormally');
         assert.deepEqual(stagedClipboard(), [], 'Quit left a clipboard image staging directory');
-        console.log('Quit aborted pending clipboard transfer and removed private staging');
-      } finally { releaseQuitOffer?.(false); }
+        console.log('Quit aborted both pending clipboard transfers and removed private staging');
+      } finally { for (const release of releaseQuitOffers) release(false); }
     };
     const assertMainMotionHidden = async () => {
       await until(() => browser.evaluate('!smokeMain.isVisible()||smokeMain.isMinimized()'), 'native main hidden or minimized');

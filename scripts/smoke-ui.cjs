@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const { spawn } = require('node:child_process');
-const { mkdtempSync, readdirSync, realpathSync, writeFileSync } = require('node:fs');
+const { mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } = require('node:fs');
 const { rm } = require('node:fs/promises');
 const { createServer } = require('node:net');
 const { tmpdir } = require('node:os');
@@ -25,7 +26,7 @@ async function main() {
     const timer = setTimeout(() => reject(new Error(message)), ms);
     promise.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
   });
-  const timeoutAt = Date.now() + 45_000;
+  const timeoutAt = Date.now() + 90_000;
   const server = createServer();
   server.listen(0, '127.0.0.1');
   const port = await new Promise(resolve => server.once('listening', () => resolve(server.address().port)));
@@ -444,6 +445,81 @@ async function main() {
       await setViewport(1100, 800);
     }
     console.log('UI scrolling: document stays within viewport; long contacts, messages and details scroll independently in light/dark and narrow windows');
+    // Preserve the exact multiline draft when the shared message renderer creates a bubble.
+    await evaluate("document.querySelector('#message-input').focus()");
+    for (const [index, text] of ['test', 'satu', 'dua'].entries()) {
+      if (index) for (let line = 0; line < 2; line++) {
+        await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 8, text: '\r', unmodifiedText: '\r' });
+        await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 8 });
+      }
+      await send('Input.insertText', { text });
+    }
+    const multiline = 'test\n\nsatu\n\ndua';
+    assert.equal(await evaluate("document.querySelector('#message-input').value"), multiline, 'Shift+Enter changed the multiline draft');
+    await evaluate("document.querySelector('#message-form').requestSubmit()");
+    let multilineNote;
+    for (let attempt = 0; attempt < 100 && !multilineNote; attempt++) {
+      multilineNote = await evaluate(`window.lumilan.state().then(state=>state.messages.find(message=>message.text===${JSON.stringify(multiline)}))`, true);
+      if (!multilineNote) await delay(100);
+    }
+    assert(multilineNote, 'The submitted multiline message was not stored intact');
+    for (const theme of ['light', 'dark']) for (const width of [1100, 320]) {
+      await evaluate(`document.documentElement.dataset.theme='${theme}';document.body.classList.remove('show-list')`);
+      await setViewport(width, 800);
+      const lines = await evaluate(`(()=>{const paragraph=document.querySelector('#message-${multilineNote.id} .message-markdown p');
+        if(!paragraph)return null;
+        const positions=Array.from(paragraph.childNodes).filter(node=>node.nodeType===Node.TEXT_NODE&&node.textContent).map(node=>{
+          const range=document.createRange();range.selectNodeContents(node);return range.getBoundingClientRect().top;
+        });return{breaks:paragraph.querySelectorAll('br').length,positions,lineHeight:parseFloat(getComputedStyle(paragraph).lineHeight)};})()`);
+      assert(lines && lines.breaks === 4 && lines.positions.length === 3 && lines.positions.every((top, index) => !index ||
+        Math.abs(top - lines.positions[index - 1] - 2 * lines.lineHeight) < 2), `Multiline message collapsed (${theme}, ${width}px): ${JSON.stringify(lines)}`);
+    }
+    await setViewport(1100, 800);
+    console.log('Message line breaks: native Shift+Enter, stored draft and five-line bubble passed in light/dark desktop/narrow layouts');
+    const droppedBytes = Buffer.alloc(21 * 1024 * 1024, 0x5a);
+    const droppedPaths = [join(profile, 'drop-large.bin'), join(profile, 'laporan_日本語.txt')];
+    writeFileSync(droppedPaths[0], droppedBytes);
+    writeFileSync(droppedPaths[1], 'Native file drop');
+    const dragData = { items: [], files: droppedPaths, dragOperationsMask: 1 };
+    const dropPoint = async () => evaluate(`(()=>{const rect=document.querySelector('#messages').getBoundingClientRect();return{x:rect.left+rect.width/2,y:rect.top+rect.height/2};})()`);
+    await evaluate("document.querySelector('#message-input').value='Keep this draft';document.body.classList.remove('show-list')");
+    for (const theme of ['light','dark']) for (const width of [1100,320]) {
+      await setViewport(width,800);
+      await evaluate(`document.documentElement.dataset.theme='${theme}'`);
+      const point = await dropPoint();
+      await send('Input.dispatchDragEvent', { type: 'dragEnter', ...point, data: dragData });
+      await send('Input.dispatchDragEvent', { type: 'dragOver', ...point, data: dragData });
+      const overlay = await evaluate(`(()=>{const element=document.querySelector('#file-drop-overlay'),rect=element.getBoundingClientRect();return{visible:!element.hidden,title:document.querySelector('#file-drop-title').textContent,inBounds:rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight,noOuterScroll:document.scrollingElement.scrollHeight<=innerHeight+1};})()`);
+      assert(overlay.visible && overlay.inBounds && overlay.noOuterScroll && /menyimpan|save files/.test(overlay.title), `Drop feedback failed (${theme}, ${width}px): ${JSON.stringify(overlay)}`);
+      const screenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      writeFileSync(join(dist, `ui-audit-drop-${theme}-${width}.png`), Buffer.from(screenshot.data,'base64'));
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      // CDP dragCancel resets its injected drag without emitting DOM dragleave/dragend.
+      await send('Input.dispatchDragEvent', { type: 'dragCancel', ...point, data: dragData });
+      assert(await evaluate("document.querySelector('#file-drop-overlay').hidden"), 'Escape-canceled drag left drop feedback visible');
+    }
+    await setViewport(1100,800);
+    const point = await dropPoint();
+    for (const type of ['dragEnter','dragOver','drop']) await send('Input.dispatchDragEvent', { type, ...point, data: dragData });
+    let droppedMessages = [];
+    while (Date.now() < timeoutAt) {
+      droppedMessages = await evaluate("window.lumilan.state().then(state=>state.messages.filter(message=>message.note&&['drop-large.bin','laporan_日本語.txt'].includes(message.name)))", true);
+      if (droppedMessages.length === 2 && await evaluate("document.querySelector('#transfer-progress').hidden")) break;
+      await delay(30);
+    }
+    assert.equal(droppedMessages.length,2,'Native multi-file body drop did not store both files');
+    const droppedLarge = droppedMessages.find(message=>message.name==='drop-large.bin');
+    assert.equal(createHash('sha256').update(readFileSync(join(profile,'lumilan','files',droppedLarge.id))).digest('hex'),createHash('sha256').update(droppedBytes).digest('hex'),'Large dropped file content changed during local saving');
+    assert(await evaluate("document.querySelector('#message-input').value==='Keep this draft'&&document.querySelector('#file-drop-overlay').hidden"),'Drop cleared the draft or left feedback visible');
+    const beforeRejectedDrop = await evaluate('window.lumilan.state().then(state=>state.messages.length)', true);
+    for (const target of [await evaluate("(()=>{const r=document.querySelector('.sidebar').getBoundingClientRect();return{x:r.left+20,y:r.top+20};})()"), point]) {
+      const data = target === point ? { ...dragData, files: [profile, droppedPaths[0]] } : dragData;
+      for (const type of ['dragEnter','dragOver','drop']) await send('Input.dispatchDragEvent', { type, ...target, data });
+    }
+    assert.equal(await evaluate('window.lumilan.state().then(state=>state.messages.length)', true),beforeRejectedDrop,'Outside/folder drop sent a partial selection');
+    await evaluate("document.querySelector('#message-input').value=''");
+    console.log('File drop: real disk-backed 21 MB binary and Unicode-named file saved with SHA-256; draft, canceled drag, folder/outside rejection and light/dark narrow feedback passed');
     const gifPixels = Buffer.alloc(32 * 32 * 2 * 3);
     gifPixels.fill(255, 0, 32 * 32 * 3);
     for (let pixel = 32 * 32 * 3; pixel < gifPixels.length; pixel += 3) gifPixels[pixel] = 255;
@@ -458,7 +534,7 @@ async function main() {
     let gifPreview;
     while (Date.now() < timeoutAt) {
       gifPreview = await evaluate(`(() => { const row = [...document.querySelectorAll('#messages .message')]
-        .find(item => item.textContent.includes('smoke-animated.gif')); const image = row?.querySelector('.image-preview');
+        .find(item => item.textContent.includes('smoke-animated.gif')); row?.scrollIntoView({ block: 'nearest' }); const image = row?.querySelector('.image-preview');
         return image?.complete && image.naturalWidth ? image.src : null; })()`);
       if (gifPreview) break;
       await delay(100);

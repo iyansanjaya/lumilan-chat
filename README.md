@@ -15,7 +15,7 @@ Lumilan connects devices directly on the same LAN or Wi-Fi. No accounts, central
 | Connect | Make it yours |
 | --- | --- |
 | **Direct messages & invitation-only Rooms** — talk privately or bring a team together. | **Personal notes** — keep messages and attachments on your own device. |
-| **File sharing & image paste** — transfer files up to 5 GB to compatible clients; paste a copied image, review it, and select Send. | **Reminders** — schedule your own tasks or ask an online contact to choose and accept a time. |
+| **File sharing & image paste** — transfer each file up to 5 GB to compatible clients; paste a copied image, review it, and select Send. | **Reminders** — schedule your own tasks or ask an online contact to choose and accept a time. |
 | **Voice calls** — one-to-one audio over your local network. | **Lumi** — compact background alerts, with system notification fallback where needed. |
 
 <details>
@@ -57,12 +57,16 @@ On first launch, supported installed builds enable opening at computer sign-in. 
 
 ## Images, alerts, and updates
 
+- **Drag files onto the active chat to send immediately.** The drop indicator shows the destination; select the paperclip to choose several files (Ctrl-click on Windows/Linux, Command-click on macOS, or Shift-click for a range). A selection is rejected if the conversation changed while the picker was open. Up to 8 outgoing files can wait or transfer at once, each with consent, progress, and Cancel. Personal notes save files locally. Folders, empty or oversized files, and selections exceeding the available slots are rejected before any file in that selection starts. Drafts and pasted-image previews stay intact. Announcement Rooms, archived conversations, and pending invitations do not accept attachments.
+- **Local storage, no cloud quota.** The 5 GB limit applies to each file transfer, not your storage capacity. Messages and received files stay on your device; storage depends on available disk space. Lumilan does not provide cloud storage.
+- **Keep chatting while files wait for approval.** Up to 8 outgoing files have separate progress and Cancel controls. Failed files remain available to Retry or Remove. Receiving multiple requests requires the updated recipient app; older clients may refuse another file until their current transfer finishes.
 - **Copy an image, then paste it into the message box.** A preview appears before you select Send. Remove it with the × button. Clipboard images support PNG/JPEG/WebP/GIF up to 20 MB, 40 million pixels in total, and 120 frames. They use the existing file consent and integrity checks; Announcement Rooms do not accept attachments.
 - **List entry:** Enter continues a numbered or bullet list; Enter on an empty item ends it. Outside lists, Enter sends and Shift + Enter adds a line. The Send button can send a list directly.
 - **176 local emoji:** browse a scrollable picker with Tab or the arrow keys. Home/End selects the first/last item; Enter inserts it, and Escape closes the picker. Labels follow the app language.
 - **Presence at a glance:** colored dots and avatar rings show status in the direct conversation list. Hover over a person's row or focus it with the keyboard for an immediate status tooltip; screen readers retain the status label.
 - **Comfortable motion:** menus, dialogs, message bubbles, unread counts, and Lumi use brief, bounded animations. Reduced motion disables interface animations and transitions; the main interface pauses CSS animations while hidden.
 - **Background alerts:** enabled and ready Lumi replaces the system banner. Loading, paused, disabled, or unavailable Lumi uses system notifications. Mute and Do not disturb suppress alerts; screen lock and suspend defer them.
+- **Quit safely:** Quit and Restart and install cancel unfinished transfers and wait for temporary-file cleanup and network shutdown. Received files remain available. Forced termination or OS shutdown may interrupt cleanup; abandoned transfer files are removed at the next launch.
 - **Updates:** use **Settings → Check for updates**. Windows installers and Linux AppImages can download an update and offer **Later** or **Restart and install**. macOS currently directs you to install the DMG manually, including in signed builds.
 
 If **Test system notification** is not visible, check OS notification permissions and Do not disturb. System acceptance does not guarantee an on-screen banner. macOS system notifications require a signed app. Linux needs `libnotify.so.4` (`libnotify4` on Debian/Ubuntu) and a desktop notification service. If Settings reports unavailable screen-lock detection, check `gdbus` and the desktop ScreenSaver service; alerts wait until lock state can be verified.

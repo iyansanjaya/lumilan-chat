@@ -316,6 +316,132 @@ test('isi pesan tidak tampak pada lalu lintas TCP antara dua peer', async () => 
   }
 });
 
+test('persetujuan file pribadi tidak menahan pesan atau file berikutnya', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-private-independent-'));
+  const decisions = new Map();
+  const operations = [];
+  const controllers = [];
+  const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0',
+    acceptFile: offer => {
+      const decision = Promise.withResolvers();
+      decisions.set(offer.id, { ...offer, ...decision });
+      return decision.promise;
+    },
+  });
+  b.on('file-transfer', transfer => {
+    if (transfer.status === 'canceled') decisions.get(transfer.id)?.resolve(false);
+  });
+  try {
+    await a.start();
+    await b.start();
+    a.rename('Pengirim Uji');
+    b.rename('Penerima Uji');
+    await a.connectAddress(b.addresses[0]);
+    for (const scenario of ['accept', 'decline', 'cancel']) {
+      await t.test(scenario, async () => {
+        const previousOffers = decisions.size;
+        const contents = [Buffer.alloc(512 * 1024 + 17, 0x41), Buffer.alloc(512 * 1024 + 31, 0x42)];
+        const sources = contents.map((bytes, index) => {
+          const path = join(root, `${scenario}-${index}.png`);
+          writeFileSync(path, bytes);
+          return path;
+        });
+        const controller = new AbortController();
+        controllers.push(controller);
+        const first = a.sendFilePath(sources[0], b.id, { signal: controller.signal });
+        first.catch(() => {});
+        operations.push(first);
+        await until(() => decisions.size === previousOffers + 1);
+        const firstOffer = [...decisions.values()].at(-1);
+        const second = a.sendFilePath(sources[1], b.id);
+        second.catch(() => {});
+        operations.push(second);
+        await Promise.race([until(() => decisions.size === previousOffers + 2), second]);
+        const secondOffer = [...decisions.values()].at(-1);
+        const text = await a.sendMessage(`Pesan saat dua file menunggu: ${scenario}`, b.id);
+        assert.equal(b.state.messages.at(-1).id, text.message.id);
+        assert.equal(b.pendingFileOffers.size, 2);
+        assert.equal(b.incomingFiles.size, 0);
+        assert(!b.state.messages.some(message => message.id === firstOffer.id || message.id === secondOffer.id));
+
+        secondOffer.resolve(true);
+        const sent = await second;
+        assert.equal(sent.message.id, secondOffer.id);
+        assert.equal(sent.message.sha256, createHash('sha256').update(contents[1]).digest('hex'));
+        assert.deepEqual(readFileSync(b.filePath(secondOffer.id).path), contents[1]);
+        assert(b.pendingFileOffers.has(firstOffer.id), 'File kedua menunggu persetujuan file pertama');
+        assert(!b.state.messages.some(message => message.id === firstOffer.id));
+        if (scenario === 'cancel') controller.abort(new Error('Pengiriman dibatalkan.'));
+        else firstOffer.resolve(scenario === 'accept');
+        if (scenario === 'accept') {
+          const accepted = await first;
+          assert.equal(accepted.message.sha256, createHash('sha256').update(contents[0]).digest('hex'));
+          assert.deepEqual(readFileSync(b.filePath(firstOffer.id).path), contents[0]);
+        } else {
+          await assert.rejects(first, scenario === 'cancel' ? /dibatalkan/ : /Penerima menolak file/);
+          assert(!b.state.messages.some(message => message.id === firstOffer.id));
+          assert(!existsSync(join(a.filesDir, firstOffer.id)));
+        }
+        await until(() => b.pendingFileOffers.size === 0 && b.incomingFiles.size === 0);
+        assert.deepEqual(readFileSync(b.filePath(secondOffer.id).path), contents[1], 'Keputusan file pertama merusak file kedua');
+        for (const peer of [a, b]) assert.equal(readdirSync(peer.filesDir).filter(name => name.endsWith('.part')).length, 0);
+      });
+    }
+    await t.test('batas bersama, ID duplikat, dan reservasi disk', async () => {
+      const previousOffers = decisions.size;
+      const ids = Array.from({ length: 7 }, () => randomUUID());
+      const pending = ids.map(id => a.sendTo(b.id, { type: 'file-start', message: { id, to: b.id, name: 'bornes.bin', size: 4 } }));
+      const legacyBytes = Buffer.from('legacy held for consent');
+      const legacyController = new AbortController();
+      controllers.push(legacyController);
+      pending.push(a.sendFile('legacy-held.bin', legacyBytes, b.id, { signal: legacyController.signal }));
+      for (const operation of pending) { operation.catch(() => {}); operations.push(operation); }
+      await until(() => decisions.size === previousOffers + 8);
+      assert.equal(b.pendingFileOffers.size, 8);
+      assert.equal(b.incomingFileReservation(), 7 * 4 + legacyBytes.length);
+      const text = await a.sendMessage('Pesan saat delapan file menunggu persetujuan', b.id);
+      assert.equal(b.state.messages.at(-1).id, text.message.id);
+      await assert.rejects(a.sendTo(b.id, { type: 'file-start', message: { id: ids[0], to: b.id, name: 'replay.bin', size: 4 } }), /ID file sudah digunakan/);
+      await assert.rejects(a.sendTo(b.id, { type: 'file', message: {
+        id: ids[0], to: b.id, name: 'replay-legacy.bin', size: legacyBytes.length,
+        sha256: createHash('sha256').update(legacyBytes).digest('hex'),
+      }, bytes: legacyBytes.toString('base64') }), /ID file sudah digunakan/);
+      await assert.rejects(a.sendFile('overflow-legacy.bin', legacyBytes, b.id), /sedang menerima file lain/);
+      decisions.get(ids[0]).resolve(true);
+      await pending[0];
+      assert.equal(b.incomingFiles.size, 1);
+      assert.equal(b.pendingFileOffers.size, 7);
+      await assert.rejects(a.sendTo(b.id, { type: 'file-start', message: { id: randomUUID(), to: b.id, name: 'overflow.bin', size: 4 } }), /sedang menerima file lain/);
+      await a.sendTo(b.id, { type: 'file-chunk', id: ids[0], offset: 0, bytes: Buffer.from('ab').toString('base64') });
+      assert.equal(b.incomingFileReservation(), 7 * 4 + legacyBytes.length - 2);
+      await a.sendTo(b.id, { type: 'file-cancel', id: ids[0] });
+      assert.equal(b.incomingFileReservation(), 6 * 4 + legacyBytes.length);
+      const legacyOffer = [...decisions.values()].find(offer => offer.name === 'legacy-held.bin');
+      legacyController.abort(new Error('Pengiriman dibatalkan.'));
+      for (const id of ids.slice(1)) decisions.get(id).resolve(false);
+      const results = await Promise.allSettled(pending);
+      assert.equal(results[0].status, 'fulfilled');
+      assert(results.slice(1).every(result => result.status === 'rejected'));
+      assert.match(results.at(-1).reason.message, /Pengiriman dibatalkan/);
+      assert.equal(b.pendingFileOffers.size, 0);
+      assert.equal(b.incomingFiles.size, 0);
+      assert.equal(b.incomingFileReservation(), 0);
+      legacyOffer.resolve(true);
+      assert(!b.state.messages.some(message => message.id === legacyOffer.id));
+      assert(!existsSync(join(b.filesDir, legacyOffer.id)));
+      for (const peer of [a, b]) assert.equal(readdirSync(peer.filesDir).filter(name => name.endsWith('.part')).length, 0);
+    });
+  } finally {
+    for (const decision of decisions.values()) decision.resolve(false);
+    for (const controller of controllers) controller.abort(new Error('Pengujian selesai.'));
+    await Promise.allSettled(operations);
+    await Promise.all([a.stop(), b.stop()]);
+    assert.ok(root.startsWith(join(tmpdir(), 'lumilan-private-independent-')));
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
 test('transfer bertahap memverifikasi batas 5 GB, kompatibilitas, persetujuan, batal, dan potongan rusak', async () => {
   const root = mkdtempSync(join(process.cwd(), '.lumilan-chunks-'));
   let accept = true;
@@ -359,7 +485,7 @@ test('transfer bertahap memverifikasi batas 5 GB, kompatibilitas, persetujuan, b
     const pendingId = randomUUID();
     const pending = a.sendTo(b.id, { type: 'file-start', message: { id: pendingId, to: b.id, name: 'menunggu.bin', size: 4 } });
     await until(() => Boolean(answerOffer));
-    await assert.rejects(a.sendTo(b.id, { type: 'file-start', message: { id: randomUUID(), to: b.id, name: 'lain.bin', size: 4 } }), /sedang menerima file lain/);
+    await assert.rejects(a.sendTo(b.id, { type: 'file-start', message: { id: pendingId, to: b.id, name: 'lain.bin', size: 4 } }), /ID file sudah digunakan/);
     answerOffer(false);
     await assert.rejects(pending, /Penerima menolak file/);
     b.acceptFile = async () => accept;

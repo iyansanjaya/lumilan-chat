@@ -21,7 +21,7 @@ if (!files.has('clipboard-image.js') || !extractFile(asar, 'clipboard-image.js')
 if (!files.has('linux-screen-lock.js') || !extractFile(asar, 'linux-screen-lock.js').equals(readFileSync('linux-screen-lock.js'))) {
   throw new Error(`Missing or stale Linux lock detector in ${asar}`);
 }
-for (const file of ['main.js', 'notch.js', 'notch-preload.cjs', 'startup-default.js', 'preload.cjs', 'peer.js', 'reminders.js', 'discovery.js', 'preview-image.js', 'public/index.html', 'public/notch.html', 'public/notch.css', 'public/notch.js', 'public/app.css', 'public/app.js', 'public/reminders.js', 'public/avatar.js', 'public/i18n.js', 'public/message-format.js', 'public/voice-call.js', 'public/fonts/PublicSans.ttf', 'build/icon.png']) {
+for (const file of ['main.js', 'notch.js', 'notch-preload.cjs', 'startup-default.js', 'updates.js', 'preload.cjs', 'peer.js', 'reminders.js', 'discovery.js', 'preview-image.js', 'public/index.html', 'public/notch.html', 'public/notch.css', 'public/notch.js', 'public/app.css', 'public/app.js', 'public/reminders.js', 'public/avatar.js', 'public/i18n.js', 'public/message-format.js', 'public/voice-call.js', 'public/fonts/PublicSans.ttf', 'build/icon.png']) {
   if (!files.has(file)) throw new Error(`Missing ${file} in ${asar}`);
   if (!extractFile(asar, join(...file.split('/'))).equals(readFileSync(file))) throw new Error(`Packaged ${file} differs from source`);
 }

@@ -18,6 +18,7 @@ const DATA = '/lumilan/data/1.0.0';
 const MAX_FILE = 20 * 1024 * 1024;
 const PREVIOUS_STREAM_FILE = 100 * 1024 * 1024;
 const MAX_STREAM_FILE = 5 * 1024 * 1024 * 1024;
+const MAX_INCOMING_FILES = 8;
 const FILE_CHUNK = 512 * 1024;
 const MAX_FRAME = 29 * 1024 * 1024;
 const MAX_TEXT = 4000;
@@ -132,6 +133,10 @@ export class LumilanPeer extends EventEmitter {
     this.dialing = new Set();
     this.incomingFiles = new Map();
     this.pendingFileOffers = new Map();
+    this.incomingPackets = new Map();
+    this.incomingCleanups = new Set();
+    this.stopping = false;
+    this.stopPromise = null;
     this.announcementTimes = new Map();
     this.typing = new Map();
     this.activeCall = null;
@@ -145,6 +150,9 @@ export class LumilanPeer extends EventEmitter {
   typingList() { return [...this.typing.values()].map(({ from, thread }) => ({ from, thread })); }
 
   async start() {
+    if (this.stopPromise) await this.stopPromise;
+    this.stopPromise = null;
+    this.stopping = false;
     mkdirSync(this.filesDir, { recursive: true, mode: 0o700 });
     for (const entry of readdirSync(this.filesDir, { withFileTypes: true })) {
       // Only a fresh instance recovers clipboard stages; network rebind must preserve live uploads.
@@ -194,7 +202,8 @@ export class LumilanPeer extends EventEmitter {
     });
     this.identity = this.node.peerId.toString();
     await this.node.handle(PROFILE, (stream, connection) => this.handleProfile(stream, connection), { maxInboundStreams: 2 });
-    await this.node.handle(DATA, (stream, connection) => this.handleData(stream, connection), { maxInboundStreams: 8 });
+    // Unanswered file offers must leave streams available for messages and cancellation.
+    await this.node.handle(DATA, (stream, connection) => this.handleData(stream, connection), { maxInboundStreams: MAX_INCOMING_FILES + 8 });
     this.node.addEventListener('peer:discovery', event => {
       const id = event.detail.id.toString();
       if (!validId(id) || id === this.id) return;
@@ -248,14 +257,30 @@ export class LumilanPeer extends EventEmitter {
     }
   }
 
-  async stop() {
-    this.reminders.stop();
-    this.finishCall('offline');
-    for (const item of this.typing.values()) clearTimeout(item.timer);
-    this.typing.clear();
-    for (const [id, offer] of this.pendingFileOffers) { offer.canceled = true; this.emit('file-transfer', { id, status: 'canceled' }); }
-    for (const id of this.incomingFiles.keys()) await this.cancelIncomingFile(id);
-    if (this.node) { await this.node.stop(); this.node = null; }
+  stop() {
+    if (this.stopPromise) return this.stopPromise;
+    this.stopping = true;
+    this.stopPromise = Promise.resolve().then(async () => {
+      this.reminders.stop();
+      this.finishCall('offline');
+      for (const item of this.typing.values()) clearTimeout(item.timer);
+      this.typing.clear();
+      const cleanup = [...this.incomingCleanups, ...[...new Set([...this.pendingFileOffers.keys(), ...this.incomingFiles.keys()])].map(id => this.cancelIncomingFile(id))];
+      const errors = [];
+      for (const stream of this.incomingPackets.keys()) {
+        try { stream.abort(new Error('Pengiriman dibatalkan.')); } catch (error) { errors.push(error); }
+      }
+      const node = this.node;
+      const results = await Promise.allSettled([...cleanup, ...this.incomingPackets.values()]);
+      try { if (node) { await node.stop(); if (this.node === node) this.node = null; } }
+      catch (error) { errors.push(error); }
+      for (const result of results) if (result.status === 'rejected') errors.push(result.reason);
+      if (errors.length) throw new AggregateError(errors, 'Gagal membersihkan peer saat berhenti.');
+    }).catch(error => {
+      this.stopPromise = null;
+      throw error;
+    });
+    return this.stopPromise;
   }
 
   async connectAddress(value) {
@@ -686,9 +711,14 @@ export class LumilanPeer extends EventEmitter {
 
   async handleData(stream, connection) {
     const from = connection.remotePeer.toString();
+    if (this.stopping) { stream.abort(new Error('Pengiriman dibatalkan.')); return; }
     if (!localPeer(connection) || !this.trusted.has(from)) { stream.abort(new Error('Perangkat tidak dikenal di jaringan lokal.')); return; }
+    let complete;
+    const done = new Promise(resolve => { complete = resolve; });
+    this.incomingPackets.set(stream, done);
     try {
       const data = await readStream(stream, MAX_FRAME);
+      if (this.stopping) throw new Error('Pengiriman dibatalkan.');
       if (data?.type === 'hello') {
         const name = cleanName(data.name);
         if (!name) throw new Error('Nama tidak valid.');
@@ -717,6 +747,9 @@ export class LumilanPeer extends EventEmitter {
       await writeStream(stream, { ok: true });
     } catch (error) {
       try { await writeStream(stream, { ok: false, error: error.message }); } catch { stream.abort(error); }
+    } finally {
+      this.incomingPackets.delete(stream);
+      complete();
     }
   }
 
@@ -854,15 +887,43 @@ export class LumilanPeer extends EventEmitter {
     if (this.state.messages.some(item => item.id === message.id)) return;
     const buffer = Buffer.from(bytes, 'base64');
     if (!buffer.length || buffer.length > MAX_FILE || buffer.length !== message.size || sha256(buffer).toString('hex') !== message.sha256) throw new Error('File rusak atau terlalu besar.');
-    if (!await this.acceptFile({ id: message.id, from, fromName: this.trusted.get(from).name, name: safeFileName(message.name), size: buffer.length })) throw new Error('Penerima menolak file.');
-    requireDiskSpace(this.filesDir, buffer.length);
-    const path = join(this.filesDir, message.id);
-    if (existsSync(path)) {
-      if (!timingSafeEqual(sha256(readFileSync(path)), sha256(buffer))) throw new Error('ID file sudah digunakan.');
-    } else writeFileSync(path, buffer, { flag: 'wx', mode: 0o600 });
-    this.state.messages.push({ id: message.id, from, fromName: this.trusted.get(from).name, to: message.to, name: safeFileName(message.name), size: buffer.length, kind: 'file', at: Date.now() });
-    this.recordIncoming(this.state.messages.at(-1));
-    this.emit('file-transfer', { id: message.id, status: 'complete' });
+    const offer = this.reserveIncomingFile(from, message.id, buffer.length);
+    try {
+      const accepted = await Promise.race([this.acceptFile({ id: message.id, from, fromName: this.trusted.get(from).name, name: safeFileName(message.name), size: buffer.length }), offer.cancellation]);
+      if (offer.canceled) throw new Error('Pengiriman dibatalkan.');
+      if (!accepted) throw new Error('Penerima menolak file.');
+      requireDiskSpace(this.filesDir, this.incomingFileReservation());
+      const path = join(this.filesDir, message.id);
+      if (existsSync(path)) {
+        if (!timingSafeEqual(sha256(readFileSync(path)), sha256(buffer))) throw new Error('ID file sudah digunakan.');
+      } else writeFileSync(path, buffer, { flag: 'wx', mode: 0o600 });
+      this.state.messages.push({ id: message.id, from, fromName: this.trusted.get(from).name, to: message.to, name: safeFileName(message.name), size: buffer.length, kind: 'file', at: Date.now() });
+      this.recordIncoming(this.state.messages.at(-1));
+      this.emit('file-transfer', { id: message.id, status: 'complete' });
+    } catch (error) {
+      if (!offer.canceled) this.emit('file-transfer', { id: message.id, status: 'canceled' });
+      throw error;
+    } finally {
+      if (this.pendingFileOffers.get(message.id) === offer) this.pendingFileOffers.delete(message.id);
+    }
+  }
+
+  incomingFileReservation() {
+    return [...this.pendingFileOffers.values()].reduce((sum, offer) => sum + offer.size, 0) +
+      [...this.incomingFiles.values()].reduce((sum, transfer) => sum + transfer.size - transfer.received, 0);
+  }
+
+  reserveIncomingFile(from, id, size) {
+    if (this.stopping) throw new Error('Pengiriman dibatalkan.');
+    if (this.incomingFiles.has(id) || this.pendingFileOffers.has(id)) throw new Error('ID file sudah digunakan.');
+    if (this.incomingFiles.size + this.pendingFileOffers.size >= MAX_INCOMING_FILES)
+      throw new Error('Perangkat sedang menerima file lain. Coba lagi nanti.');
+    requireDiskSpace(this.filesDir, size + this.incomingFileReservation());
+    let cancelConsent;
+    const cancellation = new Promise(resolve => { cancelConsent = resolve; });
+    const offer = { from, size, canceled: false, cancellation, cancelConsent };
+    this.pendingFileOffers.set(id, offer);
+    return offer;
   }
 
   resetIncomingTimer(id) {
@@ -878,15 +939,24 @@ export class LumilanPeer extends EventEmitter {
     const transfer = this.incomingFiles.get(id);
     if (!transfer) {
       const offer = this.pendingFileOffers.get(id);
-      if (offer && (!from || offer.from === from)) { offer.canceled = true; this.emit('file-transfer', { id, status: 'canceled' }); }
+      if (offer && !offer.canceled && (!from || offer.from === from)) {
+        offer.canceled = true;
+        offer.cancelConsent(false);
+        this.emit('file-transfer', { id, status: 'canceled' });
+      }
       return;
     }
     if (from && transfer.from !== from) throw new Error('Pengirim file tidak valid.');
-    this.incomingFiles.delete(id);
-    clearTimeout(transfer.timer);
-    this.emit('file-transfer', { id, status: 'canceled' });
-    try { await transfer.handle.close(); }
-    finally { await unlink(transfer.path).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
+    const cleanup = (async () => {
+      this.incomingFiles.delete(id);
+      clearTimeout(transfer.timer);
+      this.emit('file-transfer', { id, status: 'canceled' });
+      try { await transfer.handle.close(); }
+      finally { await unlink(transfer.path).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
+    })();
+    this.incomingCleanups.add(cleanup);
+    try { await cleanup; }
+    finally { this.incomingCleanups.delete(cleanup); }
   }
 
   async beginIncomingFile(from, message) {
@@ -897,15 +967,13 @@ export class LumilanPeer extends EventEmitter {
         !Number.isSafeInteger(message.size) || message.size < 1 || message.size > MAX_STREAM_FILE)
       throw new Error('File tidak valid atau melebihi 5 GB.');
     if (this.state.messages.some(item => item.id === message.id) || existsSync(join(this.filesDir, message.id))) throw new Error('ID file sudah digunakan.');
-    if (this.incomingFiles.size || this.pendingFileOffers.size) throw new Error('Perangkat sedang menerima file lain. Coba lagi nanti.');
-    requireDiskSpace(this.filesDir, message.size);
-    const offer = { from, canceled: false };
-    this.pendingFileOffers.set(message.id, offer);
+    const offer = this.reserveIncomingFile(from, message.id, message.size);
     try {
-      const accepted = await this.acceptFile({ id: message.id, from, fromName: this.trusted.get(from).name, name: message.name, size: message.size,
-        roomId: roomFile ? message.roomId : null, roomName: roomFile ? this.room(message.roomId).name : '' });
+      const accepted = await Promise.race([this.acceptFile({ id: message.id, from, fromName: this.trusted.get(from).name, name: message.name, size: message.size,
+        roomId: roomFile ? message.roomId : null, roomName: roomFile ? this.room(message.roomId).name : '' }), offer.cancellation]);
       if (offer.canceled) throw new Error('Pengiriman dibatalkan.');
       if (!accepted) throw new Error('Penerima menolak file.');
+      requireDiskSpace(this.filesDir, this.incomingFileReservation());
       const path = join(this.filesDir, `.upload-${message.id}.part`);
       const handle = await open(path, 'wx', 0o600);
       if (offer.canceled) {
@@ -918,13 +986,16 @@ export class LumilanPeer extends EventEmitter {
         await unlink(path);
         throw new Error('Keanggotaan Ruang berubah selama persetujuan file.');
       }
+      this.pendingFileOffers.delete(message.id);
       this.incomingFiles.set(message.id, { ...message, from, path, handle, hash: createHash('sha256'), received: 0, timer: null });
       this.emit('file-transfer', { id: message.id, status: 'receiving', received: 0, total: message.size });
       this.resetIncomingTimer(message.id);
     } catch (error) {
       if (!offer.canceled) this.emit('file-transfer', { id: message.id, status: 'canceled' });
       throw error;
-    } finally { this.pendingFileOffers.delete(message.id); }
+    } finally {
+      if (this.pendingFileOffers.get(message.id) === offer) this.pendingFileOffers.delete(message.id);
+    }
   }
 
   async receiveFileChunk(from, data) {
@@ -1223,8 +1294,12 @@ export class LumilanPeer extends EventEmitter {
     let delivered = 0;
     let failed = 0;
     for (const id of targets) {
-      try { await this.sendTo(id, packet, { signal }); delivered++; }
-      catch (error) { if (to) throw error; failed++; }
+      try { await this.sendTo(id, packet, { responseTimeout: 300_000, signal }); delivered++; }
+      catch (error) {
+        await this.sendTo(id, { type: 'file-cancel', id: message.id }).catch(() => {});
+        if (to) throw error;
+        failed++;
+      }
     }
     if (signal?.aborted) throw signal.reason || new Error('Pengiriman dibatalkan.');
     writeFileSync(join(this.filesDir, message.id), buffer, { flag: 'wx', mode: 0o600 });

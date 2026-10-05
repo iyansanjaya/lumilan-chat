@@ -15,7 +15,7 @@ Lumilan menghubungkan perangkat secara langsung melalui LAN atau Wi-Fi yang sama
 | Terhubung | Atur sesuai kebutuhan |
 | --- | --- |
 | **Pesan pribadi & Ruang berundangan** — berbicara langsung atau mengumpulkan tim. | **Catatan pribadi** — simpan pesan dan lampiran hanya di perangkat Anda. |
-| **Berbagi file & paste gambar** — kirim file hingga 5 GB ke klien yang kompatibel; tempel gambar yang disalin, periksa, lalu tekan Kirim. | **Pengingat** — jadwalkan tugas sendiri atau minta kontak aktif memilih dan menerima jadwal. |
+| **Berbagi file & paste gambar** — kirim setiap file hingga 5 GB ke klien yang kompatibel; tempel gambar yang disalin, periksa, lalu tekan Kirim. | **Pengingat** — jadwalkan tugas sendiri atau minta kontak aktif memilih dan menerima jadwal. |
 | **Panggilan suara** — audio satu lawan satu melalui jaringan lokal. | **Lumi** — pemberitahuan ringkas di latar belakang, dengan fallback notifikasi sistem saat diperlukan. |
 
 <details>
@@ -57,12 +57,16 @@ Pada pembukaan pertama, paket terpasang yang mendukung fitur ini mengaktifkan bu
 
 ## Gambar, pemberitahuan, dan pembaruan
 
+- **Seret file ke chat aktif untuk langsung mengirim.** Penanda drop menunjukkan tujuan; klik ikon penjepit kertas untuk memilih beberapa file (Ctrl-klik di Windows/Linux, Command-klik di macOS, atau Shift-klik untuk memilih rentang). Pilihan ditolak jika percakapan berganti saat pemilih terbuka. Hingga 8 file keluar dapat menunggu atau ditransfer sekaligus, masing-masing dengan persetujuan, progres, dan Batal. Catatan pribadi menyimpan file secara lokal. Folder, file kosong atau terlalu besar, dan pilihan yang melebihi slot tersedia ditolak sebelum file dalam pilihan tersebut mulai dikirim. Draf dan pratinjau gambar paste tetap tersimpan. Ruang Pengumuman, percakapan arsip, dan undangan yang belum diterima tidak menerima lampiran.
+- **Penyimpanan lokal, tanpa kuota cloud.** Batas 5 GB berlaku untuk setiap file yang dikirim, bukan kapasitas penyimpanan Anda. Pesan dan file yang diterima tetap di perangkat Anda; kapasitas mengikuti ruang disk yang tersedia. Lumilan tidak menyediakan cloud storage.
+- **Tetap mengobrol saat file menunggu persetujuan.** Hingga 8 file keluar memiliki progres dan tombol Batal masing-masing. File yang gagal tetap tersedia untuk Coba lagi atau Hapus. Penerimaan beberapa permintaan memerlukan aplikasi penerima yang diperbarui; klien lama dapat menolak file berikutnya hingga transfernya selesai.
 - **Salin gambar, lalu paste ke kotak pesan.** Pratinjau muncul sebelum Anda menekan Kirim. Hapus dengan tombol ×. Gambar clipboard mendukung PNG/JPEG/WebP/GIF hingga 20 MB, total 40 juta piksel, dan 120 frame. Pengiriman mengikuti persetujuan dan pemeriksaan integritas file yang sudah ada; Ruang Pengumuman tidak menerima lampiran.
 - **Menulis daftar:** Enter melanjutkan daftar bernomor atau berpoin; Enter pada item kosong mengakhirinya. Di luar daftar, Enter mengirim dan Shift + Enter membuat baris baru. Tombol Kirim dapat langsung mengirim daftar.
 - **176 emoji lokal:** jelajahi pemilih yang dapat digulir dengan Tab atau tombol panah. Home/End memilih item pertama/terakhir; Enter menyisipkan emoji dan Escape menutup pemilih. Label mengikuti bahasa aplikasi.
 - **Status sekilas:** titik berwarna dan lingkar avatar menunjukkan status dalam daftar pesan pribadi. Arahkan kursor ke baris pengguna atau fokuskan dengan keyboard untuk langsung melihat tooltip status; label status tetap tersedia bagi pembaca layar.
 - **Gerak yang nyaman:** menu, dialog, bubble pesan, jumlah pesan belum dibaca, dan Lumi memakai animasi singkat dengan durasi terbatas. Pengurangan gerak mematikan animasi dan transisi antarmuka; antarmuka utama menjeda animasi CSS saat tersembunyi.
 - **Pemberitahuan latar belakang:** Lumi yang aktif dan siap menggantikan banner sistem. Saat dimuat, dijeda, dinonaktifkan, atau tidak tersedia, aplikasi memakai notifikasi sistem. Mute dan Jangan ganggu mematikan pemberitahuan; layar terkunci dan suspend menundanya.
+- **Keluar dengan aman:** Keluar dan Mulai ulang dan pasang membatalkan transfer yang belum selesai dan menunggu pembersihan file sementara serta penghentian jaringan. File yang sudah diterima tetap tersedia. Penghentian paksa atau shutdown OS dapat memutus cleanup; sisa file transfer dibersihkan saat aplikasi dibuka kembali.
 - **Pembaruan:** buka **Pengaturan → Periksa pembaruan**. Installer Windows dan AppImage Linux dapat mengunduh pembaruan lalu menawarkan **Nanti** atau **Mulai ulang dan pasang**. macOS saat ini mengarahkan Anda memasang DMG secara manual, termasuk pada build bertanda tangan.
 
 Jika **Uji notifikasi sistem** tidak terlihat, periksa izin notifikasi OS dan Jangan Ganggu. Sistem menerima notifikasi bukan jaminan banner tampil. Notifikasi sistem macOS memerlukan aplikasi bertanda tangan. Linux memerlukan `libnotify.so.4` (`libnotify4` pada Debian/Ubuntu) dan layanan notifikasi desktop. Jika Pengaturan menyatakan deteksi layar terkunci tidak tersedia, periksa `gdbus` dan layanan ScreenSaver desktop; pemberitahuan menunggu sampai keadaan lock dapat diverifikasi.

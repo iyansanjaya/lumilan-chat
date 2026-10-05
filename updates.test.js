@@ -3,6 +3,8 @@ import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
 import { startUpdates, updateFailureDetail } from './updates.js';
 
+const flush = () => new Promise(resolve => setImmediate(resolve));
+
 test('pembaruan diperiksa, diunduh, dan hanya dipasang setelah pengguna memilih mulai ulang', async () => {
   const updater = new EventEmitter();
   const dialogs = [];
@@ -37,6 +39,46 @@ test('pembaruan diperiksa, diunduh, dan hanya dipasang setelah pengguna memilih 
   response = 1;
   await check(true);
   assert.equal(quitting, 1);
+  assert.equal(installed, 1);
+});
+
+test('install waits for asynchronous shutdown and a second update check cannot skip it', async () => {
+  const updater = new EventEmitter(), order = [];
+  let releaseShutdown, response = 0;
+  const shutdown = new Promise(resolve => { releaseShutdown = resolve; });
+  updater.quitAndInstall = (...args) => { assert.deepEqual(args, [false, true]); order.push('install'); };
+  const check = startUpdates({
+    app: { isPackaged: true, getVersion: () => '1.0.0' }, updater,
+    dialog: { showMessageBox: async () => ({ response }) }, getWindow: () => ({}),
+    beforeInstall: async () => { order.push('prepare'); await shutdown; order.push('cleaned'); }, platform: 'win32',
+  });
+  updater.emit('update-downloaded', { version: '1.0.1' }); await flush();
+  response = 1;
+  const install = check(true);
+  await flush();
+  assert.deepEqual(order, ['prepare'], 'The installer quit before asynchronous file cleanup');
+  await check(true);
+  assert.deepEqual(order, ['prepare'], 'Another update check bypassed pending shutdown');
+  releaseShutdown(); await install;
+  assert.deepEqual(order, ['prepare', 'cleaned', 'install']);
+});
+
+test('a failed asynchronous shutdown prevents installation and releases the prompt for retry', async () => {
+  const updater = new EventEmitter();
+  let installed = 0, attempts = 0, response = 0;
+  const failure = new Error('shutdown failed');
+  updater.quitAndInstall = () => { installed++; };
+  const check = startUpdates({
+    app: { isPackaged: true, getVersion: () => '1.0.0' }, updater,
+    dialog: { showMessageBox: async () => ({ response }) }, getWindow: () => ({}),
+    beforeInstall: async () => { if (++attempts === 1) throw failure; }, platform: 'win32',
+  });
+  updater.emit('update-downloaded', { version: '1.0.1' }); await flush();
+  response = 1;
+  await assert.rejects(check(true), error => error === failure);
+  assert.equal(installed, 0);
+  await check(true);
+  assert.equal(attempts, 2);
   assert.equal(installed, 1);
 });
 

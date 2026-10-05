@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const fileJobs = new Map();
 
 function clipboardBytes(file) {
   // Use isolated-world Blob accessors, not attributes/methods supplied by the renderer.
@@ -67,15 +68,27 @@ contextBridge.exposeInMainWorld('lumilan', {
   setAnnouncements: enabled => ipcRenderer.invoke('lumilan:set-announcements', enabled),
   muteAnnouncementsFrom: (id, muted) => ipcRenderer.invoke('lumilan:mute-announcements-from', id, muted),
   setThreadMuted: (thread, muted) => ipcRenderer.invoke('lumilan:set-thread-muted', thread, muted),
-  file: async (file, to) => {
-    const path = webUtils.getPathForFile(file);
-    if (path) return ipcRenderer.invoke('lumilan:file', path, to);
-    return ipcRenderer.invoke('lumilan:file', '', to, await clipboardBytes(file));
+  file: async (file, to, id) => {
+    if (id !== undefined && (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) || fileJobs.has(id)))
+      throw new Error('Pengiriman file tidak valid.');
+    if (fileJobs.size >= 8) throw new Error('Maksimal 8 pengiriman file dapat berlangsung bersamaan.');
+    const key = id ?? {}, job = { canceled: false };
+    fileJobs.set(key, job);
+    try {
+      const path = webUtils.getPathForFile(file);
+      const bytes = path ? undefined : await clipboardBytes(file);
+      if (job.canceled) throw new Error('Pengiriman dibatalkan.');
+      return await ipcRenderer.invoke('lumilan:file', path || '', to, bytes, id);
+    } finally { fileJobs.delete(key); }
   },
   clipboardImage: async file => {
     return ipcRenderer.invoke('lumilan:clipboard-image', await clipboardBytes(file));
   },
-  cancelFile: () => ipcRenderer.invoke('lumilan:cancel-file'),
+  cancelFile: id => {
+    const job = id === undefined && fileJobs.size === 1 ? fileJobs.values().next().value : fileJobs.get(id);
+    if (job) job.canceled = true;
+    return ipcRenderer.invoke('lumilan:cancel-file', id);
+  },
   fileOffers: () => ipcRenderer.invoke('lumilan:file-offers'),
   decideFile: (id, accepted) => ipcRenderer.invoke('lumilan:decide-file', id, accepted),
   onFileOffer: callback => {

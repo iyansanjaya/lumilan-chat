@@ -4,10 +4,11 @@ import { homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { copyFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import electronUpdater from 'electron-updater';
 import { LumilanPeer } from './peer.js';
 import { previewImage } from './preview-image.js';
-import { stageClipboardImage, inspectClipboardImage } from './clipboard-image.js';
+import { stageClipboardImage, inspectClipboardImage, MAX_CLIPBOARD_IMAGE } from './clipboard-image.js';
 import { languageForRegion, languageSettings, locales, translate } from './public/i18n.js';
 import { startUpdates } from './updates.js';
 import { clearPendingDefaultStartup, enableDefaultStartup } from './startup-default.js';
@@ -43,16 +44,19 @@ let settingsPath;
 let pendingThread;
 let openingThread;
 let checkUpdates = () => Promise.resolve();
-let activeUpload;
-let activeUploadDone;
+const activeUploads = new Map();
+const maxUploads = 8;
+const uploadIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 let quitWaiting = false;
+let quitCompleted = false;
+let quitShutdown;
 const pendingFileOffers = new Map();
 let deletingHistory = 0;
 const previewRequests = new Set();
 const activeNotifications = new Map();
 let notificationError = '';
 let callNotification;
-let refreshingNetwork = false;
+let refreshingNetwork;
 let notch;
 let linuxScreenLock;
 let positionSaveTimer;
@@ -388,7 +392,7 @@ if (instanceLock) app.whenReady().then(async () => {
   peer = await new LumilanPeer({ dataDir,
     ...(app.commandLine.hasSwitch('lumilan-ui-smoke') ? { discovery: false, listen: '/ip4/127.0.0.1/tcp/0' } : {}),
     acceptFile: ({ id, from, fromName, name, size, roomId }) => {
-    if (!window || window.isDestroyed()) return false;
+    if (quitting || !window || window.isDestroyed()) return false;
     if (pendingFileOffers.has(id)) return false;
     const offer = { id, from, fromName, name, size, thread: roomId ? `room:${roomId}` : from };
     return new Promise(resolve => {
@@ -448,12 +452,11 @@ if (instanceLock) app.whenReady().then(async () => {
     if (transfer.status === 'canceled') pendingFileOffers.get(transfer.id)?.decide(false);
     if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-transfer', transfer);
   });
-  setInterval(() => peer.maintainConnections(), 15_000).unref();
+  setInterval(() => { if (!quitting) peer.maintainConnections(); }, 15_000).unref();
   setInterval(() => {
     if (quitting || refreshingNetwork) return;
-    refreshingNetwork = true;
-    peer.refreshNetwork().catch(error => console.warn('Perubahan jaringan gagal diproses:', error))
-      .finally(() => { refreshingNetwork = false; });
+    refreshingNetwork = peer.refreshNetwork().catch(error => console.warn('Perubahan jaringan gagal diproses:', error))
+      .finally(() => { refreshingNetwork = undefined; });
   }, 5000).unref();
   if (process.platform === 'win32' && Notification.handleActivation) Notification.handleActivation(() => reveal());
   try {
@@ -510,44 +513,63 @@ if (instanceLock) app.whenReady().then(async () => {
     peer.setThreadMuted(thread, muted);
     if (muted) dismiss(thread);
   });
-  handler('file', async (path, to, clipboardBytes) => {
+  let clipboardPreparation = Promise.resolve();
+  const prepareClipboard = action => {
+    const task = clipboardPreparation.then(action);
+    clipboardPreparation = task.catch(() => {});
+    return task;
+  };
+  handler('file', async (path, to, clipboardBytes, id = randomUUID()) => {
     if (quitting) throw new Error('Pengiriman dibatalkan.');
-    if (activeUpload) throw new Error('Pengiriman file lain masih berlangsung.');
+    if (typeof id !== 'string' || !uploadIdPattern.test(id) || activeUploads.has(id))
+      throw new Error('Pengiriman file tidak valid.');
+    if (activeUploads.size >= maxUploads) throw new Error('Maksimal 8 pengiriman file dapat berlangsung bersamaan.');
     const controller = new AbortController();
-    activeUpload = controller;
     let finishUpload;
-    activeUploadDone = new Promise(resolve => { finishUpload = resolve; });
+    const done = new Promise(resolve => { finishUpload = resolve; });
+    activeUploads.set(id, { controller, done });
     let clipboardFile;
     let lastProgressAt = 0;
     const reportProgress = (sent, total, status) => {
       const now = Date.now();
       if (sent !== total && now - lastProgressAt < 100) return;
       lastProgressAt = now;
-      if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-progress', { sent, total, status });
+      if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-progress', { id, sent, total, status });
     };
     try {
       if (clipboardBytes !== undefined) {
         if (path !== '' || typeof to !== 'string' || !to || to === 'announcements') throw new Error('Penerima atau file tidak valid.');
-        clipboardFile = await stageClipboardImage(clipboardBytes, peer.filesDir);
+        if (!(clipboardBytes instanceof ArrayBuffer || clipboardBytes instanceof Uint8Array) || !clipboardBytes.byteLength || clipboardBytes.byteLength > MAX_CLIPBOARD_IMAGE)
+          throw new Error('Gambar clipboard harus berukuran 1 B–20 MB.');
+        clipboardFile = await prepareClipboard(() => {
+          if (controller.signal.aborted) throw controller.signal.reason;
+          return stageClipboardImage(clipboardBytes, peer.filesDir);
+        });
         path = clipboardFile.path;
         if (controller.signal.aborted) throw controller.signal.reason;
       }
       return await peer.sendFilePath(path, to, { signal: controller.signal, onStatus: status => {
-        if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-progress', { status });
+        if (window && !window.isDestroyed()) window.webContents.send('lumilan:file-progress', { id, status });
       }, onProgress: (sent, total) => reportProgress(sent, total),
       onPreparationProgress: (sent, total) => reportProgress(sent, total, 'preparing') });
     } finally {
       try { await clipboardFile?.dispose(); }
       catch (error) { console.warn('Gagal membersihkan staging clipboard:', error?.code || 'error'); }
-      finally { activeUpload = undefined; finishUpload(); }
+      finally { activeUploads.delete(id); finishUpload(); }
     }
   });
   let clipboardValidationPending = false;
   handler('clipboard-image', async bytes => {
+    if (quitting) throw new Error('Pengiriman dibatalkan.');
+    if (!(bytes instanceof ArrayBuffer || bytes instanceof Uint8Array) || !bytes.byteLength || bytes.byteLength > MAX_CLIPBOARD_IMAGE)
+      throw new Error('Gambar clipboard harus berukuran 1 B–20 MB.');
     if (clipboardValidationPending) throw new Error('Pengiriman file lain masih berlangsung.');
     clipboardValidationPending = true;
     try {
-      const { metadata } = await inspectClipboardImage(bytes);
+      const { metadata } = await prepareClipboard(() => {
+        if (quitting) throw new Error('Pengiriman dibatalkan.');
+        return inspectClipboardImage(bytes);
+      });
       return { width: metadata.width, height: metadata.pageHeight || metadata.height, frames: metadata.pages || 1 };
     } finally { clipboardValidationPending = false; }
   });
@@ -564,7 +586,15 @@ if (instanceLock) app.whenReady().then(async () => {
   peer.on('typing', entries => {
     if (window && !window.isDestroyed()) window.webContents.send('lumilan:typing', entries);
   });
-  handler('cancel-file', () => { activeUpload?.abort(new Error('Pengiriman dibatalkan.')); return true; });
+  handler('cancel-file', id => {
+    if (id === undefined && activeUploads.size === 1) id = activeUploads.keys().next().value;
+    if (id === undefined && activeUploads.size === 0) return false;
+    if (typeof id !== 'string' || !uploadIdPattern.test(id))
+      throw new Error('Pengiriman file tidak valid.');
+    const upload = activeUploads.get(id);
+    upload?.controller.abort(new Error('Pengiriman dibatalkan.'));
+    return Boolean(upload);
+  });
   handler('list-files', (thread, offset) => peer.listFiles(thread, offset));
   handler('list-messages', (thread, before) => peer.listMessages(thread, before));
   handler('save-file', async id => {
@@ -694,7 +724,7 @@ if (instanceLock) app.whenReady().then(async () => {
   checkUpdates = startUpdates({
     app, updater: autoUpdater, dialog,
     getWindow: () => { reveal(); return window; },
-    beforeInstall: () => { quitting = true; },
+    beforeInstall: prepareQuit,
     translate: tr,
     openRelease: url => shell.openExternal(url),
   });
@@ -705,18 +735,32 @@ if (instanceLock) app.whenReady().then(async () => {
   app.quit();
 });
 
-app.on('before-quit', event => {
-  if (quitWaiting) { event.preventDefault(); return; }
+function prepareQuit() {
+  if (quitShutdown) return quitShutdown;
   quitting = true; clearTimeout(positionSaveTimer);
-  if (activeUpload) {
-    event.preventDefault(); quitWaiting = true;
-    activeUpload.abort(new Error('Pengiriman dibatalkan.'));
-    activeUploadDone.then(() => { quitWaiting = false; app.quit(); });
-  }
-  if (settingsPath && settings) { try { persistSettings(); } catch (error) { console.warn('Pengaturan tidak dapat disimpan:', error); } }
-  notch?.dispose();
-  linuxScreenLock?.dispose();
-  for (const entry of pendingFileOffers.values()) entry.decide(false); peer?.stop().catch(() => {});
+  const uploads = [...activeUploads.values()];
+  for (const upload of uploads) upload.controller.abort(new Error('Pengiriman dibatalkan.'));
+  quitShutdown = Promise.resolve().then(async () => {
+    try {
+      if (settingsPath && settings) { try { persistSettings(); } catch (error) { console.warn('Pengaturan tidak dapat disimpan:', error); } }
+      notch?.dispose();
+      linuxScreenLock?.dispose();
+      for (const entry of pendingFileOffers.values()) entry.decide(false);
+    } finally {
+      await Promise.allSettled([...uploads.map(upload => upload.done), refreshingNetwork]);
+      await peer?.stop();
+    }
+  }).catch(error => console.warn('Pembersihan saat menutup aplikasi gagal:', error?.code || error?.message || 'error'))
+    .finally(() => { quitCompleted = true; });
+  return quitShutdown;
+}
+
+app.on('before-quit', event => {
+  if (quitCompleted) return;
+  event.preventDefault();
+  if (quitWaiting) return;
+  quitWaiting = true;
+  void prepareQuit().then(() => { quitWaiting = false; app.quit(); });
 });
 app.on('window-all-closed', () => app.quit());
 app.on('activate', () => reveal());
