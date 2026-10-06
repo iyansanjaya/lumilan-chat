@@ -89,7 +89,11 @@ async function main() {
     const clipboardPng=await require('sharp')({create:{width:24,height:16,channels:4,background:'#ffd36d'}}).png().toBuffer();
     await nativeBrowser.evaluate("(async()=>{globalThis.savedClipboard=[];for(const item of await smokeElectron.clipboard.read()){const data={};for(const type of item.types)data[type]=await item.getType(type);if(Object.keys(data).length)savedClipboard.push(new smokeElectron.ClipboardItem(data));}})()");
     try {
+      await until(() => nativeBrowser.evaluate('smokeMain.isVisible() && !smokeMain.isMinimized()'), 'native clipboard window shown', 30000);
+      await nativeBrowser.evaluate('smokeMain.focus()');
+      await until(() => nativeBrowser.evaluate('smokeMain.isFocused()'), 'native clipboard window focused');
       await mainPage.evaluate("document.getElementById('notes-button').click();document.getElementById('message-input').value='9. First item';document.getElementById('message-input').focus();document.getElementById('message-input').setSelectionRange(13,13)");
+      await until(() => mainPage.evaluate("document.hasFocus() && !document.hidden && document.activeElement.id==='message-input' && !document.getElementById('message-form').hidden"), 'native clipboard input focused');
       await mainPage.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
       await mainPage.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
       assert.equal(await mainPage.evaluate("document.getElementById('message-input').value"),'9. First item\n10. ','Enter did not continue list');
@@ -202,9 +206,48 @@ async function main() {
     await testThird.start(); testThird.rename('Citra LAN'); await testThird.connectAddress(appState.addresses[0]!);
     console.log('Notch smoke: peer connected');
     await until(() => mainPage.evaluate(`window.lumilan.state().then(s=>s.peers.some(p=>p.id===${JSON.stringify(testPeer.id)}))`), 'encrypted peer connected');
+    await until(() => mainPage.evaluate(`document.querySelectorAll('#people-list .person[data-peer]').length===2`), 'both private contacts rendered');
+    const originalUiTheme = await mainPage.evaluate<string>('document.documentElement.dataset.theme');
+    await mainPage.evaluate('window.lumilan.setNotificationSettings({enabled:false,preview:true,silent:true,background:true,notch:true})');
+    await mainPage.evaluate("document.getElementById('notes-button').click()");
+    const privateOrder = () => mainPage.evaluate<string[]>("[...document.querySelectorAll('#people-list .person[data-peer]')].map(row=>row.dataset.peer)");
+    const aliceRow = `document.querySelector('.person[data-peer="${testPeer.id}"]')`;
+    const citraRow = `document.querySelector('.person[data-peer="${testThird.id}"]')`;
+    assert.deepEqual(await privateOrder(), [testPeer.id, testThird.id], 'Read contacts lost alphabetical order');
+    await mainPage.evaluate(`${aliceRow}.focus({preventScroll:true})`);
+    await testThird.sendMessage('Unread sidebar Citra', appState.me.id);
+    await until(async () => (await privateOrder())[0] === testThird.id && await mainPage.evaluate(`${citraRow}.querySelector('.unread-badge')?.textContent==='1'`), 'unread contact promoted above read contact');
+    assert.equal(await mainPage.evaluate(`document.activeElement===${aliceRow} && document.getElementById('notes-button').classList.contains('active')`), true, 'Unread reorder moved focus or changed the conversation');
+    for (const theme of ['light', 'dark']) {
+      await mainPage.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
+      await mainPage.send('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: false });
+      await mainPage.evaluate("document.getElementById('back-button').click()");
+      await mainPage.evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+      assert.deepEqual(await privateOrder(), [testThird.id, testPeer.id], `Unread order changed in narrow ${theme} UI`);
+      const visibleOrder = await mainPage.evaluate<{firstTop:number;secondTop:number;width:number;nameRight:number;badgeLeft:number;badgeRight:number;rowRight:number}>(`(()=>{const first=${citraRow},second=${aliceRow},row=first.getBoundingClientRect(),badge=first.querySelector('.unread-badge').getBoundingClientRect();return{firstTop:row.top,secondTop:second.getBoundingClientRect().top,width:row.width,nameRight:first.querySelector('strong').getBoundingClientRect().right,badgeLeft:badge.left,badgeRight:badge.right,rowRight:row.right}})()`);
+      assert(visibleOrder.width > 0 && visibleOrder.firstTop < visibleOrder.secondTop && visibleOrder.nameRight <= visibleOrder.badgeLeft && visibleOrder.badgeRight <= visibleOrder.rowRight, `Unread list or badge is hidden/overlapping (${theme}): ${JSON.stringify(visibleOrder)}`);
+      const shot = await mainPage.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      writeFileSync(join(dist, `ui-unread-private-${theme}.png`), Buffer.from(shot.data, 'base64'));
+    }
+    await mainPage.send('Emulation.clearDeviceMetricsOverride');
+    await mainPage.evaluate("document.documentElement.dataset.theme='dark';document.querySelector('[data-filter=private]').click();document.getElementById('people-search').value='Citra';document.getElementById('people-search').dispatchEvent(new Event('input',{bubbles:true}))");
+    assert.deepEqual(await privateOrder(), [testThird.id], 'Search ignored the unread contact');
+    assert.equal((await mainPage.evaluate<Snapshot>('window.lumilan.state()')).unread[testThird.id], 1, 'Search marked an unread message read');
+    await mainPage.evaluate("document.getElementById('people-search').value='';document.getElementById('people-search').dispatchEvent(new Event('input',{bubbles:true}))");
+    await testPeer.sendMessage('Unread sidebar Alice', appState.me.id);
+    await until(async () => (await privateOrder())[0] === testPeer.id && await mainPage.evaluate(`${aliceRow}.querySelector('.unread-badge')?.textContent==='1'`), 'multiple unread contacts kept alphabetical order');
+    const unreadContacts = (await mainPage.evaluate<Snapshot>('window.lumilan.state()')).unread;
+    assert.equal(unreadContacts[testPeer.id], 1); assert.equal(unreadContacts[testThird.id], 1);
+    await mainPage.evaluate(`${aliceRow}.click()`);
+    await until(async () => !(await mainPage.evaluate<Snapshot>('window.lumilan.state()')).unread[testPeer.id] && (await privateOrder())[0] === testThird.id, 'remaining unread contact promoted after reading');
+    assert.equal((await mainPage.evaluate<Snapshot>('window.lumilan.state()')).unread[testThird.id], 1, 'Reading one contact cleared another contact');
+    await mainPage.evaluate(`${citraRow}.click()`);
+    await until(async () => !(await mainPage.evaluate<Snapshot>('window.lumilan.state()')).unread[testThird.id] && (await privateOrder())[0] === testPeer.id, 'alphabetical order restored after reading all messages');
+    await mainPage.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(originalUiTheme)};document.querySelector('[data-filter=all]').click();document.getElementById('notes-button').click()`);
+    await mainPage.evaluate('window.lumilan.setNotificationSettings({enabled:true,preview:true,silent:true,background:true,notch:true})');
+    console.log('Private sidebar: native encrypted unread-first ordering, multiple unread, search, focus retention and read reset passed');
     // Real peer presence drives the renderer; no fake snapshots or UI test bridge.
     const originalPeerProfile = { name: testPeer.state.name, status: testPeer.state.status, about: testPeer.state.about, avatar: testPeer.state.avatar };
-    const originalUiTheme = await mainPage.evaluate<string>('document.documentElement.dataset.theme');
     const personSelector = `.person[data-peer="${testPeer.id}"]`;
     const rowExpression = `document.querySelector(${JSON.stringify(personSelector)})`;
     const presenceCommands: Array<{at:number;type:string;x?:number;y?:number}> = [];
@@ -956,8 +999,13 @@ async function main() {
     console.log(`Notch native process: ${nativeMetrics.cpu.percentCPUUsage.toFixed(2)}% CPU; ${typeof nativeMemory === 'number' && Number.isFinite(nativeMemory) ? (nativeMemory / 1024).toFixed(1) + ' MiB ' + (process.platform === 'linux' ? 'RSS' : 'working set') : 'native memory unavailable'}`);
     await companionPage.evaluate("window.lumi.action({type:'peek'})");
     await click('mascot'); await click('pause');
+    // Trusted input completion does not await IPC or Chromium's visibility update.
+    const pausedWindow = "(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return !!w&&!w.isVisible()&&!w.isFocused()})()";
+    await until(async () => await nativeBrowser.evaluate(pausedWindow) &&
+      await companionPage.evaluate("document.visibilityState==='hidden'&&document.body.dataset.mode==='hidden'"), 'paused native window and renderer hidden', 5000);
     assert.equal(await companionPage.evaluate('document.visibilityState'), 'hidden', 'Pause did not hide window');
     await testPeer.sendMessage('Should stay paused', appState.me.id); await delay(200);
+    assert(await nativeBrowser.evaluate(pausedWindow), 'Incoming message exposed or focused the paused native window');
     assert.equal(await companionPage.evaluate('document.visibilityState'), 'hidden', 'Incoming message canceled pause');
     await mainPage.evaluate("window.lumilan.setNotificationSettings({enabled:true,preview:true,silent:true,background:true,notch:false})");
     await until(() => nativeBrowser.evaluate("!smokeElectron.BrowserWindow.getAllWindows().some(w=>w.webContents.getURL()==='lumilan://app/notch.html')"), 'disabled companion releases renderer');

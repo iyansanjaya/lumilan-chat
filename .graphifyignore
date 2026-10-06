@@ -1,0 +1,5 @@
+# Separate repositories and temporary packaging output, outside Lumilan's graph.
+out/
+coucou/
+lumilan-web/
+.bun-task-temp/

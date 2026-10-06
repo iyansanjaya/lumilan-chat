@@ -51,6 +51,8 @@ Fitur khusus platform bergantung pada paket terpasang dan desktop environment. L
 2. **Pilih nama Anda.** Perangkat yang terhubung muncul di daftar pesan pribadi.
 3. **Mulai percakapan.** Pilih orang, atau gunakan **Buat Ruang** untuk Ruang Percakapan berundangan maupun Ruang Pengumuman.
 
+Kontak aktif dengan pesan belum dibaca naik ke bagian atas daftar pesan pribadi. Baca percakapannya di jendela aplikasi yang aktif agar kontak kembali ke urutan nama biasa; pratinjau Lumi tidak menandainya dibaca.
+
 Ruang Pengumuman menyiarkan ke perangkat aktif yang mengizinkannya. Pesan pribadi, pesan Ruang, dan transfer file memerlukan penerima yang dapat dijangkau; pengiriman tidak diantrekan untuk penerima offline. Kontak Pengingat hanya tampil saat aktif dan mendukung fitur tersebut. Pengingat pribadi berjalan lokal; permintaan yang sudah dibuat mempertahankan status pengiriman atau keputusan jika koneksi terputus.
 
 Pada pembukaan pertama, paket terpasang yang mendukung fitur ini mengaktifkan buka saat masuk ke komputer. Ubah di **Pengaturan → Saat komputer dinyalakan**. Agar tetap menerima pesan setelah jendela ditutup, aktifkan **Tetap berjalan di tray**; tray harus tersedia.
