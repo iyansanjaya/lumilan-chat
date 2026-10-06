@@ -33,22 +33,25 @@ for attempt in {1..50}; do
   sleep .1
 done
 gdbus call --session --dest org.gnome.ScreenSaver --object-path /org/gnome/ScreenSaver --method org.gnome.ScreenSaver.GetActive
+unset WAYLAND_DISPLAY
+Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp 3>"$runtime/display" >"$runtime/x11.log" 2>&1 & pids+=("$!")
+for attempt in {1..50}; do if [[ -s "$runtime/display" ]]; then break; fi; sleep .1; done
+test -s "$runtime/display"
+export DISPLAY=":$(cat "$runtime/display")"
+for attempt in {1..50}; do if xdpyinfo >/dev/null 2>&1; then break; fi; sleep .1; done
+xdpyinfo >/dev/null
+openbox >"$runtime/wm.log" 2>&1 & pids+=("$!")
+for attempt in {1..50}; do if xprop -root _NET_SUPPORTING_WM_CHECK | grep -q 'window id #'; then break; fi; sleep .1; done
+xprop -root _NET_SUPPORTING_WM_CHECK | grep -q 'window id #'
 if [[ "$mode" = x11 ]]; then
-  unset WAYLAND_DISPLAY
-  Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp 3>"$runtime/display" >"$runtime/x11.log" 2>&1 & pids+=("$!")
-  for attempt in {1..50}; do if [[ -s "$runtime/display" ]]; then break; fi; sleep .1; done
-  test -s "$runtime/display"
-  export DISPLAY=":$(cat "$runtime/display")"
-  for attempt in {1..50}; do if xdpyinfo >/dev/null 2>&1; then break; fi; sleep .1; done
-  xdpyinfo >/dev/null
-  openbox >"$runtime/wm.log" 2>&1 & pids+=("$!")
   trayer --edge bottom --align right --widthtype request >"$runtime/tray.log" 2>&1 & pids+=("$!")
 else
-  unset DISPLAY
+  # Weston headless has no input seat; the private X11 backend supplies native Wayland focus.
   export WAYLAND_DISPLAY=lumilan-smoke
-  weston --backend=headless-backend.so --use-pixman --socket="$WAYLAND_DISPLAY" --idle-time=0 --width=1920 --height=1080 >"$runtime/wayland.log" 2>&1 & pids+=("$!")
+  weston --backend=x11-backend.so --use-pixman --socket="$WAYLAND_DISPLAY" --idle-time=0 --width=1920 --height=1080 >"$runtime/wayland.log" 2>&1 & pids+=("$!")
   for attempt in {1..50}; do if [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]]; then break; fi; sleep .1; done
   test -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+  unset DISPLAY
 fi
 repetitions="${LUMILAN_NOTCH_SMOKE_REPEATS:-3}"
 case "$repetitions" in 1|2|3) ;; *) echo 'Smoke repetitions must be 1, 2, or 3.' >&2; exit 1 ;; esac
