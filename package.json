@@ -8,38 +8,47 @@
   "engines": {
     "node": ">=22"
   },
-  "main": "main.js",
+  "main": "out/main.js",
   "scripts": {
-    "start": "electron .",
-    "test": "node --test",
-    "smoke:ui": "node scripts/smoke-ui.cjs",
-    "smoke:notch": "node scripts/smoke-notch.cjs",
-    "pack": "electron-builder --dir --publish never",
-    "dist": "electron-builder --publish never",
-    "release": "node scripts/prepare-release.mjs && electron-builder --publish always"
+    "start": "bun run build && electron .",
+    "build": "bun scripts/build.ts",
+    "typecheck": "bun scripts/build.ts check",
+    "test": "bun scripts/build.ts test",
+    "test:large": "bun scripts/build.ts large",
+    "verify:package": "node out/scripts/verify-ui-package.cjs",
+    "smoke:ui": "node out/scripts/smoke-ui.cjs",
+    "smoke:notch": "node out/scripts/smoke-notch.cjs",
+    "pack": "bun run build && electron-builder --dir --publish never",
+    "dist": "bun run build && electron-builder --publish never",
+    "release": "bun run build && node out/scripts/prepare-release.mjs && electron-builder --publish always"
   },
   "build": {
     "appId": "dev.lumilan.desktop",
     "productName": "Lumilan Chat",
     "asar": true,
-    "asarUnpack": ["**/node_modules/sharp/**/*", "**/node_modules/@img/**/*"],
+    "asarUnpack": [
+      "**/node_modules/sharp/**/*",
+      "**/node_modules/@img/**/*"
+    ],
     "files": [
-      "main.js",
-      "notch.js",
-      "linux-screen-lock.js",
-      "notch-preload.cjs",
-      "startup-default.js",
-      "updates.js",
-      "preload.cjs",
-      "peer.js",
-      "reminders.js",
-      "preview-image.js",
-      "clipboard-image.js",
-      "discovery.js",
-      "public/**/*",
-      "build/icon.ico",
-      "build/icon.png",
-      "build/trayTemplate*.png",
+      "out/main.js",
+      "out/notch.js",
+      "out/linux-screen-lock.js",
+      "out/notch-preload.cjs",
+      "out/startup-default.js",
+      "out/updates.js",
+      "out/preload.cjs",
+      "out/peer.js",
+      "out/reminders.js",
+      "out/preview-image.js",
+      "out/clipboard-image.js",
+      "out/discovery.js",
+      "out/shared/model.js",
+      "out/public/**/*",
+      "!out/**/*.map",
+      "out/build/icon.ico",
+      "out/build/icon.png",
+      "out/build/trayTemplate*.png",
       "package.json"
     ],
     "directories": {
@@ -83,12 +92,17 @@
     "@multiformats/multiaddr": "13.0.3",
     "electron-updater": "^6.8.9",
     "libp2p": "3.3.11",
+    "main-event": "1.0.5",
     "multicast-dns": "7.2.5",
     "reicon": "1.2.4",
     "sharp": "^0.35.5"
   },
   "devDependencies": {
+    "@types/multicast-dns": "7.2.4",
+    "@types/node": "22.20.5",
+    "@types/semver": "7.8.0",
     "electron": "44.4.5",
-    "electron-builder": "26.15.3"
+    "electron-builder": "26.15.3",
+    "typescript": "6.0.2"
   }
 }

@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "moduleDetection": "legacy",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "useUnknownInCatchVariables": true,
+    "verbatimModuleSyntax": true,
+    "noEmitOnError": true,
+    "forceConsistentCasingInFileNames": true,
+    "rootDir": ".",
+    "outDir": "out",
+    "sourceMap": true,
+    "paths": { "/reicon/icons/*.js": ["./public/icons.d.ts"] }
+  },
+  "include": ["*.ts", "*.cts", "public/*.ts", "shared/*.ts", "scripts/*.ts", "scripts/*.cts", "scripts/*.mts"],
+  "exclude": ["node_modules", "out", "dist", "graphify-out", ".bun-task-temp"]
+}

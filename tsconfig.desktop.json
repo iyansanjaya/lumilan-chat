@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["main.ts", "peer.ts", "discovery.ts", "reminders.ts", "clipboard-image.ts", "preview-image.ts", "updates.ts", "notch.ts", "linux-screen-lock.ts", "startup-default.ts"]
+}
