@@ -51,8 +51,6 @@ Platform-specific features depend on the installed package and desktop environme
 2. **Choose your name.** Connected devices appear in the direct message list.
 3. **Start talking.** Select a person, or use **Create Room** for an invitation-only Conversation Room or an Announcement Room.
 
-Connected contacts with unread messages move to the top of the direct message list. Read a conversation in the active app window to return its contact to the normal name order; a Lumi preview does not mark it read.
-
 Announcement Rooms broadcast to active devices that allow announcements. Direct messages, Room messages, and file transfers require reachable recipients; they are not queued for offline delivery. Reminder contacts are shown only while online and supporting the feature. Personal reminders work locally; requests already created retain their delivery or decision state if a connection drops.
 
 On first launch, supported installed builds enable opening at computer sign-in. Change this in **Settings → When the computer starts**. To keep receiving messages after closing the window, enable **Keep running in tray**; a tray must be available.
