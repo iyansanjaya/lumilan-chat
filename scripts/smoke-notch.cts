@@ -208,6 +208,7 @@ async function main() {
     await until(() => mainPage.evaluate(`window.lumilan.state().then(s=>s.peers.some(p=>p.id===${JSON.stringify(testPeer.id)}))`), 'encrypted peer connected');
     await until(() => mainPage.evaluate(`document.querySelectorAll('#people-list .person[data-peer]').length===2`), 'both private contacts rendered');
     const originalUiTheme = await mainPage.evaluate<string>('document.documentElement.dataset.theme');
+    const waitUiAnimations = () => mainPage.evaluate("Promise.all(document.getAnimations().filter(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})))");
     await mainPage.evaluate('window.lumilan.setNotificationSettings({enabled:false,preview:true,silent:true,background:true,notch:true})');
     await mainPage.evaluate("document.getElementById('notes-button').click()");
     const privateOrder = () => mainPage.evaluate<string[]>("[...document.querySelectorAll('#people-list .person[data-peer]')].map(row=>row.dataset.peer)");
@@ -223,6 +224,7 @@ async function main() {
       await mainPage.send('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: false });
       await mainPage.evaluate("document.getElementById('back-button').click()");
       await mainPage.evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+      await waitUiAnimations();
       assert.deepEqual(await privateOrder(), [testThird.id, testPeer.id], `Unread order changed in narrow ${theme} UI`);
       const visibleOrder = await mainPage.evaluate<{firstTop:number;secondTop:number;width:number;nameRight:number;badgeLeft:number;badgeRight:number;rowRight:number}>(`(()=>{const first=${citraRow},second=${aliceRow},row=first.getBoundingClientRect(),badge=first.querySelector('.unread-badge').getBoundingClientRect();return{firstTop:row.top,secondTop:second.getBoundingClientRect().top,width:row.width,nameRight:first.querySelector('strong').getBoundingClientRect().right,badgeLeft:badge.left,badgeRight:badge.right,rowRight:row.right}})()`);
       assert(visibleOrder.width > 0 && visibleOrder.firstTop < visibleOrder.secondTop && visibleOrder.nameRight <= visibleOrder.badgeLeft && visibleOrder.badgeRight <= visibleOrder.rowRight, `Unread list or badge is hidden/overlapping (${theme}): ${JSON.stringify(visibleOrder)}`);
@@ -255,7 +257,6 @@ async function main() {
       presenceCommands.push({ at: Date.now(), ...command });
       if (presenceCommands.length > 20) presenceCommands.shift();
     };
-    const waitUiAnimations = () => mainPage.evaluate("Promise.all(document.getAnimations().filter(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})))");
     const changeMainLanguage = async (language: string) => {
       await mainPage.evaluate(`document.getElementById('language-select').value=${JSON.stringify(language)};document.getElementById('language-select').dispatchEvent(new Event('change'))`);
       await until(() => mainPage.evaluate(`document.documentElement.lang===${JSON.stringify(language)}`), `main ${language} labels`);
@@ -484,8 +485,12 @@ async function main() {
       const message=state.messages.find(item=>item.text===${JSON.stringify(freeChat)});
       return message&&document.querySelector('#message-'+message.id+' .message-markdown')?.querySelectorAll('br').length===4;
     })`), 'Outgoing private chat collapsed its blank lines');
+    // DOM selection does not restore native focus after a picker or another desktop window.
+    await nativeBrowser.evaluate('smokeMain.focus()');
+    await until(() => nativeBrowser.evaluate('smokeMain.isVisible() && !smokeMain.isMinimized() && smokeMain.isFocused()'), 'incoming multiline native focus');
     const incomingLines = await testPeer.sendMessage('test\n\nsatu\n\ndua', appState.me.id);
     await until(() => mainPage.evaluate(`document.querySelector('#message-${incomingLines.message.id} .message-markdown')?.querySelectorAll('br').length===4`), 'incoming encrypted private multiline bubble');
+    await until(() => mainPage.evaluate(`window.lumilan.state().then(s=>!s.unread[${JSON.stringify(testPeer.id)}])`), 'focused incoming multiline marked read');
     console.log('Private messages: outgoing and incoming encrypted multiline chat retain blank lines');
     const pendingRows = await mainPage.evaluate<string[]>("Array.from(document.querySelectorAll('#transfer-progress .transfer-progress'),row=>row.dataset.transferId)");
     assert.equal(new Set(pendingRows).size, 8, 'Outgoing jobs reused progress/cancel IDs');
