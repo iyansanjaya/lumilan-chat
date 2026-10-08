@@ -8,7 +8,7 @@
 
 Lumilan connects devices directly on the same LAN or Wi-Fi. No accounts, central chat server, or internet relay. Open the app, choose a name, and start a conversation.
 
-![Lumilan Chat in light mode — direct conversation on an isolated demo network](build/screenshots/chat-light.png)
+![Lumilan Chat in light mode — direct conversation on an isolated demo network](docs/screenshots/chat-light.png)
 
 ## A workspace that stays close
 
@@ -21,9 +21,9 @@ Lumilan connects devices directly on the same LAN or Wi-Fi. No accounts, central
 <details>
 <summary><strong>See dark mode and settings</strong></summary>
 
-![Lumilan Chat in dark mode](build/screenshots/chat-dark.png)
+![Lumilan Chat in dark mode](docs/screenshots/chat-dark.png)
 
-![Profile and appearance settings](build/screenshots/settings.png)
+![Profile and appearance settings](docs/screenshots/settings.png)
 
 Screenshots use isolated demo profiles and local test devices; they contain no user conversations.
 
@@ -65,6 +65,6 @@ Discovery depends on local mDNS, and direct traffic must be allowed by firewalls
 
 Developed by [Iyan Sanjaya](https://iyansanjaya.com/). Found a problem? Use **Report a bug** in the app header or [open an issue](https://github.com/iyansanjaya/lumilan-chat/issues).
 
-[![Trakteer](https://raw.githubusercontent.com/iyansanjaya/lumilan-chat/refs/heads/master/build/trakteer.svg)](https://trakteer.id/iyansanjaya/tip) [![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/iyansanjaya)
+[![Trakteer](docs/trakteer.svg)](https://trakteer.id/iyansanjaya/tip) [![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/iyansanjaya)
 
 Contributions of any size help keep Lumilan improving. The **Support the App** icon offers Trakteer for Indonesia and Ko-fi for international supporters.

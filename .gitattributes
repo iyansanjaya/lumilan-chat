@@ -1,0 +1,9 @@
+# One line-ending policy on Windows, macOS and Linux: LF in the repository and in every checkout.
+* text=auto eol=lf
+
+# Binary assets: never convert line endings or attempt text diffs.
+*.png binary
+*.ico binary
+*.icns binary
+*.ttf binary
+*.asar binary

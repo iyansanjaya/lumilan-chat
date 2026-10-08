@@ -1,0 +1,66 @@
+Lumilan Chat Proprietary License
+
+Copyright (c) 2026 Iyan Sanjaya. All rights reserved.
+
+This license applies to Lumilan Chat, including its source code, compiled
+application, installers, artwork, the Lumi character, sounds, and
+documentation (the "Software"). An Indonesian version is provided in
+LICENSE.id.md.
+
+1. Permitted use
+   You may download official builds of the Software published by the
+   copyright holder and install and use them free of charge, for personal
+   use or within your organization, on devices you own or control.
+
+2. Restrictions
+   Unless the copyright holder gives you written permission, you may not:
+   a. copy, modify, translate, adapt, or create derivative works of the
+      Software or any part of it;
+   b. distribute, publish, sublicense, sell, rent, lease, or otherwise make
+      the Software available to others, including through mirrors, app
+      stores, or bundles (share the official download page instead);
+   c. decompile, disassemble, or reverse engineer the Software, except to
+      the extent that applicable law expressly permits it;
+   d. remove or change copyright notices, the product name, or branding;
+   e. use the name "Lumilan", the Lumi character, or related branding to
+      identify another product or service.
+
+3. Source code
+   Source code that the copyright holder makes publicly visible, including
+   in the public Lumilan Chat repository, is provided for reference only.
+   Viewing or downloading it grants no right to use, copy, modify, or
+   distribute it, except the rights that GitHub's Terms of Service give
+   other GitHub users to view and fork a public repository on GitHub.
+   Contributions are accepted only at the copyright holder's request.
+
+4. Third-party components
+   The Software includes third-party components, such as Electron,
+   Chromium, Node.js packages, and the Public Sans font (SIL Open Font
+   License 1.1). Their own licenses, included with the Software or its
+   dependencies, govern those components. This license does not restrict
+   any right that those licenses grant.
+
+5. Ownership
+   The Software is licensed, not sold. The copyright holder keeps all
+   rights that this license does not expressly grant.
+
+6. Termination
+   This license ends automatically if you breach it. You must then stop
+   using the Software and delete every copy you have.
+
+7. No warranty
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+   PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+8. Limitation of liability
+   TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE COPYRIGHT HOLDER IS NOT
+   LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, INCLUDING LOSS OF DATA
+   OR FILES, ARISING FROM OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+9. Governing law and language
+   This license is governed by the laws of the Republic of Indonesia. If
+   the English and Indonesian versions differ, the Indonesian version
+   prevails.
+
+Contact: https://iyansanjaya.com/

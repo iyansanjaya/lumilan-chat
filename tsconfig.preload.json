@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "types": [], "noEmit": true },
-  "include": ["preload.cts", "notch-preload.cts"]
+  "include": ["src/preload/*.cts"]
 }

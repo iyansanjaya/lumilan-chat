@@ -57,10 +57,10 @@ jobs:
       - name: Verify complete source
         shell: bash
         run: |
-          test -s public/index.html
-          test -s public/app.css
-          test -s public/app.ts
-          test -s public/i18n.ts
+          test -s src/renderer/index.html
+          test -s src/renderer/app.css
+          test -s src/renderer/app.ts
+          test -s src/renderer/i18n.ts
           echo "Private source commit: $(git rev-parse --short HEAD)"
       - uses: actions/setup-node@v7
         with:

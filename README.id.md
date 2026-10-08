@@ -8,7 +8,7 @@
 
 Lumilan menghubungkan perangkat secara langsung melalui LAN atau Wi-Fi yang sama. Tanpa akun, server chat pusat, atau relay internet. Buka aplikasi, pilih nama, lalu mulai percakapan.
 
-![Lumilan Chat dalam tema terang — percakapan langsung pada jaringan demo terisolasi](build/screenshots/chat-light.png)
+![Lumilan Chat dalam tema terang — percakapan langsung pada jaringan demo terisolasi](docs/screenshots/chat-light.png)
 
 ## Ruang kerja yang dekat dengan Anda
 
@@ -21,9 +21,9 @@ Lumilan menghubungkan perangkat secara langsung melalui LAN atau Wi-Fi yang sama
 <details>
 <summary><strong>Lihat tema gelap dan pengaturan</strong></summary>
 
-![Lumilan Chat dalam tema gelap](build/screenshots/chat-dark.png)
+![Lumilan Chat dalam tema gelap](docs/screenshots/chat-dark.png)
 
-![Profil dan pengaturan tampilan](build/screenshots/settings.png)
+![Profil dan pengaturan tampilan](docs/screenshots/settings.png)
 
 Screenshot memakai profil demo terisolasi dan perangkat uji lokal; tidak memuat percakapan pengguna.
 
@@ -65,6 +65,6 @@ Penemuan perangkat bergantung pada mDNS lokal, dan lalu lintas langsung harus di
 
 Dikembangkan oleh [Iyan Sanjaya](https://iyansanjaya.com/). Menemukan masalah? Gunakan **Laporkan bug** di header aplikasi atau [buka issue](https://github.com/iyansanjaya/lumilan-chat/issues).
 
-[![Trakteer](https://raw.githubusercontent.com/iyansanjaya/lumilan-chat/refs/heads/master/build/trakteer.svg)](https://trakteer.id/iyansanjaya/tip) [![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/iyansanjaya)
+[![Trakteer](docs/trakteer.svg)](https://trakteer.id/iyansanjaya/tip) [![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/iyansanjaya)
 
 Dukungan dalam jumlah berapa pun membantu pengembangan Lumilan. Ikon **Dukung Aplikasi** menyediakan Trakteer untuk Indonesia dan Ko-fi untuk pendukung internasional.

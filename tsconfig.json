@@ -16,8 +16,8 @@
     "rootDir": ".",
     "outDir": "out",
     "sourceMap": true,
-    "paths": { "/reicon/icons/*.js": ["./public/icons.d.ts"] }
+    "paths": { "/reicon/icons/*.js": ["./src/renderer/icons.d.ts"] }
   },
-  "include": ["*.ts", "*.cts", "public/*.ts", "shared/*.ts", "scripts/*.ts", "scripts/*.cts", "scripts/*.mts"],
+  "include": ["src/main/*.ts", "src/preload/*.cts", "src/renderer/*.ts", "src/shared/*.ts", "tests/*.ts", "scripts/*.ts", "scripts/*.cts", "scripts/*.mts"],
   "exclude": ["node_modules", "out", "dist", "graphify-out", ".bun-task-temp"]
 }
