@@ -2,6 +2,36 @@
 
 [English](CHANGELOG.md)
 
+## 1.2.2
+
+Perubahan dari versi 1.2.1.
+
+### Fitur baru
+
+- **Notifikasi mengikuti apakah Anda benar-benar sedang melihat Lumilan.** Lumi (atau notifikasi sistem jika Lumi tidak tersedia) kini muncul setiap kali jendela utama tidak sedang dilihat: saat diminimalkan, ditutup ke tray, tertutup jendela lain, atau fokus tetapi tidak disentuh selama 3 menit. Sebelumnya, jendela yang tetap terbuka di belakang jendela lain tidak memunculkan Lumi, dan jendela fokus yang ditinggalkan menandai pesan baru di percakapan yang terbuka sebagai dibaca tanpa notifikasi apa pun.
+- **Pesan yang datang saat Anda tidak di depan layar tetap belum dibaca.** Pada jendela yang ditinggalkan, pesan baru baru ditandai dibaca setelah Anda kembali: berpindah lagi ke jendela, atau mengklik, mengetik, menggulir, maupun menyentuhnya. Menggerakkan pointer saja tidak dihitung. Jika sistem operasi tidak melaporkan waktu idle input, aplikasi hanya memakai status fokus jendela.
+- **Penanda yang bertahan di Windows dan macOS.** Di Windows, tombol taskbar berkedip sampai Anda kembali ke jendela dan menampilkan titik merah selama ada pesan belum dibaca. Di macOS, ikon Dock memantul sekali. Kedipan dan pantulan mengikuti aturan notifikasi, mute, Jangan ganggu, dan layar terkunci yang sama dengan Lumi; seperti judul jendela, titik merah mencerminkan jumlah pesan belum dibaca. Linux hanya memakai Lumi dan notifikasi sistem, karena sebagian desktop mengubah peringatan taskbar menjadi notifikasi kedua.
+
+### Perbaikan
+
+- **Percakapan tidak lagi melompat naik-turun saat file diterima.** Di perangkat penerima, setiap kenaikan progres membangun ulang seluruh daftar pesan dan memuat ulang pratinjau gambar, sehingga percakapan melompat sampai file selesai. Progres kini diperbarui di tempat, thumbnail yang sudah tampil dipertahankan, dan file yang diterima di percakapan lain tidak lagi menggambar ulang percakapan yang sedang terbuka.
+
+### Perubahan
+
+- Di atas jendela utama yang hanya tertutup jendela lain, Lumi menampilkan pesan masuk tanpa mengambil fokus dan tidak meninggalkan strip idle; strip tetap muncul selama jendela utama diminimalkan atau ditutup ke tray. Renderer Lumi kini mulai saat jendela utama pertama kali tidak sedang dilihat.
+- Jika Lumi gagal saat ada panggilan atau permintaan file yang menunggu, permintaan itu juga diserahkan ke jendela utama yang terbuka tetapi tidak sedang dilihat, alih-alih dibiarkan di sana tanpa terlihat.
+
+### Build dan validasi
+
+- Verifikasi paket kini menelusuri entri utama paket, skrip halaman, dan preload melalui impornya. Setiap modul yang dapat dimuat aplikasi wajib ada di paket dan setiap berkas hasil kompilasi dalam paket wajib identik byte demi byte, sehingga modul runtime baru cukup ditambahkan ke `build.files`.
+- Menambahkan tes untuk deteksi perhatian (termasuk sumber idle yang tidak valid dan batas 3 menit), Lumi di atas jendela yang tertutup jendela lain, penandaan dibaca setelah kehadiran dikonfirmasi, bridge kehadiran di preload, progres penerimaan tanpa membangun ulang percakapan, dan verifikasi paket yang diturunkan dari impor.
+- Smoke test paket kini mencakup Lumi di belakang jendela lain tanpa mencuri fokus, pesan belum dibaca pada jendela yang ditinggalkan, penanda taskbar dan Dock, serta penerimaan file 24 MB tanpa pergeseran tata letak atau thumbnail yang dimuat ulang. Smoke test kini mengatur waktu idle secara eksplisit dan memastikan fokus jendela sebelum langkah membaca, sehingga desktop yang ditinggalkan atau layar CI tidak lagi mengubah hasilnya.
+
+### Catatan platform
+
+- Lumi memakai overlay desktop pada Windows, macOS, dan Linux X11. Linux Wayland memakai notifikasi sistem. Jika sistem operasi tidak melaporkan waktu idle input, yang mungkin terjadi pada sebagian desktop Wayland, jendela yang fokus dianggap sedang dilihat.
+- Paket saat ini belum ditandatangani. Windows atau macOS mungkin menampilkan peringatan penerbit; notifikasi sistem macOS memerlukan aplikasi bertanda tangan. Unduh paket dari [halaman Releases resmi](https://github.com/iyansanjaya/lumilan-chat/releases).
+
 ## 1.2.1
 
 Perubahan dari versi 1.2.0.

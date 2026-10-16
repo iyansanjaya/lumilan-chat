@@ -2,6 +2,36 @@
 
 [Bahasa Indonesia](CHANGELOG.id.md)
 
+## 1.2.2
+
+Changes from version 1.2.1.
+
+### Added
+
+- **Notifications follow whether you are actually looking at Lumilan.** Lumi (or the system notification where Lumi is unavailable) now appears whenever the main window is not being watched: when it is minimized, closed to the tray, behind another window, or focused but untouched for 3 minutes. Previously, a window that stayed open behind other windows showed no Lumi, and a focused window left unattended marked new messages in the open conversation as read without any notification.
+- **Messages that arrive while you are away stay unread.** In an unattended window, new messages are marked read only after you return: switch back to the window, or click, type, scroll, or touch it. Moving the pointer alone does not count. If the operating system does not report input idle time, only window focus is used.
+- **Persistent cues on Windows and macOS.** On Windows, the taskbar button flashes until you return to the window and shows a red overlay while messages are unread. On macOS, the Dock icon bounces once. The flash and bounce follow the same notification, mute, Do not disturb, and screen lock rules as Lumi; like the window title, the overlay reflects the unread count. Linux relies on Lumi and system notifications, because some desktops turn a taskbar alert into a second notification.
+
+### Fixed
+
+- **The conversation no longer jumps while a file arrives.** On the receiving device, every progress step rebuilt the whole message list and reloaded image previews, so the conversation jumped up and down until the file finished. Progress now updates in place, shown thumbnails are kept, and a file arriving in another conversation no longer redraws the one you have open.
+
+### Changed
+
+- Over a main window that is only behind other windows, Lumi shows arrivals without taking focus and leaves no idle strip; the strip still appears while the main window is minimized or closed to the tray. Lumi's renderer now starts the first time the main window is not being watched.
+- When Lumi fails while a call or file request is waiting, the request is also handed to a main window that is open but not being watched, instead of being left there unseen.
+
+### Build and validation
+
+- The package verifier now follows the packaged main entry, page scripts, and preloads through their imports. Every module the app can load must be in the package, and every packaged compiled file must match the build output byte for byte, so a new runtime module only needs its `build.files` entry.
+- Added tests for attention detection (including invalid idle sources and the 3-minute boundary), Lumi over a window behind other windows, read marking after a confirmed return, the preload presence bridge, receiving progress without rebuilding the conversation, and the derived package verification.
+- The packaged smoke tests now cover Lumi behind another window without focus theft, unread arrivals in an unattended window, taskbar and Dock cues, and receiving a 24 MB file without layout shift or reloaded thumbnails. They control idle time explicitly and re-establish window focus before reading steps, so an unattended desktop or CI display no longer changes the result.
+
+### Platform notes
+
+- Lumi uses the desktop overlay on Windows, macOS, and Linux X11. Linux Wayland uses system notifications. Where the operating system does not report input idle time, which may include some Wayland desktops, a focused window counts as watched.
+- Current packages are unsigned. Windows or macOS may display a publisher warning; macOS system notifications require a signed application. Download packages from the [official Releases page](https://github.com/iyansanjaya/lumilan-chat/releases).
+
 ## 1.2.1
 
 Changes from version 1.2.0.
