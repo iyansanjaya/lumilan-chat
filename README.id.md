@@ -16,7 +16,7 @@ Lumilan menghubungkan perangkat secara langsung melalui LAN atau Wi-Fi yang sama
 | --- | --- |
 | **Pesan pribadi & Ruang berundangan** — berbicara langsung atau mengumpulkan tim. | **Catatan pribadi** — simpan pesan dan lampiran hanya di perangkat Anda. |
 | **Berbagi file & paste gambar** — kirim setiap file hingga 5 GB ke klien yang kompatibel; tempel gambar yang disalin, periksa, lalu tekan Kirim. | **Pengingat** — jadwalkan tugas sendiri atau minta kontak aktif memilih dan menerima jadwal. |
-| **Panggilan suara** — audio satu lawan satu melalui jaringan lokal. | **Lumi** — pemberitahuan ringkas di latar belakang, dengan fallback notifikasi sistem saat diperlukan. |
+| **Panggilan suara** — audio satu lawan satu melalui jaringan lokal. | **Lumi** — pemberitahuan ringkas setiap kali Anda tidak sedang melihat Lumilan, dengan fallback notifikasi sistem saat diperlukan. |
 
 <details>
 <summary><strong>Lihat tema gelap dan pengaturan</strong></summary>

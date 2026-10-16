@@ -16,7 +16,7 @@ Lumilan connects devices directly on the same LAN or Wi-Fi. No accounts, central
 | --- | --- |
 | **Direct messages & invitation-only Rooms** — talk privately or bring a team together. | **Personal notes** — keep messages and attachments on your own device. |
 | **File sharing & image paste** — transfer each file up to 5 GB to compatible clients; paste a copied image, review it, and select Send. | **Reminders** — schedule your own tasks or ask an online contact to choose and accept a time. |
-| **Voice calls** — one-to-one audio over your local network. | **Lumi** — compact background alerts, with system notification fallback where needed. |
+| **Voice calls** — one-to-one audio over your local network. | **Lumi** — compact alerts whenever you are not looking at Lumilan, with system notification fallback where needed. |
 
 <details>
 <summary><strong>See dark mode and settings</strong></summary>

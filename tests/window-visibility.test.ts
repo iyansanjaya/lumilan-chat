@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import { isRecord } from '../src/shared/model.js';
 
 const main = readFileSync(new URL('../src/main/main.js', import.meta.url), 'utf8');
-const visibilitySource = main.slice(main.indexOf('function mainWindowVisible()'), main.indexOf('function updateBadge()'));
+const visibilitySource = main.slice(main.indexOf('function mainWindowVisible()'), main.indexOf('function updateBadge('));
 
 test('visibility query retains main sender, frame and URL validation', async () => {
   const frame = {}, mainUrl = 'lumilan://app/index.html';
@@ -88,4 +88,27 @@ test('sandbox preload visibility API strips the event, rejects non-booleans and 
   unsubscribe();
   ipcRenderer.emit('lumilan:window-visible', event, true);
   assert.equal(values.length, 2);
+});
+
+test('sandbox preload presence API carries no IPC event or payload and unsubscribes', async () => {
+  const calls: unknown[][] = [];
+  const ipcRenderer = Object.assign(new EventEmitter(), { invoke: async (...args: unknown[]) => { calls.push(args); return true; } });
+  interface PresenceBridge { present(): Promise<boolean>; onAwaitPresence(callback: (...args: unknown[]) => void): () => void }
+  const isPresenceBridge = (value: unknown): value is PresenceBridge =>
+    isRecord(value) && typeof value.present === 'function' && typeof value.onAwaitPresence === 'function';
+  let bridge: PresenceBridge | undefined;
+  const context = vm.createContext({ exports: {}, require: () => ({ ipcRenderer, webUtils: {}, contextBridge: { exposeInMainWorld: (_name: string, api: unknown) => {
+    assert(isPresenceBridge(api)); bridge = api;
+  } } }) });
+  vm.runInContext(readFileSync(new URL('../src/preload/preload.cjs', import.meta.url), 'utf8'), context);
+  assert(bridge);
+  assert.equal(await bridge.present(), true);
+  assert.deepEqual(calls, [['lumilan:present']]);
+  const received: unknown[][] = [];
+  const unsubscribe = bridge.onAwaitPresence((...args) => received.push(args));
+  ipcRenderer.emit('lumilan:await-presence', { sender: 'privileged' }, 'payload');
+  assert.deepEqual(received, [[]]);
+  unsubscribe();
+  ipcRenderer.emit('lumilan:await-presence', {});
+  assert.equal(received.length, 1);
 });

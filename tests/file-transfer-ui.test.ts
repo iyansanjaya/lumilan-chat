@@ -40,7 +40,8 @@ function fixture() {
   }
   const list = new Element('list');
   const descendants = (element: Element): Element[] => [element, ...element.children.flatMap(descendants)];
-  const renderMessages = () => { list.replaceChildren(); (vm.runInContext('renderIncomingTransfers', context) as (list: Element) => void)(list); };
+  let renders = 0;
+  const renderMessages = () => { renders++; list.replaceChildren(); (vm.runInContext('renderIncomingTransfers', context) as (list: Element) => void)(list); };
   context = vm.createContext({
     state: { thread: 'sender', me: { id: 'receiver' } }, document: { createElement: (tag: string) => new Element(tag) },
     t: (text: string, values: Record<string, unknown> = {}) => text.replace(/\{(\w+)\}/g, (_match: string, key: string) => String(values[key] ?? `{${key}}`)),
@@ -57,6 +58,8 @@ function fixture() {
     snapshot, decision, toasts, decisions,
     onOffer: (value: IncomingTransfer) => onOffer!(value), onTransfer: (value: FileTransfer) => onTransfer!(value),
     transferCount: () => vm.runInContext('incomingTransfers.size', context) as number,
+    renders: () => renders, rowElements: () => [...list.children],
+    openThread: (thread: string) => { vm.runInContext(`state.thread = ${JSON.stringify(thread)}`, context); renderMessages(); },
     rows: () => list.children.map(row => {
       const elements = descendants(row);
       return { text: elements.map(element => element.textContent).join(' '),
@@ -286,4 +289,33 @@ test('main consumes each file decision once across the window, Lumi and timeout'
   request('typed');
   assert.throws(() => decideFile('typed', 'yes'), /sudah tidak tersedia/);
   assert.deepEqual([...pending.keys()], ['typed']);
+});
+
+test('receiving progress updates its row in place instead of rebuilding the conversation', async () => {
+  const f = fixture(); f.onOffer(offer('large'));
+  const clicking = f.click(true); f.decision.resolve(true); await clicking;
+  const row = f.rowElements()[0], renders = f.renders();
+  assert(f.rows()[0]!.text.includes('Menunggu pengiriman file...'));
+  for (let received = 0; received <= 100; received++) f.onTransfer({ id: 'large', status: 'receiving', received, total: 100 });
+  assert.equal(f.renders(), renders, 'Every progress step rebuilt the whole conversation and re-inserted its thumbnails');
+  assert.equal(f.rowElements()[0], row, 'The progress row was replaced instead of updated');
+  assert.equal(f.rows()[0]!.progress, 100);
+  assert(f.rows()[0]!.text.includes('Menerima large.bin: 100%'));
+  f.onTransfer({ id: 'large', status: 'complete' });
+  assert.equal(f.rows().length, 0, 'A completed transfer kept its progress row');
+  assert.equal(f.renders(), renders + 1);
+});
+
+test('progress for another conversation never rebuilds the open one and shows current state when opened', async () => {
+  const f = fixture(); f.onOffer(offer('background'));
+  const clicking = f.click(true); f.decision.resolve(true); await clicking;
+  f.openThread('other');
+  const renders = f.renders();
+  for (let received = 0; received <= 60; received++) f.onTransfer({ id: 'background', status: 'receiving', received, total: 100 });
+  assert.equal(f.renders(), renders, 'A hidden transfer rebuilt the open conversation');
+  assert.equal(f.rows().length, 0);
+  f.openThread('sender');
+  assert.equal(f.rows()[0]!.progress, 60, 'Opening the conversation lost the latest progress');
+  f.onTransfer({ id: 'background', status: 'receiving', received: 61, total: 100 });
+  assert.equal(f.rows()[0]!.progress, 61, 'Progress stopped updating after reopening the conversation');
 });

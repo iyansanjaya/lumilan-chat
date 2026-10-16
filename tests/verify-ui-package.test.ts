@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { posix, win32 } from 'node:path';
 import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
 import { record } from '../src/shared/model.js';
 
 const source = readFileSync(new URL('../scripts/verify-ui-package.cjs', import.meta.url), 'utf8');
@@ -25,10 +26,15 @@ function addDirectory(directory: string): void {
 }
 addDirectory('out/src/renderer');
 for (const file of ['out/build/trayTemplate.png', 'out/build/trayTemplate@2x.png']) addSource(file);
+// Icons the renderer imports through lumilan://app/reicon/ are packaged dependency modules.
+addSource('node_modules/reicon/createIcon.js');
+for (const [file, bytes] of [...sourceFiles]) if (file.startsWith('out/src/renderer/') && file.endsWith('.js'))
+  for (const [, icon = ''] of bytes.toString('utf8').matchAll(/from '\/reicon\/([^']+)'/g)) addSource(`node_modules/reicon/${icon}`);
 
 type Platform = 'win32' | 'darwin' | 'linux';
-type Options = { updates?: 'current' | 'missing' | 'stale'; missingNative?: number; badSafeArea?: boolean; extra?: string; main?: string; preloadDependency?: boolean; preloadWrapper?: boolean };
-async function verify(platform: Platform, arch: string, { updates = 'current', missingNative, badSafeArea = false, extra, main, preloadDependency = false, preloadWrapper = false }: Options = {}) {
+type Options = { updates?: 'current' | 'missing' | 'stale'; missingNative?: number; badSafeArea?: boolean; extra?: string; main?: string; preloadDependency?: boolean; preloadWrapper?: boolean;
+  packaged?: Record<string, string | null>; local?: Record<string, string> };
+async function verify(platform: Platform, arch: string, { updates = 'current', missingNative, badSafeArea = false, extra, main, preloadDependency = false, preloadWrapper = false, packaged: packagedChanges = {}, local = {} }: Options = {}) {
   const path = platform === 'win32' ? win32 : posix;
   const directory = platform === 'win32' ? 'win-unpacked' : platform === 'darwin' ? `mac-${arch}` : `linux-${arch}-unpacked`;
   const resources = platform === 'darwin'
@@ -48,6 +54,11 @@ async function verify(platform: Platform, arch: string, { updates = 'current', m
     const code = Buffer.from(preloadWrapper ? `Object.defineProperty(exports, '__esModule', {value:true});` : `require('./shared.cjs');`);
     packaged.set('out/src/preload/preload.cjs', code); localSources.set('out/src/preload/preload.cjs', code);
   }
+  for (const [file, value] of Object.entries(packagedChanges)) {
+    if (value === null) packaged.delete(file);
+    else packaged.set(file, Buffer.from(value));
+  }
+  for (const [file, value] of Object.entries(local)) localSources.set(file, Buffer.from(value));
   const png = Buffer.from('1024px PNG fixture');
   const icon = Buffer.alloc(16 + png.length);
   icon.write('icns'); icon.writeUInt32BE(icon.length, 4);
@@ -59,6 +70,7 @@ async function verify(platform: Platform, arch: string, { updates = 'current', m
     console: { log: (value: string) => logs.push(value), error: (value: string) => errors.push(value) },
     require: (name: string) => {
       if (name === 'node:path') return path;
+      if (name === 'typescript') return ts;
       if (name === 'node:fs') return {
         readdirSync: (directoryPath: string) => {
           if (directoryPath === 'fixture') return ['unrelated', directory];
@@ -142,5 +154,39 @@ test('package verifier enforces compiled entry, production contents, and standal
       await assert.rejects(verify(platform, arch, { extra }), /Stale source-layout runtime/);
     await assert.rejects(verify(platform, arch, { preloadDependency: true }), /Sandboxed preload must remain standalone/);
     await assert.rejects(verify(platform, arch, { preloadWrapper: true }), /Sandboxed preload must remain standalone/);
+  }
+});
+const compiledText = (file: string) => { const value = sourceFiles.get(file); assert(value, `Missing fixture ${file}`); return value.toString('utf8'); };
+const mainWith = (line: string) => `${compiledText('out/src/main/main.js')}\n${line}\n`;
+test('package verifier derives runtime modules from the packaged entries instead of a hand-kept list', async () => {
+  for (const [platform, arch] of platforms) {
+    const baseline = await verify(platform, arch);
+    const counted = (logs: string[]) => Number(/^Verified (\d+) runtime modules/.exec(logs.find(value => value.startsWith('Verified ') && value.includes('runtime modules')) || '')?.[1]);
+    assert(counted(baseline.logs) > 20, `${platform}/${arch} did not follow the packaged import graph`);
+    const main = mainWith("import './late-module.js';"), late = 'export const late = 1;\n';
+    const added = await verify(platform, arch, { packaged: { 'out/src/main/main.js': main, 'out/src/main/late-module.js': late }, local: { 'out/src/main/main.js': main, 'out/src/main/late-module.js': late } });
+    assert.equal(added.process.exitCode, 0);
+    assert(added.reads.includes('out/src/main/late-module.js'), 'A new runtime module was packaged without a byte check');
+    assert.equal(counted(added.logs), counted(baseline.logs) + 1);
+    await assert.rejects(verify(platform, arch, { packaged: { 'out/src/main/main.js': main }, local: { 'out/src/main/main.js': main, 'out/src/main/late-module.js': late } }),
+      /Missing out\/src\/main\/late-module\.js in /, 'A module missing from build.files was not detected');
+    await assert.rejects(verify(platform, arch, { packaged: { 'out/src/main/main.js': main, 'out/src/main/late-module.js': 'export const late = 2;\n' }, local: { 'out/src/main/main.js': main, 'out/src/main/late-module.js': late } }),
+      /Packaged out\/src\/main\/late-module\.js differs from compiled output/);
+    const lazy = mainWith("export const lazy = () => import('./lazy-module.js');");
+    await assert.rejects(verify(platform, arch, { packaged: { 'out/src/main/main.js': lazy }, local: { 'out/src/main/main.js': lazy } }), /Missing out\/src\/main\/lazy-module\.js in /, 'Dynamic imports were not followed');
+    const escaping = mainWith("import '../../../../outside.js';");
+    await assert.rejects(verify(platform, arch, { packaged: { 'out/src/main/main.js': escaping }, local: { 'out/src/main/main.js': escaping } }), /Runtime import escapes the package/);
+  }
+});
+test('package verifier follows renderer pages, cross-process imports and icons, and byte-checks glob-packaged files', async () => {
+  const icon = [...sourceFiles.keys()].find(file => file.startsWith('node_modules/reicon/icons/'));
+  assert(icon, 'Renderer fixture imports no reicon icons');
+  for (const [platform, arch] of platforms) {
+    for (const missing of ['out/src/renderer/notch.js', 'out/src/renderer/avatar.js', 'out/src/renderer/i18n.js', icon, 'node_modules/reicon/createIcon.js'])
+      await assert.rejects(verify(platform, arch, { packaged: { [missing]: null } }), new RegExp(`Missing ${missing.replaceAll('/', '\/').replaceAll('.', '\.')} in `), `${missing} was not required`);
+    await assert.rejects(verify(platform, arch, { packaged: { 'out/src/renderer/panel.js': 'export const panel = 2;\n' }, local: { 'out/src/renderer/panel.js': 'export const panel = 1;\n' } }),
+      /Packaged out\/src\/renderer\/panel\.js differs from compiled output/, 'A renderer file packaged through the glob escaped the byte check');
+    await assert.rejects(verify(platform, arch, { packaged: { 'out/src/main/orphan.js': 'export {};\n' } }), /Packaged out\/src\/main\/orphan\.js has no compiled counterpart/);
+    await assert.rejects(verify(platform, arch, { packaged: { 'out/src/renderer/app.css': null } }), /Missing out\/src\/renderer\/app\.css in /);
   }
 });

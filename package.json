@@ -1,6 +1,6 @@
 {
   "name": "lumilan-chat",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Pesan langsung antarperangkat di jaringan lokal",
   "author": "Iyan Sanjaya",
   "license": "SEE LICENSE IN LICENSE",
@@ -34,6 +34,7 @@
     "files": [
       "out/src/main/main.js",
       "out/src/main/notch.js",
+      "out/src/main/attention.js",
       "out/src/main/linux-screen-lock.js",
       "out/src/main/startup-default.js",
       "out/src/main/updates.js",

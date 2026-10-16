@@ -58,16 +58,20 @@ function fixture() {
   const display = { id: 1, workArea: { x: 0, y: 0, width: 1920, height: 1080 } };
   const screen = Object.assign(new EventEmitter(), { getPrimaryDisplay: () => display, getAllDisplays: () => [display], getDisplayNearestPoint: () => display, getCursorScreenPoint: () => ({ x: 500, y: 0 }) });
   const ipcMain = new TestIpc();
-  const main = { visible: false, minimized: false, fullScreen: false, isDestroyed: () => false, isVisible: () => main.visible, isMinimized: () => main.minimized, isFullScreen: () => main.fullScreen };
+  const main = { visible: false, minimized: false, focused: false, fullScreen: false, isDestroyed: () => false, isVisible: () => main.visible,
+    isMinimized: () => main.minimized, isFocused: () => main.focused, isFullScreen: () => main.fullScreen };
+  // The person watches the main window only while it is visible, focused and recently used.
+  const watch = (value: boolean) => { main.visible = main.focused = value; };
+  const clock = { idle: 0, getSystemIdleTime: () => clock.idle };
   const settings: NotchSettings = { notch: true, enabled: true, preview: false, silent: true, language: 'id' };
   const peer: NotchPeer & { state: { status: string; mutedThreads: string[]; reminders: NotchReminder[] } } = { state: { status: 'active', mutedThreads: [], reminders: [] }, trusted: new Map([['alice', { name: 'Alice' }]]), sendCall: async () => { peer.activeCall = null; } };
   const decisions: Array<[string, boolean]> = [], opens: Array<string | undefined> = [], accepts: string[] = [], pending = new Set(['f1']);
-  const notch = new LumiNotch({ BrowserWindow: Window, ipcMain, screen, powerMonitor: new EventEmitter(), preloadDir: '.', getMain: () => main,
+  const notch = new LumiNotch({ BrowserWindow: Window, ipcMain, screen, powerMonitor: new EventEmitter(), idleClock: clock, preloadDir: '.', getMain: () => main,
     getSettings: () => settings, getPeer: () => peer, reveal: thread => opens.push(thread), acceptCall: id => accepts.push(id),
     decideFile: async (id, value) => { if (!pending.delete(id)) throw new Error('expired'); decisions.push([id, value]); },
     savePosition: value => { settings.notchPosition = value; } });
   notch.sync(); notch.ready = true;
-  return { notch, settings, peer, main, ipcMain, decisions, opens, accepts, pending };
+  return { notch, settings, peer, main, watch, clock, ipcMain, decisions, opens, accepts, pending };
 }
 
 test('Lumi bounds remain inside small, negative-coordinate and scaled display work areas', () => {
@@ -115,7 +119,7 @@ test('Lumi IPC rejects foreign windows, frames, URLs and arbitrary actions', asy
 });
 
 test('Lumi redacts queued content immediately and obeys DND, mute, visibility and notification settings', async () => {
-  const { notch, settings, peer, main } = fixture();
+  const { notch, settings, peer, watch } = fixture();
   try {
     notch.message({}, 'alice', 'Alice', '<img src=x onerror=alert(1)> secret');
     assert.equal(notch.mode, 'compact', 'Ordinary messages must not automatically cover the desktop with a full card');
@@ -123,10 +127,10 @@ test('Lumi redacts queued content immediately and obeys DND, mute, visibility an
     settings.preview = true; assert(selectedSnapshot(notch).body.includes('secret'));
     settings.preview = false; assert(!JSON.stringify(notch.snapshot()).includes('Alice'));
     await notch.action({ type: 'expand' }); assert.equal(windowOf(notch).focusable, true);
-    main.visible = true; assert.equal(notch.sync(), false); assert.equal(windowOf(notch).visible, false);
+    watch(true); assert.equal(notch.sync(), false); assert.equal(windowOf(notch).visible, false);
     assert.equal(windowOf(notch).focusable, process.platform === 'linux');
     assert.equal(windowOf(notch).isFocused(), false, 'A later automatic notification could still take native focus');
-    main.visible = false; peer.state.status = 'dnd'; assert.equal(notch.sync(), false);
+    watch(false); peer.state.status = 'dnd'; assert.equal(notch.sync(), false);
     peer.state.status = 'active'; settings.enabled = false; assert.equal(notch.sync(), false);
     settings.enabled = true; settings.notch = false; assert.equal(notch.sync(), false);
     assert.equal(windowOf(notch).isDestroyed(), true, 'Disabling Lumi kept its renderer process allocated');
@@ -134,6 +138,49 @@ test('Lumi redacts queued content immediately and obeys DND, mute, visibility an
     assert.equal(notch.file({ id: 'muted', thread: 'alice', fromName: 'Alice', name: 'Private.zip', size: 100 }), false);
     assert.equal(notch.items.size, 0, 'Muted consent was published by the companion');
     assert.equal(notch.timers.size, 0, 'Idle must not poll or animate with an interval');
+  } finally { notch.dispose(); }
+});
+
+test('Lumi covers a visible main window behind other windows without taking focus and withdraws once it is watched', () => {
+  const { notch, main, watch } = fixture();
+  try {
+    watch(true); notch.sync();
+    assert.equal(notch.message({}, 'alice', 'Alice', 'While reading'), false, 'Lumi interrupted a main window being watched');
+    main.focused = false; // Alt-Tab to another application leaves the main window visible.
+    assert.equal(notch.message({}, 'alice', 'Alice', 'Behind another window'), true, 'A visible but unfocused main window hid the arrival');
+    assert.equal(notch.mode, 'compact');
+    assert.equal(windowOf(notch).visible, true);
+    assert.equal(windowOf(notch).isFocused(), false, 'An automatic preview took native focus from the other application');
+    notch.collapse();
+    assert.equal(windowOf(notch).visible, false, 'An idle strip appeared over a main window that is only behind other windows');
+    assert.equal(notch.timers.size, 0);
+    main.visible = false; notch.sync(); // Closed to the tray: the strip leads back to the queue.
+    assert.equal(windowOf(notch).visible, true); assert.equal(windowOf(notch).bounds.height, 5);
+    main.visible = true; notch.sync();
+    assert.equal(windowOf(notch).visible, false, 'Restoring the main window behind others kept the idle strip');
+    notch.message({}, 'alice', 'Alice', 'Second arrival behind another window');
+    assert.equal(windowOf(notch).visible, true, 'A later arrival did not reuse the warm renderer');
+    main.focused = true; assert.equal(notch.sync(), false);
+    assert.equal(windowOf(notch).visible, false, 'Lumi stayed over the main window after it was focused again');
+    assert.equal(itemOf(notch, 'message:alice').count, 3, 'Focusing the main window discarded queued activity');
+    main.minimized = true; main.focused = false;
+    assert.equal(notch.message({}, 'alice', 'Alice', 'Minimized'), true);
+  } finally { notch.dispose(); }
+});
+
+test('Lumi covers a focused main window only after the person has been away for three minutes', () => {
+  const { notch, watch, clock } = fixture();
+  try {
+    watch(true);
+    clock.idle = 179; assert.equal(notch.message({}, 'alice', 'Alice', 'Still here'), false);
+    clock.idle = 180; assert.equal(notch.message({}, 'alice', 'Alice', 'Away'), true, 'An unattended focused window hid the arrival');
+    assert.equal(windowOf(notch).isFocused(), false, 'Lumi took focus from the unattended main window');
+    clock.idle = 0; assert.equal(notch.sync(), false, 'Lumi stayed after the person returned');
+    assert.equal(windowOf(notch).visible, false);
+    for (const reading of [() => Number.NaN, () => Infinity, () => -1, () => { throw new Error('idle service unavailable'); }]) {
+      clock.getSystemIdleTime = reading;
+      assert.equal(notch.sync(), false, 'An invalid idle source must fall back to focus alone');
+    }
   } finally { notch.dispose(); }
 });
 
@@ -269,12 +316,30 @@ test('Lumi failure handoff rechecks consent, calls, mute state and an already pr
     } finally { notch.dispose(); }
   });
   await t.test('main window already presented', () => {
-    const { notch, peer, main, opens } = fixture();
+    const { notch, peer, watch, opens } = fixture();
     try {
       peer.state.status = 'dnd'; notch.sync(); notch.file(aliceFile); fail(notch);
-      main.visible = true; notch.sync();
-      peer.state.status = 'active'; main.visible = false; notch.prune();
+      watch(true); notch.sync();
+      peer.state.status = 'active'; watch(false); notch.prune();
       assert.deepEqual(opens, [], 'Hiding the presented main window brought it back');
+    } finally { notch.dispose(); }
+  });
+  await t.test('visible main window behind another window', () => {
+    const { notch, main, opens } = fixture();
+    try {
+      main.visible = true;
+      assert.equal(notch.file(aliceFile), true, 'Lumi ignored consent while the main window was not being watched');
+      fail(notch);
+      assert.deepEqual(opens, ['alice'], 'A visible but unwatched main window silently swallowed the pending request');
+    } finally { notch.dispose(); }
+  });
+  await t.test('focused main window left unattended', () => {
+    const { notch, watch, clock, opens } = fixture();
+    try {
+      watch(true); clock.idle = 600;
+      assert.equal(notch.file(aliceFile), true);
+      fail(notch);
+      assert.deepEqual(opens, ['alice'], 'An unattended focused window ended the handoff without showing the request');
     } finally { notch.dispose(); }
   });
   await t.test('incoming call outranks a file; an ended call is ignored', () => {
@@ -409,13 +474,13 @@ test('Lumi focus respects Windows/macOS, X11 and Wayland capabilities', async t 
         assert.equal(windowOf(notch).focusable, true);
         assert.equal(windowOf(notch).isFocused(), true);
         assert.equal(windowOf(notch).ignored, false, 'Manual expansion must allow pointer input');
-        context.main.visible = true; notch.sync();
+        context.watch(true); notch.sync();
         assert.equal(windowOf(notch).visible, false);
         assert.equal(windowOf(notch).focusable, platform === 'linux');
         assert.equal(windowOf(notch).isFocused(), false);
         context.main.fullScreen = true;
         assert.equal(notch.message({}, 'alice', 'Alice', 'Visible fullscreen chat'), false);
-        context.main.visible = false;
+        context.watch(false);
         assert.equal(notch.message({}, 'alice', 'Alice', 'Hidden fullscreen chat'), true, 'A hidden fullscreen flag must not suppress background notifications');
         context.main.visible = true; context.main.minimized = true;
         assert.equal(notch.message({}, 'alice', 'Alice', 'Minimized fullscreen chat'), true);
