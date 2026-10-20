@@ -17,6 +17,7 @@ Lumilan menghubungkan perangkat secara langsung melalui LAN atau Wi-Fi yang sama
 | **Pesan pribadi & Ruang berundangan** — berbicara langsung atau mengumpulkan tim. | **Catatan pribadi** — simpan pesan dan lampiran hanya di perangkat Anda. |
 | **Berbagi file & paste gambar** — kirim setiap file hingga 5 GB ke klien yang kompatibel; tempel gambar yang disalin, periksa, lalu tekan Kirim. | **Pengingat** — jadwalkan tugas sendiri atau minta kontak aktif memilih dan menerima jadwal. |
 | **Panggilan suara** — audio satu lawan satu melalui jaringan lokal. | **Lumi** — pemberitahuan ringkas setiap kali Anda tidak sedang melihat Lumilan, dengan fallback notifikasi sistem saat diperlukan. |
+| **Pratinjau tautan** — kartu statis untuk tautan YouTube, Shorts, dan Instagram (Instagram jika tersedia tanpa login); Facebook, Threads, dan X mendapat kartu tautan. | **Pengambilan opt-in** — hanya perangkat Anda yang menghubungi YouTube atau Instagram, dan hanya setelah Anda mengaktifkannya. |
 
 <details>
 <summary><strong>Lihat tema gelap dan pengaturan</strong></summary>
@@ -60,6 +61,8 @@ Pada pembukaan pertama, paket terpasang yang mendukung fitur ini mengaktifkan bu
 Koneksi memakai **libp2p Noise** untuk mengenkripsi lalu lintas dan mengautentikasi identitas perangkat. Nama profil dipilih sendiri dan tidak memverifikasi identitas orang. Riwayat, file, dan pengaturan lokal **belum terenkripsi**; gunakan jaringan tepercaya dan enkripsi disk sesuai kebutuhan.
 
 Penemuan perangkat bergantung pada mDNS lokal, dan lalu lintas langsung harus diizinkan firewall serta aturan Wi-Fi/VLAN. Lumilan tidak memakai relay internet untuk melewati isolasi jaringan. Panggilan suara memerlukan izin mikrofon dan lalu lintas UDP lokal langsung.
+
+Pratinjau tautan bersifat opsional. Setelah diaktifkan, hanya perangkat pengirim yang menghubungi YouTube atau Instagram melalui HTTPS untuk mengambil judul dan thumbnail; penerima menerima kartu melalui LAN dan tidak pernah terhubung ke internet. Tautan Facebook, Threads, dan X mendapat kartu yang dibuat di perangkat Anda tanpa koneksi apa pun.
 
 ## Bantu Lumilan berkembang
 

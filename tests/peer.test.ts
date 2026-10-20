@@ -17,6 +17,7 @@ import { multiaddr } from '@multiformats/multiaddr';
 import { LanDiscovery, lanInterfaces } from '../src/main/discovery.js';
 import { LumilanPeer } from '../src/main/peer.js';
 import { stageClipboardImage } from '../src/main/clipboard-image.js';
+import { SENDER_PIXELS, prepareThumbnail, wirePreview } from '../src/main/link-preview.js';
 import sharp from 'sharp';
 
 async function until(predicate: () => unknown, timeout = 5000) {
@@ -1103,7 +1104,7 @@ test('mention Ruang ditargetkan dan mute percakapan tidak menghapus pesan', asyn
     assert.equal(c.listMessages(`room:${id}`).at(-1)!.mentions!.some(item => item.id === c.id), false);
     await assert.rejects(a.sendRoomMessage(text, id, null, [{ ...mention, id: a.id }]), /Mention Ruang tidak valid/);
     await assert.rejects(a.sendRoomMessage(text, id, null, [{ ...mention, end: 999 }]), /Mention Ruang tidak valid/);
-    await assert.rejects(a.sendTo(b.id, { type: 'room-message', message: { ...sent.message, id: randomUUID(), mentions: [{ ...mention, id: a.id }] } }), /Mention Ruang tidak valid/);
+    await assert.rejects(a.sendTo(b.id, { type: 'room-message', message: { ...sent.message, preview: undefined, id: randomUUID(), mentions: [{ ...mention, id: a.id }] } }), /Mention Ruang tidak valid/);
 
     b.setThreadMuted(a.id, true);
     b.setThreadMuted(`room:${id}`, true);
@@ -1154,4 +1155,98 @@ test('persisted JSON is narrowed without losing legacy history or admitting malf
   assert.deepEqual(restored.pendingFileDeletes, []);
   assert.throws(() => readPeerState({...json, messages: [{kind: 'file', name: 4}]}, peer.state), /tidak valid/);
   assert.throws(() => readPeerState({...json, trusted: [{id: 'id', name: 'name', addresses: [4]}]}, peer.state), /tidak valid/);
+});
+
+test('link previews travel with messages; receivers re-decode thumbnails beside history and delete them with it', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-link-preview-'));
+  const [a, b, c] = ['a', 'b', 'c'].map(name => new LumilanPeer({ dataDir: join(root, name), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' })) as [LumilanPeer, LumilanPeer, LumilanPeer];
+  t.after(async () => {
+    await Promise.allSettled([a.stop(), b.stop(), c.stop()]);
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+  for (const [index, peer] of [a, b, c].entries()) { await peer.start(); peer.rename(['Andi', 'Budi', 'Citra'][index]); }
+  await a.connectAddress(b.addresses[0]);
+  await a.connectAddress(c.addresses[0]);
+  const url = 'https://youtu.be/dQw4w9WgXcQ';
+  const thumbnail = await prepareThumbnail(await sharp({ create: { width: 640, height: 360, channels: 3, background: '#6391bc' } }).png().toBuffer(), SENDER_PIXELS);
+  const attachment = { preview: { url, platform: 'youtube' as const, title: 'Video', author: 'Kanal' }, thumbnail };
+  // The decoder is serial: once this finishes, every earlier thumbnail has been handled.
+  const settled = () => prepareThumbnail(thumbnail.bytes, SENDER_PIXELS);
+  const stored = (peer: LumilanPeer, id: string) => peer.state.messages.find(message => message.id === id);
+  const file = (peer: LumilanPeer, id: string) => join(peer.filesDir, `${id}.preview.webp`);
+
+  // The text card is stored and announced before its thumbnail is decoded.
+  const announced: unknown[] = [];
+  b.on('incoming', message => announced.push(structuredClone(message.preview)));
+  const sent = await a.sendMessage(`Tonton ${url} ya`, b.id, null, attachment);
+  assert.deepEqual(announced[0], attachment.preview);
+  const plain = await a.sendMessage('Pesan berikutnya', b.id);
+  assert.deepEqual(stored(a, sent.message.id)!.preview, { ...attachment.preview, thumbnail: { width: 512, height: 288 } });
+  assert(existsSync(file(a, sent.message.id)), 'The sender did not keep its own thumbnail');
+  assert.deepEqual(b.state.messages.map(message => message.id), [sent.message.id, plain.message.id], 'Thumbnail decoding reordered messages');
+  await until(() => stored(b, sent.message.id)!.preview!.thumbnail);
+  assert.deepEqual(stored(b, sent.message.id)!.preview, { ...attachment.preview, thumbnail: { width: 512, height: 288 } });
+  const received = readFileSync(file(b, sent.message.id));
+  assert(received.length <= 96 * 1024);
+  assert.equal((await sharp(received).metadata()).format, 'webp');
+  assert.match(await b.linkThumbnail(sent.message.id), /^data:image\/webp;base64,/);
+  assert.equal(b.linkTarget(sent.message.id), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+  assert.throws(() => b.linkTarget(plain.message.id), /tidak dapat dibuka/);
+  await assert.rejects(b.linkThumbnail(plain.message.id), /tidak tersedia/);
+  for (const peer of [a, b]) assert(!readFileSync(peer.path, 'utf8').includes('base64'), 'Thumbnail bytes entered state.json');
+
+  const edited = await a.sendMessage('Tautan lain https://youtu.be/AAAAAAAAAAA', b.id, null, attachment);
+  assert.equal(stored(a, edited.message.id)!.preview, undefined, 'A card for another link was attached');
+  assert.equal(stored(b, edited.message.id)!.preview, undefined);
+  const wire = (preview: unknown) => ({ type: 'message' as const, message: { id: randomUUID(), to: b.id, kind: 'text' as const, text: `Lihat ${url}`, preview: preview as never } });
+  for (const preview of [{ url: 'https://youtu.be/AAAAAAAAAAA', platform: 'youtube', title: 'Palsu' }, { url, platform: 'instagram', title: 'Palsu' }, { url: 'https://evil.example/', platform: 'youtube' }, 'not a preview']) {
+    const packet = wire(preview);
+    await a.sendTo(b.id, packet);
+    assert.equal(stored(b, packet.message.id)!.preview, undefined, JSON.stringify(preview));
+  }
+  const foreign = wire({ url, platform: 'youtube', title: 'Asli', path: 'C:/secret', html: '<img>' });
+  await a.sendTo(b.id, foreign);
+  assert.deepEqual(stored(b, foreign.message.id)!.preview, { url, platform: 'youtube', title: 'Asli' });
+  const gif = `data:image/webp;base64,${Buffer.from('GIF89a').toString('base64')}`;
+  const bad = [wire({ url, platform: 'youtube', thumbnail: gif }), wire({ url, platform: 'youtube', thumbnail: `data:image/webp;base64,${Buffer.alloc(97 * 1024).toString('base64')}` })];
+  for (const packet of bad) await a.sendTo(b.id, packet);
+  await settled();
+  for (const packet of bad) {
+    assert.equal(stored(b, packet.message.id)!.preview!.thumbnail, undefined);
+    assert(!existsSync(file(b, packet.message.id)), 'An invalid thumbnail was written');
+  }
+
+  b.thumbnailTimes.set(a.id, Array.from({ length: 30 }, () => Date.now()));
+  const limited = await a.sendMessage(`Lagi ${url}`, b.id, null, attachment);
+  await settled();
+  assert.deepEqual(stored(b, limited.message.id)!.preview, attachment.preview, 'Rate limiting dropped the text card');
+  assert(!existsSync(file(b, limited.message.id)), 'More than 30 thumbnails per minute were decoded');
+  b.thumbnailTimes.clear();
+
+  const { id: roomId } = await a.createRoom('Proyek', [b.id, c.id]);
+  await b.acceptRoom(roomId);
+  await c.acceptRoom(roomId);
+  await until(() => [a, b, c].every(peer => peer.room(roomId)?.members.length === 3));
+  const room = await a.sendRoomMessage(`Ruang ${url}`, roomId, null, [], attachment);
+  assert.equal(room.delivered, 2);
+  await until(() => stored(c, room.message.id)?.preview?.thumbnail && stored(b, room.message.id)?.preview?.thumbnail);
+  const note = a.saveNote(`Catatan ${url}`, null, attachment);
+  assert(existsSync(file(a, note.message.id)));
+
+  const announcement = { id: randomUUID(), to: null, kind: 'announcement' as const, text: `Info ${url}`, preview: wirePreview(attachment) };
+  await a.sendTo(b.id, { type: 'announcement', message: announcement });
+  assert.equal(stored(b, announcement.id)!.preview, undefined, 'An announcement kept a preview');
+
+  assert.equal(await b.deleteMessages(a.id, [sent.message.id]), 1);
+  assert(!existsSync(file(b, sent.message.id)), 'Deleting a message left its thumbnail');
+  const pending = await a.sendMessage(`Hapus cepat ${url}`, b.id, null, attachment);
+  await b.deleteMessages(a.id, [pending.message.id]);
+  await settled();
+  assert(!existsSync(file(b, pending.message.id)), 'A decode finished after deletion wrote a thumbnail');
+  await c.deleteArchivedHistory(a.id);
+  assert(existsSync(file(c, room.message.id)), 'Deleting another conversation removed a room thumbnail');
+  b.archiveThread(`room:${roomId}`);
+  await b.deleteArchivedHistory(`room:${roomId}`);
+  assert(!existsSync(file(b, room.message.id)), 'Permanent history deletion left a thumbnail');
+  assert.deepEqual(b.state.pendingFileDeletes, []);
 });

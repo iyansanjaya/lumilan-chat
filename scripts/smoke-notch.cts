@@ -571,6 +571,151 @@ async function main() {
     assert(receiving.kept, 'Receiving replaced thumbnails that were already shown');
     assert(receiving.shift < 0.05, `Receiving shifted the conversation layout by ${receiving.shift}`);
     console.log(`Receiving files: progress updated in place (${receiving.rebuilds} list renders for 24 MB), shown thumbnails kept, layout shift ${receiving.shift.toFixed(3)}`);
+    // Link previews: an in-process fetch fixture stands in for YouTube and Instagram, so the smoke never reaches the
+    // internet. The fixture also records every request to prove ask mode, local-only platforms and the receiver stay offline.
+    {
+      const { SENDER_PIXELS, prepareThumbnail } = await import('../src/main/link-preview.js');
+      const watch = (id: string) => `https://www.youtube.com/watch?v=${id}`;
+      const oembed = (id: string) => `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(watch(id))}`;
+      const reelPage = '<html><head><meta property="og:title" content="Smoke reel &amp; friends"><meta property="og:url" content="https://www.instagram.com/reel/C1a2b3c4d5/"><meta property="og:image" content="https://scontent.cdninstagram.com/smoke.png"></head></html>';
+      await nativeBrowser.evaluate(`(()=>{const png=Buffer.from('${clipboardPng.toString('base64')}','base64');
+        const json=value=>new Response(JSON.stringify(value),{status:200});
+        globalThis.smokeLinkCalls=[];globalThis.smokeLinkUnexpected=[];globalThis.smokeLinkHeld=false;
+        const routes={
+          ${JSON.stringify(oembed('dQw4w9WgXcQ'))}:()=>json({title:'Smoke video',author_name:'Smoke channel',thumbnail_url:'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg'}),
+          'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg':()=>new Response(png,{status:200}),
+          ${JSON.stringify(oembed('BBBBBBBBBBB'))}:async()=>{smokeLinkHeld=true;await new Promise(resolve=>globalThis.smokeReleaseLink=resolve);smokeLinkHeld=false;return json({title:'Held video'})},
+          'https://www.instagram.com/reel/C1a2b3c4d5/':()=>new Response(${JSON.stringify(reelPage)},{status:200}),
+          'https://scontent.cdninstagram.com/smoke.png':()=>new Response(png,{status:200}),
+          'https://www.instagram.com/p/Z9z9z9z9z9/':()=>new Response('<html><head><title>Login • Instagram</title></head></html>',{status:200}),
+        };
+        globalThis.smokeLinkFetch=async(url,init)=>{smokeLinkCalls.push(url);
+          if(init.redirect!=='error'||init.credentials!=='omit')smokeLinkUnexpected.push('init '+url);
+          const route=routes[url];if(!route){smokeLinkUnexpected.push(url);throw new Error('Unexpected smoke request')}return route()};
+        globalThis.smokeOpened=[];globalThis.smokeOpenExternal=smokeElectron.shell.openExternal;smokeElectron.shell.openExternal=async url=>{smokeOpened.push(url)};
+        return true})()`);
+      const calls = () => nativeBrowser.evaluate<string[]>('smokeLinkCalls.slice()');
+      const composerCard = () => mainPage.evaluate<{visible:boolean;consent:boolean;consentText:string;title:string;url:string;platform:string;thumbnail:number}>(`(()=>{const $=id=>document.getElementById(id),image=$('link-preview-thumbnail');
+        return {visible:!$('link-preview').hidden,consent:!$('link-consent').hidden,consentText:$('link-consent-text').textContent,title:$('link-preview-title').textContent,
+          url:$('link-preview-url').textContent,platform:$('link-preview-platform').textContent,thumbnail:!image.hidden&&image.complete?image.naturalWidth:0}})()`);
+      const pasteLink = (text: string) => mainPage.evaluate(`{const input=document.getElementById('message-input');input.value=${JSON.stringify(text)};input.focus();
+        input.setSelectionRange(input.value.length,input.value.length);input.dispatchEvent(new InputEvent('input',{inputType:'insertFromPaste',bubbles:true}))}`);
+      const sendComposer = () => mainPage.evaluate("document.getElementById('message-form').requestSubmit()");
+      try {
+        await mainPage.evaluate("window.lumilan.setLinkPreviews('ask')");
+        await mainPage.evaluate("{const input=document.getElementById('message-input');input.value='';input.focus()}");
+        await mainPage.send('Input.insertText', { text: 'Tonton https://youtube.com/shorts/dQw4w9WgXcQ ya' });
+        await until(async () => (await composerCard()).consent, 'typed Shorts link shows a consent card');
+        const asked = await composerCard();
+        assert(asked.visible && asked.consentText.includes('youtube.com') && asked.title === 'youtube.com' && asked.platform === 'YouTube', `Ask card was wrong: ${JSON.stringify(asked)}`);
+        assert.deepEqual(await calls(), [], 'Ask mode contacted a host before consent');
+        await mainPage.evaluate("document.getElementById('link-consent-accept').click()");
+        await until(async () => { const card = await composerCard(); return card.title === 'Smoke video' && card.thumbnail === 24 && !card.consent; }, 'Turn on fetched the Shorts card');
+        assert.deepEqual(await calls(), [oembed('dQw4w9WgXcQ'), 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg']);
+        assert.equal((await mainPage.evaluate<{linkPreviews:string}>('window.lumilan.notificationSettings()')).linkPreviews, 'on');
+        await sendComposer();
+        const shortsText = 'Tonton https://youtube.com/shorts/dQw4w9WgXcQ ya';
+        const delivered = await until(() => testPeer.state.messages.find(message => message.text === shortsText), 'Shorts card delivered');
+        assert.equal(delivered.preview?.title, 'Smoke video');
+        assert.equal(delivered.preview?.author, 'Smoke channel');
+        await until(() => testPeer.state.messages.find(message => message.id === delivered.id)?.preview?.thumbnail, 'receiver decoded the Shorts thumbnail');
+        assert(!readFileSync(join(profile, 'lumilan', 'state.json'), 'utf8').includes('base64'), 'Thumbnail bytes entered the sender state');
+        await until(() => mainPage.evaluate(`(c=>c&&c.querySelector('.link-title').textContent==='Smoke video'&&c.querySelector('.link-thumbnail')?.complete&&c.querySelector('.link-thumbnail').naturalWidth===24)(document.querySelector('#message-${delivered.id} .link-card'))`), 'sent card with thumbnail');
+        assert.equal((await composerCard()).visible, false, 'The sent card stayed in the composer');
+
+        await pasteLink('Reel https://www.instagram.com/reel/C1a2b3c4d5/?igsh=smoke');
+        await until(async () => (await composerCard()).title === 'Smoke reel & friends', 'Instagram Open Graph card');
+        await pasteLink('Masuk dulu https://www.instagram.com/p/Z9z9z9z9z9/');
+        await until(async () => { const card = await composerCard(); return card.url.endsWith('/p/Z9z9z9z9z9/') && card.title === 'instagram.com' && !card.thumbnail; }, 'Instagram login page falls back to a link card');
+        const fetched = (await calls()).length;
+        for (const [text, platform] of [['https://www.threads.net/@lumilan/post/C1a2b3c4d5', 'Threads'], ['https://x.com/lumilan/status/1', 'X'], ['https://www.facebook.com/watch?v=1', 'Facebook']] as const) {
+          await pasteLink(`Lihat ${text}`);
+          await until(async () => { const card = await composerCard(); return card.url === text && card.platform === platform; }, `${platform} local card`);
+        }
+        assert.equal((await calls()).length, fetched, 'A platform without a fetcher reached the network');
+        await sendComposer();
+        const facebook = await until(() => testPeer.state.messages.find(message => message.text === 'Lihat https://www.facebook.com/watch?v=1'), 'Facebook card delivered');
+        assert.deepEqual(facebook.preview, { url: 'https://www.facebook.com/watch?v=1', platform: 'facebook' });
+
+        const incomingThumbnail = await prepareThumbnail(await require('sharp')({ create: { width: 640, height: 360, channels: 3, background: '#4169e1' } }).png().toBuffer(), SENDER_PIXELS);
+        const full = await testPeer.sendMessage('Dari Alice https://youtu.be/dQw4w9WgXcQ', appState.me.id, null, { preview: { url: 'https://youtu.be/dQw4w9WgXcQ', platform: 'youtube', title: 'Incoming video', author: 'Alice' }, thumbnail: incomingThumbnail });
+        const textOnly = await testPeer.sendMessage('Reel https://www.instagram.com/reel/C1a2b3c4d5/', appState.me.id, null, { preview: { url: 'https://www.instagram.com/reel/C1a2b3c4d5/', platform: 'instagram', title: 'Reel tanpa gambar' } });
+        const basic = await testPeer.sendMessage('Post https://twitter.com/lumilan/status/7', appState.me.id, null, { preview: { url: 'https://twitter.com/lumilan/status/7', platform: 'x' } });
+        const cardText = (id: string) => mainPage.evaluate<string>(`document.querySelector('#message-${id} .link-card')?.textContent||''`);
+        await until(() => mainPage.evaluate(`(i=>i?.complete&&i.naturalWidth===512)(document.querySelector('#message-${full.message.id} .link-thumbnail'))`), 'received card thumbnail');
+        assert.match(await cardText(full.message.id), /YouTube.*Incoming video.*Alice/);
+        assert.match(await cardText(textOnly.message.id), /Instagram.*Reel tanpa gambar/);
+        assert.equal(await mainPage.evaluate(`!document.querySelector('#message-${textOnly.message.id} .link-thumbnail')`), true);
+        assert.match(await cardText(basic.message.id), /X.*twitter\.com.*https:\/\/twitter\.com\/lumilan\/status\/7/);
+        await mainPage.evaluate(`document.querySelector('#message-${basic.message.id} .link-open').click()`);
+        await until(async () => (await nativeBrowser.evaluate<string[]>('smokeOpened.slice()')).length === 1, 'Open in browser');
+        assert.deepEqual(await nativeBrowser.evaluate('smokeOpened.slice()'), ['https://x.com/lumilan/status/7'], 'Open in browser used something other than the stored canonical link');
+
+        const keptThumbnail = `document.querySelector('#message-${full.message.id} .link-thumbnail')`;
+        await mainPage.evaluate(`globalThis.smokeLinkThumbnail=${keptThumbnail};true`);
+        const fetchedBefore = (await calls()).length;
+        const later = await testPeer.sendMessage('Pesan setelah kartu', appState.me.id);
+        await until(() => mainPage.evaluate(`!!document.getElementById('message-${later.message.id}')`), 'later message rendered');
+        assert(await mainPage.evaluate(`smokeLinkThumbnail.isConnected&&smokeLinkThumbnail===${keptThumbnail}`), 'A rebuild replaced a shown link thumbnail');
+        assert(await mainPage.evaluate("(l=>l.scrollHeight-l.scrollTop-l.clientHeight<64)(document.getElementById('messages'))"), 'A new message left the conversation away from the bottom');
+        assert.equal((await calls()).length, fetchedBefore, 'Rendering received cards fetched from the network');
+        await mainPage.evaluate('delete globalThis.smokeLinkThumbnail');
+
+        await mainPage.evaluate("window.lumilan.setLinkPreviews('ask')");
+        for (const theme of ['light', 'dark']) {
+          await mainPage.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
+          for (const [width, height] of [[1100, 760], [320, 700]] as const) {
+            await mainViewport(width, height);
+            await pasteLink(`Tonton https://youtu.be/dQw4w9WgXcQ dan komentar panjang untuk jendela sempit`);
+            await until(async () => (await composerCard()).consent, `consent card ${theme} ${width}px`);
+            await mainPage.evaluate("document.getElementById('messages').scrollTop=document.getElementById('messages').scrollHeight");
+            const layout = await mainPage.evaluate<{fits:boolean;detail:unknown}>(`(()=>{const r=id=>document.getElementById(id).getBoundingClientRect(),box=r('link-preview'),remove=r('link-preview-remove'),title=r('link-preview-title');
+              const buttons=['link-consent-accept','link-consent-decline'].map(r),cards=[...document.querySelectorAll('#messages .link-card')].slice(-3).map(c=>[c.getBoundingClientRect(),c.querySelector('.link-open').getBoundingClientRect()]);
+              const inside=(a,b)=>a.left>=b.left-0.5&&a.right<=b.right+0.5;
+              const apart=(a,b)=>a.right<=b.left+0.5||b.right<=a.left+0.5||a.bottom<=b.top+0.5||b.bottom<=a.top+0.5;
+              const fits=box.left>=0&&box.right<=innerWidth&&inside(remove,box)&&title.right<=remove.left&&buttons.every(b=>inside(b,box)&&b.height>=30)&&apart(buttons[0],buttons[1])
+                &&cards.length===3&&cards.every(([card,open])=>card.left>=0&&card.right<=innerWidth&&inside(open,card));
+              return {fits,detail:{box,remove,title,buttons,cards,width:innerWidth}}})()`);
+            assert(layout.fits, `Link preview layout overlapped (${theme}, ${width}px): ${JSON.stringify(layout.detail)}`);
+            if (width === 320) {
+              const shot = await mainPage.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+              writeFileSync(join(dist, `ui-link-preview-${theme}.png`), Buffer.from(shot.data, 'base64'));
+            }
+          }
+          await mainViewport(1100, 760);
+          await mainPage.evaluate(`document.getElementById('message-${full.message.id}').scrollIntoView({block:'center'})`);
+          const thumbnail = await mainPage.evaluate<{width:number;height:number}>(`(r=>({width:r.width,height:r.height}))(document.querySelector('#message-${full.message.id} .link-thumbnail').getBoundingClientRect())`);
+          assert(thumbnail.width > 0 && Math.abs(thumbnail.height - Math.min(180, thumbnail.width * 288 / 512)) < 1.5, `Link thumbnail lost its aspect ratio (${theme}): ${JSON.stringify(thumbnail)}`);
+          const cardsShot = await mainPage.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+          writeFileSync(join(dist, `ui-link-preview-cards-${theme}.png`), Buffer.from(cardsShot.data, 'base64'));
+        }
+        await mainViewport(1100, 800);
+        await mainPage.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(originalUiTheme)}`);
+        const beforeDecline = (await calls()).length;
+        await mainPage.evaluate("document.getElementById('link-consent-decline').click()");
+        await until(async () => { const card = await composerCard(); return card.visible && !card.consent; }, 'No thanks keeps the link card');
+        assert.equal((await mainPage.evaluate<{linkPreviews:string}>('window.lumilan.notificationSettings()')).linkPreviews, 'off');
+        assert.equal((await calls()).length, beforeDecline, 'No thanks fetched the link');
+
+        await mainPage.evaluate("window.lumilan.setLinkPreviews('on')");
+        await pasteLink('Tahan https://youtu.be/BBBBBBBBBBB');
+        await until(() => nativeBrowser.evaluate('smokeLinkHeld'), 'link lookup held');
+        await mainPage.evaluate("document.getElementById('notes-button').click()");
+        await nativeBrowser.evaluate('smokeReleaseLink()');
+        await until(async () => !await nativeBrowser.evaluate('smokeLinkHeld'), 'held lookup finished');
+        await mainPage.evaluate('new Promise(r=>setTimeout(r,300))');
+        assert.equal((await composerCard()).visible, false, 'A card from another conversation appeared in notes');
+        await mainPage.evaluate(`document.querySelector('.person[data-peer="${testPeer.id}"]').click()`);
+        await until(async () => (await composerCard()).title === 'Held video', 'held card returned with its conversation');
+        await mainPage.evaluate("document.getElementById('link-preview-remove').click()");
+        assert.equal((await composerCard()).visible, false, 'Remove kept the card');
+        assert.deepEqual(await nativeBrowser.evaluate('smokeLinkUnexpected.slice()'), [], 'The app made an unexpected link request');
+        console.log('Link previews: ask/Turn on/No thanks, YouTube Shorts and Instagram cards, local Threads/X/Facebook cards, receiver offline decode, Open in browser, stable thumbnails, conversation binding and light/dark narrow layout passed');
+      } finally {
+        await nativeBrowser.evaluate('smokeElectron.shell.openExternal=smokeOpenExternal;delete globalThis.smokeOpenExternal;delete globalThis.smokeLinkFetch;globalThis.smokeReleaseLink?.();true');
+        await mainPage.evaluate("window.lumilan.setLinkPreviews('ask');document.getElementById('message-input').value='';document.getElementById('message-input').dispatchEvent(new Event('input'))");
+      }
+    }
     // Reading the open conversation also clears its queued Lumi activity (for example the received-file notices),
     // so the companion checks below start from the same queue on every desktop.
     await nativeBrowser.evaluate('smokeMain.focus()');

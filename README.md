@@ -17,6 +17,7 @@ Lumilan connects devices directly on the same LAN or Wi-Fi. No accounts, central
 | **Direct messages & invitation-only Rooms** — talk privately or bring a team together. | **Personal notes** — keep messages and attachments on your own device. |
 | **File sharing & image paste** — transfer each file up to 5 GB to compatible clients; paste a copied image, review it, and select Send. | **Reminders** — schedule your own tasks or ask an online contact to choose and accept a time. |
 | **Voice calls** — one-to-one audio over your local network. | **Lumi** — compact alerts whenever you are not looking at Lumilan, with system notification fallback where needed. |
+| **Link previews** — static cards for YouTube, Shorts, and Instagram links (Instagram when available without login); Facebook, Threads, and X get a link card. | **Opt-in fetching** — only your device contacts YouTube or Instagram, and only after you turn it on. |
 
 <details>
 <summary><strong>See dark mode and settings</strong></summary>
@@ -60,6 +61,8 @@ On first launch, supported installed builds enable opening at computer sign-in. 
 Connections use **libp2p Noise** to encrypt traffic and authenticate device identities. Profile names are self-chosen and do not verify a person's identity. Local history, files, and settings are **not encrypted**; use trusted networks and disk encryption where needed.
 
 Discovery depends on local mDNS, and direct traffic must be allowed by firewalls and Wi-Fi/VLAN rules. Lumilan has no internet relay to bypass network isolation. Voice calls need microphone access and direct local UDP traffic.
+
+Link previews are optional. After you turn them on, only the sending device contacts YouTube or Instagram over HTTPS to fetch a title and thumbnail; recipients receive the card over the LAN and never go online. Facebook, Threads, and X links get a card made on your device without any connection.
 
 ## Help Lumilan grow
 

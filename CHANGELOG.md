@@ -2,6 +2,31 @@
 
 [Bahasa Indonesia](CHANGELOG.id.md)
 
+## 1.3.0
+
+Changes from version 1.2.2.
+
+### Added
+
+- **Link previews for YouTube, Shorts, and Instagram.** A link in a message now shows a static card with the title, the channel or account, a small thumbnail, and an **Open in browser** button. The card appears in the composer before you send and in the conversation on both sides. There is no embedded player or third-party script.
+- **Link cards for Facebook, Threads, and X.** These links get a card made on your device from the address alone, without contacting the platform.
+- **Fetching is opt-in.** The first YouTube or Instagram link asks whether to fetch the title and image from that host: choose **Turn on** or **No thanks**, and change it later in **Settings → Link previews**. Only the sending device contacts YouTube or Instagram; recipients receive the card over the LAN and never go online. Instagram previews work only while Instagram serves post details without login, and otherwise fall back to a link card.
+
+### Changed
+
+- Links in messages can now be opened, through the card's **Open in browser** button only. The address is checked again before the default browser opens it.
+
+### Build and validation
+
+- Added tests for link detection and canonical addresses, lookalike hosts, refused redirects, size and time limits, Open Graph parsing, thumbnail re-encoding, validation of received cards (a card must describe the first link in the message), cards bound to their conversation, and the composer flow. A three-device loopback test checks that receivers decode thumbnails again, limit them per sender, and delete them with their messages.
+- The packaged smoke test now covers Ask first, Turn on and No thanks, Shorts and Instagram cards from an in-process fixture without internet access, local Threads, X and Facebook cards, received cards, Open in browser, thumbnails kept in place while new messages arrive, and light/dark narrow layouts.
+
+### Platform notes
+
+- **Open in browser** uses the default browser on Windows, macOS, and Linux (`xdg-open`). Lookups use Chromium's network stack and follow the operating system's proxy settings.
+- Lumi uses the desktop overlay on Windows, macOS, and Linux X11. Linux Wayland uses system notifications.
+- Current packages are unsigned. Windows or macOS may display a publisher warning; macOS system notifications require a signed application. Download packages from the [official Releases page](https://github.com/iyansanjaya/lumilan-chat/releases).
+
 ## 1.2.2
 
 Changes from version 1.2.1.

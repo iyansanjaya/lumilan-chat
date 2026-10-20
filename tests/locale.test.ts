@@ -26,6 +26,11 @@ test('bahasa otomatis mengikuti wilayah, sedangkan pilihan manual tetap berlaku'
     if(language!=='en') assert.notEqual(translate(language,'Judul pengingat'),'Reminder title');
     assert.notEqual(translate(language,'Hanya kontak aktif yang mendukung Pengingat ditampilkan.'),'Hanya kontak aktif yang mendukung Pengingat ditampilkan.');
     for(const key of ['Pilih kontak aktif','Kirim beberapa file','Hingga 8 file sekaligus','Daftar: Enter melanjutkan · Enter pada item kosong mengakhiri','Gambar siap dikirim. Tekan Kirim.','Hapus gambar','Gambar clipboard harus berukuran 1 B–20 MB.']) assert.notEqual(translate(language,key),key);
+    for (const key of ['Pratinjau tautan', 'Aktifkan', 'Jangan', 'Buka di browser', 'Hapus pratinjau tautan', 'Ambil judul dan gambar', 'Tanya dulu', 'Nonaktif', 'Tautan tidak dapat dibuka.',
+      'Saat aktif, perangkat Anda mengambil judul dan gambar dari YouTube atau Instagram ketika Anda menempelkan tautannya. Penerima tidak terhubung ke internet.'])
+      assert.notEqual(translate(language, key), key, `${language}: ${key}`);
+    const consent = translate(language, 'Ambil judul dan gambar dari {host} untuk membuat pratinjau?', { host: 'youtube.com' });
+    assert(consent.includes('youtube.com') && !consent.includes('{host}'), `${language}: ${consent}`);
     assert.match(translate(language, 'File maks. 2 GB'), /2 GB/);
     assert.match(translate(language, 'File harus berukuran 1 B–2 GB.'), /2 GB/);
     assert.match(translate(language, 'Perbarui Lumilan Chat pada perangkat penerima untuk mengirim file di atas 100 MB.'), /100 MB/);

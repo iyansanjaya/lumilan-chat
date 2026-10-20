@@ -2,6 +2,31 @@
 
 [English](CHANGELOG.md)
 
+## 1.3.0
+
+Perubahan dari versi 1.2.2.
+
+### Fitur baru
+
+- **Pratinjau tautan untuk YouTube, Shorts, dan Instagram.** Tautan di pesan kini tampil sebagai kartu statis berisi judul, kanal atau akun, thumbnail kecil, dan tombol **Buka di browser**. Kartu muncul di komposer sebelum pesan dikirim dan di percakapan pada kedua sisi. Tidak ada pemutar tertanam atau skrip pihak ketiga.
+- **Kartu tautan untuk Facebook, Threads, dan X.** Tautan ini mendapat kartu yang dibuat di perangkat Anda dari alamatnya saja, tanpa menghubungi platform.
+- **Pengambilan bersifat opt-in.** Tautan YouTube atau Instagram pertama menanyakan apakah judul dan gambar boleh diambil dari host tersebut: pilih **Aktifkan** atau **Jangan**, lalu ubah kapan saja di **Pengaturan → Pratinjau tautan**. Hanya perangkat pengirim yang menghubungi YouTube atau Instagram; penerima menerima kartu melalui LAN dan tidak pernah terhubung ke internet. Pratinjau Instagram hanya bekerja selama Instagram menyediakan detail postingan tanpa login; jika tidak, kartu kembali menjadi kartu tautan.
+
+### Perubahan
+
+- Tautan di pesan kini dapat dibuka, hanya melalui tombol **Buka di browser** pada kartu. Alamat diperiksa ulang sebelum browser bawaan membukanya.
+
+### Build dan validasi
+
+- Menambahkan tes untuk deteksi tautan dan alamat kanonik, host tiruan, redirect yang ditolak, batas ukuran dan waktu, parsing Open Graph, encode ulang thumbnail, validasi kartu yang diterima (kartu harus menjelaskan tautan pertama di pesan), kartu yang terikat percakapan, dan alur komposer. Tes loopback tiga perangkat memastikan penerima men-decode ulang thumbnail, membatasinya per pengirim, dan menghapusnya bersama pesan.
+- Smoke test paket aplikasi kini mencakup Tanya dulu, Aktifkan dan Jangan, kartu Shorts dan Instagram dari fixture di dalam proses tanpa akses internet, kartu lokal Threads, X, dan Facebook, kartu yang diterima, Buka di browser, thumbnail yang tetap di tempat saat pesan baru masuk, serta tata letak terang/gelap pada jendela sempit.
+
+### Catatan platform
+
+- **Buka di browser** memakai browser bawaan di Windows, macOS, dan Linux (`xdg-open`). Pengambilan memakai network stack Chromium dan mengikuti pengaturan proxy sistem operasi.
+- Lumi memakai overlay desktop pada Windows, macOS, dan Linux X11. Linux Wayland memakai notifikasi sistem.
+- Paket saat ini belum ditandatangani. Windows atau macOS mungkin menampilkan peringatan penerbit; notifikasi sistem macOS memerlukan aplikasi bertanda tangan. Unduh paket dari [halaman Releases resmi](https://github.com/iyansanjaya/lumilan-chat/releases).
+
 ## 1.2.2
 
 Perubahan dari versi 1.2.1.
