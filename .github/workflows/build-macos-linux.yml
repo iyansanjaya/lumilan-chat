@@ -117,11 +117,9 @@ jobs:
           after="$(free_bytes)"
           echo "Workspace free after preparation: $after bytes; required: $required bytes"
           ((after >= required)) || { echo 'Full 5 GB verification still requires at least 16 GiB free.' >&2; exit 1; }
-      - name: Verify full 5 GB transfer three times
-        shell: bash
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do bun run test:large; done
+      # Deterministic loopback transfer of one 5 GB file; the unit suite above repeats the transfer paths three times.
+      - name: Verify full 5 GB transfer
+        run: bun run test:large
       - name: Install Linux build and native smoke dependencies
         if: matrix.platform == 'linux'
         run: |
