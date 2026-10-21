@@ -37,10 +37,14 @@ class Window extends EventEmitter {
     assert.notEqual(process.platform, 'darwin', 'Electron setShape is only available on Windows/Linux');
     this.shape = rects;
   }
+  // Electron on Windows also deactivates a visible window, handing the foreground to the window below it.
+  deactivations = 0;
   setFocusable(value: boolean) {
     assert.notEqual(process.platform, 'linux', 'Electron setFocusable is only available on Windows/macOS');
     this.focusable = value;
+    if (process.platform === 'win32' && this.visible) { this.deactivations++; if (this.focused) { this.focused = false; this.emit('blur'); } }
   }
+  isFocusable() { return this.focusable; }
   setIgnoreMouseEvents(value: boolean) { this.ignored = value; }
   setBounds(value: Rectangle) { this.bounds = value; } isVisible() { return this.visible; }
   showInactive() { this.visible = true; } hide() { this.visible = false; this.focused = false; this.emit('blur'); } destroy() { this.dead = true; }
@@ -553,6 +557,38 @@ test('Lumi focus respects Windows/macOS, X11 and Wayland capabilities', async t 
         Object.defineProperty(process, 'platform', platformDescriptor!);
         if (sessionType === undefined) delete process.env.XDG_SESSION_TYPE;
         else process.env.XDG_SESSION_TYPE = sessionType;
+      }
+    });
+  }
+});
+
+test('Closing Lumi keeps the focus another window holds on Windows/macOS', async t => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  for (const platform of ['win32', 'darwin'] as const) {
+    await t.test(platform, async () => {
+      let notch: LumiNotch<Window> | undefined;
+      try {
+        Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+        const context = fixture(); notch = context.notch;
+        const win = windowOf(notch);
+        // Previews and the idle pill never change focusability.
+        notch.message({}, 'alice', 'Alice', 'Test'); assert.equal(notch.mode, 'compact');
+        notch.collapse(); assert.equal(notch.mode, 'hidden');
+        assert.equal(win.deactivations, 0, 'A closing preview moved the foreground');
+        // Open from the expanded panel: the main window takes focus, the panel blurs and closes to the always-on pill.
+        await notch.action({ type: 'expand' }); assert.equal(win.isFocused(), true);
+        const before = win.deactivations;
+        win.focused = false; context.watch(true); win.emit('blur');
+        assert.equal(notch.mode, 'hidden');
+        assert.equal(win.deactivations, before, 'Closing the panel handed the foreground away from the main window');
+        assert.equal(win.focusable, false);
+        assert.equal(win.visible, true, 'The always-on pill stays over the watched main window');
+        // Closed from inside the panel: the island gives up its own focus.
+        await notch.action({ type: 'expand' }); await notch.action({ type: 'collapse' });
+        assert.equal(win.focusable, false); assert.equal(win.isFocused(), false);
+      } finally {
+        notch?.dispose();
+        Object.defineProperty(process, 'platform', platformDescriptor!);
       }
     });
   }

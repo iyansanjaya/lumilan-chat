@@ -848,11 +848,21 @@ async function main() {
     };
     const selected = () => companionPage.evaluate<NotchVisibleItem | undefined>('window.lumi.state().then(s=>s.selected)');
     const requireSelected = async () => { const item = await selected(); assert(item, 'Expected selected Lumi item'); return item; };
+    const shapedPanels: string[] = [];
     const tightPanel = async (label: string) => {
       // Expanded island height: menu bar inset + header + unclipped content.
       await until(() => companionPage.evaluate(`document.body.dataset.mode==='expanded'&&${settled}&&(()=>{const e=document.getElementById('island');return Math.abs(e.getBoundingClientRect().height-(parseFloat(getComputedStyle(e).paddingTop)+document.querySelector('header').getBoundingClientRect().height+document.getElementById('content').scrollHeight))<=2})()`), `${label} content height`);
       const box = await companionPage.evaluate<{height:number;gap:number;overflow:boolean;scroll:number}>(`(()=>{const i=${island},c=document.getElementById('content');return {height:i.height,gap:i.bottom-document.querySelector('footer').getBoundingClientRect().bottom,overflow:document.documentElement.scrollWidth>innerWidth,scroll:c.scrollHeight-c.clientHeight}})()`);
       assert(box.gap >= 6 && box.gap <= 13 && !box.overflow && box.scroll<=0, `${label} excess space or clipped footer: ${JSON.stringify(box)}`);
+      // X11 limits input to the island with a window shape; it must follow every panel and page height.
+      if (process.platform === 'linux') await until(async () => {
+        const [shape, isle] = await Promise.all([nativeBrowser.evaluate<Array<{x:number;y:number;width:number;height:number}> | undefined>('notchShapes.at(-1)'),
+          companionPage.evaluate<{x:number;width:number;height:number}>(`(()=>{const b=${island};return {x:b.x,width:b.width,height:b.height}})()`)]);
+        const [rect, band] = shape || [];
+        return Boolean(rect && band && shape?.length === 2 && rect.y === 0 && Math.abs(rect.height - Math.ceil(isle.height)) <= 1 && rect.x <= isle.x && rect.x + rect.width >= isle.x + isle.width &&
+          band.y === 0 && band.height === 10 && band.x <= isle.x - 10 && band.x + band.width >= isle.x + isle.width + 10);
+      }, `${label}: X11 window shape follows the island and its shoulders`);
+      if (process.platform === 'linux') shapedPanels.push(label);
     };
     await background();
     const companion = await until(async () => cdp.debugPages(await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(p=>p.url==='lumilan://app/notch.html'), 'lazy companion page');
@@ -884,15 +894,7 @@ async function main() {
     await companionPage.evaluate("window.lumi.action({type:'peek'})");
     await click('mascot');
     await tightPanel('Empty manual panel');
-    if (process.platform === 'linux') {
-      await until(async () => {
-        const [shape, box] = await Promise.all([nativeBrowser.evaluate<Array<{x:number;y:number;width:number;height:number}> | undefined>('notchShapes.at(-1)'),
-          companionPage.evaluate<{x:number;width:number;height:number}>(`(()=>{const b=${island};return {x:b.x,width:b.width,height:b.height}})()`)]);
-        const [rect, band] = shape || [];
-        return Boolean(rect && band && shape?.length === 2 && rect.y === 0 && Math.abs(rect.height - Math.ceil(box.height)) <= 1 && rect.x <= box.x && rect.x + rect.width >= box.x + box.width &&
-          band.y === 0 && band.height === 10 && band.x <= box.x - 10 && band.x + band.width >= box.x + box.width + 10);
-      }, 'X11 window shape follows the expanded island and its shoulders');
-    } else assert.equal(await nativeBrowser.evaluate('notchShapes.length'), 0, 'A window shape was applied outside Linux');
+    if (process.platform !== 'linux') assert.equal(await nativeBrowser.evaluate('notchShapes.length'), 0, 'A window shape was applied outside Linux');
     await islandShot('ui-notch-empty.png');
     for (const language of ['en', 'es', 'ja', 'id']) {
       await mainPage.evaluate(`window.lumilan.setLanguage(${JSON.stringify(language)})`);
@@ -1316,14 +1318,28 @@ async function main() {
     await companionPage.evaluate('window.lumi.action({type:"collapse"})');
     await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'&&!document.hidden&&getComputedStyle(document.getElementById('timer')).display==='flex'&&/\\d/.test(document.getElementById('timer').textContent)"), 'idle pill countdown');
     await islandShot('notch-focus-pill.png');
-    // Layout only: over a macOS camera notch the countdown must clear a 200 pt camera. Simulated in the renderer where
-    // the OS reports no notch menu bar; native notch placement still needs a notched Mac.
-    await companionPage.evaluate("document.body.dataset.notch='true';document.body.style.setProperty('--inset','37px')");
-    await until(() => companionPage.evaluate(settled), 'simulated notch pill settled');
-    const camera = await companionPage.evaluate<{clear:number;height:number}>("(()=>{const i=document.getElementById('island').getBoundingClientRect(),r=document.createRange();r.selectNodeContents(document.getElementById('timer'));const t=r.getBoundingClientRect();return {clear:t.left-(i.left+i.width/2+100),height:t.height}})()");
-    await companionPage.evaluate("document.body.dataset.notch='false';document.body.style.setProperty('--inset','0px')");
-    await until(() => companionPage.evaluate(settled), 'pill restored');
+    // Over a macOS camera notch the countdown must clear a 200 pt camera. Hosted Macs have no notch menu bar: on macOS the
+    // screen reports a 37 pt one, so main places the status panel at the screen edge over it; elsewhere only the renderer
+    // layout is simulated. A physical notch still needs a notched Mac.
+    const simulateNotch = (on: boolean) => process.platform === 'darwin'
+      ? nativeBrowser.evaluate(on
+        ? "(()=>{const s=smokeElectron.screen,o=globalThis.smokeScreen=[s.getPrimaryDisplay,s.getAllDisplays],notched=d=>({...d,workArea:{...d.workArea,y:d.bounds.y+37,height:d.bounds.height-37}});s.getPrimaryDisplay=()=>notched(o[0].call(s));s.getAllDisplays=()=>o[1].call(s).map(notched);s.emit('display-metrics-changed');return true})()"
+        : "(()=>{const s=smokeElectron.screen;[s.getPrimaryDisplay,s.getAllDisplays]=smokeScreen;delete globalThis.smokeScreen;s.emit('display-metrics-changed');return true})()")
+      : companionPage.evaluate(`document.body.dataset.notch='${on}';document.body.style.setProperty('--inset','${on ? 37 : 0}px')`);
+    await simulateNotch(true);
+    let camera: {clear:number;height:number};
+    try {
+      await until(() => companionPage.evaluate(`document.body.dataset.notch==='true'&&${settled}&&Math.round(${island}.width)===330&&Math.round(${island}.height)===37`), 'pill over a simulated camera notch');
+      if (process.platform === 'darwin') {
+        const placed = await nativeBrowser.evaluate<{y:number;top:number;focused:boolean}>("(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return {y:w.getBounds().y,top:smokeElectron.screen.getPrimaryDisplay().bounds.y,focused:w.isFocused()}})()");
+        assert(placed.y === placed.top && !placed.focused, `Lumi did not cover the simulated notch menu bar: ${JSON.stringify(placed)}`);
+        await islandShot('ui-notch-mac-pill.png');
+      }
+      camera = await companionPage.evaluate<{clear:number;height:number}>("(()=>{const i=document.getElementById('island').getBoundingClientRect(),r=document.createRange();r.selectNodeContents(document.getElementById('timer'));const t=r.getBoundingClientRect();return {clear:t.left-(i.left+i.width/2+100),height:t.height}})()");
+    } finally { await simulateNotch(false); }
+    await until(() => companionPage.evaluate(`document.body.dataset.notch==='false'&&${settled}&&Math.round(${island}.width)===120`), 'pill restored');
     assert(camera.clear >= 4 && camera.height > 0, `Focus countdown would sit under the camera notch: ${JSON.stringify(camera)}`);
+    if (process.platform === 'darwin') console.log('macOS: simulated 37 pt notch menu bar placed the 330 pt pill at the screen edge without focus; countdown clears the camera');
     await testPeer.sendMessage('Held during focus', appState.me.id);
     await until(() => mainPage.evaluate(`window.lumilan.state().then(s=>(s.unread[${JSON.stringify(testPeer.id)}]||0)>0)`), 'held message stored unread');
     await delay(500);
@@ -1430,7 +1446,7 @@ async function main() {
     await until(() => companionPage.evaluate(settled), 'shelf settled');
     await dragFiles('drop');
     await until(() => companionPage.evaluate("document.querySelectorAll('#shelf-list li').length===2&&/2.*0.*1/.test(document.getElementById('shelf-status').textContent)"), 'two files shelved, the empty one skipped');
-    assert.deepEqual(await companionPage.evaluate<string[]>("[...document.querySelectorAll('#shelf-list use')].map(u=>u.getAttribute('href'))"), ['#g-image', '#g-document']);
+    assert.deepEqual(await companionPage.evaluate<string[]>("[...document.querySelectorAll('#shelf-list li > svg use')].map(u=>u.getAttribute('href'))"), ['#g-image', '#g-document']);
     assert(!(await companionPage.evaluate<string>('window.lumi.state().then(s=>JSON.stringify(s))')).includes('shelf-files'), 'A shelf path reached the Lumi renderer');
     const savedShelf = JSON.parse(readFileSync(join(profile, 'lumilan', 'shelf.json'), 'utf8')) as Array<Record<string, unknown>>;
     assert(savedShelf.length === 2 && savedShelf.every(item => Object.keys(item).sort().join() === 'addedAt,id,name,path,size'), `Unexpected shelf.json: ${JSON.stringify(savedShelf)}`);
@@ -1480,6 +1496,7 @@ async function main() {
     await assert.rejects(companionPage.evaluate(`window.lumi.action({type:'shelf',action:'send',value:{id:${JSON.stringify(savedShelf[0]!.id)},to:'../x'}})`));
     await companionPage.evaluate('window.lumi.action({type:"collapse"})');
     console.log('Shelf: drop on Lumi with paths kept in main, open and native drag-out, consented send with notice, cancel while waiting, save to notes, remove keeps the file, refused actions passed');
+    if (process.platform === 'linux') console.log(`X11: window shape followed ${shapedPanels.length} panels and pages (${[...new Set(shapedPanels)].join(', ')})`);
 
     await background();
     const countBeforePower = await companionPage.evaluate<number>('window.lumi.state().then(s=>s.count)');
