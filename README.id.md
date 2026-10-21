@@ -16,8 +16,10 @@ Lumilan menghubungkan perangkat secara langsung melalui LAN atau Wi-Fi yang sama
 | --- | --- |
 | **Pesan pribadi & Ruang berundangan** — berbicara langsung atau mengumpulkan tim. | **Catatan pribadi** — simpan pesan dan lampiran hanya di perangkat Anda. |
 | **Berbagi file & paste gambar** — kirim setiap file hingga 5 GB ke klien yang kompatibel; tempel gambar yang disalin, periksa, lalu tekan Kirim. | **Pengingat** — jadwalkan tugas sendiri atau minta kontak aktif memilih dan menerima jadwal. |
-| **Panggilan suara** — audio satu lawan satu melalui jaringan lokal. | **Lumi** — pemberitahuan ringkas setiap kali Anda tidak sedang melihat Lumilan, dengan fallback notifikasi sistem saat diperlukan. |
+| **Panggilan suara** — audio satu lawan satu melalui jaringan lokal. | **Lumi** — pill bergaya Dynamic Island berisi jam yang terbuka menjadi beberapa halaman, serta pemberitahuan setiap kali Anda tidak sedang melihat Lumilan, dengan fallback notifikasi sistem saat diperlukan. |
 | **Pratinjau tautan** — kartu statis untuk tautan YouTube, Shorts, dan Instagram (Instagram jika tersedia tanpa login); Facebook, Threads, dan X mendapat kartu tautan. | **Pengambilan opt-in** — hanya perangkat Anda yang menghubungi YouTube atau Instagram, dan hanya setelah Anda mengaktifkannya. |
+| **Sesi fokus** — mulai 25, 45, atau 60 menit dari Lumi atau Pengaturan; kontak melihat Jangan ganggu, dan status sebelumnya kembali setelahnya. | **Satu ringkasan tenang** — pesan menunggu selama sesi; di akhir Anda melihat jumlah pesan yang masuk, tanpa nama, isi, atau menandainya dibaca. |
+| **Rutinitas minum & tugas** — catat minum, dapatkan pengingat pada jam aktif, dan centang tugas dari Lumi atau Pengaturan. | **Rak file** — jatuhkan file ke Lumi agar tetap dekat, seret keluar, kirim ke kontak, atau simpan ke Catatan pribadi. |
 
 <details>
 <summary><strong>Lihat tema gelap dan pengaturan</strong></summary>
@@ -44,7 +46,7 @@ Ambil paket terbaru dari [halaman Releases resmi](https://github.com/iyansanjaya
 | macOS 13+ Apple Silicon | DMG Apple Silicon / arm64 |
 | Linux 64-bit | `*.AppImage` |
 
-Fitur khusus platform bergantung pada paket terpasang dan desktop environment. Lumi diimplementasikan untuk Windows, macOS Intel/Apple Silicon, dan Linux X11; Linux Wayland memakai notifikasi sistem. Build yang sukses saja belum membuktikan kompatibilitas native seluruh fitur.
+Fitur khusus platform bergantung pada paket terpasang dan desktop environment. Lumi diimplementasikan untuk Windows, macOS Intel/Apple Silicon, dan Linux X11; pada Mac dengan notch kamera, Lumi menutupi notch di atas menu bar, dan Linux Wayland memakai notifikasi sistem. Build yang sukses saja belum membuktikan kompatibilitas native seluruh fitur.
 
 ## Mulai dalam tiga langkah
 
@@ -62,7 +64,7 @@ Koneksi memakai **libp2p Noise** untuk mengenkripsi lalu lintas dan mengautentik
 
 Penemuan perangkat bergantung pada mDNS lokal, dan lalu lintas langsung harus diizinkan firewall serta aturan Wi-Fi/VLAN. Lumilan tidak memakai relay internet untuk melewati isolasi jaringan. Panggilan suara memerlukan izin mikrofon dan lalu lintas UDP lokal langsung.
 
-Pratinjau tautan bersifat opsional. Setelah diaktifkan, hanya perangkat pengirim yang menghubungi YouTube atau Instagram melalui HTTPS untuk mengambil judul dan thumbnail; penerima menerima kartu melalui LAN dan tidak pernah terhubung ke internet. Tautan Facebook, Threads, dan X mendapat kartu yang dibuat di perangkat Anda tanpa koneksi apa pun.
+Sesi fokus nonaktif sampai Anda memilih durasi di **Pengaturan → Fokus**; selama sesi berjalan, kontak yang terhubung melihat status Anda sebagai Jangan ganggu. Catatan minum, tugas, dan rak tetap di perangkat Anda; rak hanya menyimpan lokasi setiap file dan tidak pernah menghapus file. Pill Lumi tetap di tepi atas layar saat Anda memakai aplikasi; **Pengaturan → Notifikasi** dapat menampilkannya hanya saat Anda tidak melihat jendela. Menjatuhkan file ke Lumi sudah diuji di Windows; di macOS dan Linux gunakan panel yang terbuka atau **Pengaturan → Rak**. Pratinjau tautan bersifat opsional. Setelah diaktifkan, hanya perangkat pengirim yang menghubungi YouTube atau Instagram melalui HTTPS untuk mengambil judul dan thumbnail; penerima menerima kartu melalui LAN dan tidak pernah terhubung ke internet. Tautan Facebook, Threads, dan X mendapat kartu yang dibuat di perangkat Anda tanpa koneksi apa pun.
 
 ## Bantu Lumilan berkembang
 

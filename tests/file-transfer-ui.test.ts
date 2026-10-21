@@ -250,6 +250,7 @@ test('main consumes each file decision once across the window, Lumi and timeout'
     peer: { state: { status: 'online', mutedThreads: [] } }, Notification: { isSupported: () => false }, tr: (text: string) => text, reveal: () => {},
     window: { isDestroyed: () => false, isVisible: () => true, showInactive: () => {}, webContents: { send: (...args: unknown[]) => sent.push(args) } },
     notch: { file: () => true, remove: (key: string) => notch.push(['remove', key]), transfer: (value: unknown) => notch.push(['transfer', value]) },
+    notifier: { fileOffer: () => null },
     setTimeout: (callback: () => void) => { timers.push(callback); return { unref: () => {} }; }, clearTimeout: () => {},
   });
   vm.runInContext(`${decide}\nconst acceptFile = ${main.slice(acceptStart, acceptEnd + 1)};`, context);

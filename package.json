@@ -34,6 +34,12 @@
     "files": [
       "out/src/main/main.js",
       "out/src/main/notch.js",
+      "out/src/main/notifications.js",
+      "out/src/main/focus.js",
+      "out/src/main/settings.js",
+      "out/src/main/routines.js",
+      "out/src/main/tasks.js",
+      "out/src/main/shelf.js",
       "out/src/main/attention.js",
       "out/src/main/linux-screen-lock.js",
       "out/src/main/startup-default.js",

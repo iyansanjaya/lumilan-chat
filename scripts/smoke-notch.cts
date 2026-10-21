@@ -6,7 +6,7 @@ import type { NotchSnapshot, NotchVisibleItem } from '../src/shared/notch.js';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const { spawn, execFile }: typeof import('node:child_process') = require('node:child_process');
 const { promisify }: typeof import('node:util') = require('node:util');
-const { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync }: typeof import('node:fs') = require('node:fs');
+const { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync }: typeof import('node:fs') = require('node:fs');
 const { createServer }: typeof import('node:net') = require('node:net');
 const { tmpdir }: typeof import('node:os') = require('node:os');
 const { join, resolve, dirname, basename }: typeof import('node:path') = require('node:path');
@@ -199,10 +199,10 @@ async function main() {
       })()`);
       await nativeBrowser.evaluate("(async()=>{if(savedClipboard.length)await smokeElectron.clipboard.write(savedClipboard);else smokeElectron.clipboard.clear();delete globalThis.savedClipboard})()");
     }
-    await mainPage.evaluate("window.lumilan.setNotificationSettings({enabled:true,preview:true,silent:true,background:true,notch:true})");
-    // The renderer may warm up once the main window is not watched (for example shown without focus at startup), but
-    // Lumi must not cover a visible main window before anything arrives.
-    assert.equal(await nativeBrowser.evaluate("smokeElectron.BrowserWindow.getAllWindows().some(w=>w.webContents.getURL()==='lumilan://app/notch.html'&&w.isVisible())"), false, 'Lumi appeared over the visible main window before any arrival');
+    await mainPage.evaluate("window.lumilan.setNotificationSettings({enabled:true,preview:true,silent:true,background:true,notch:true,notchIdle:'always'})");
+    // Lumi's idle pill stays at the top edge over the watched main window without taking focus. Wayland has no overlay.
+    if (!(process.platform === 'linux' && process.env.XDG_SESSION_TYPE === 'wayland'))
+      await until(() => nativeBrowser.evaluate("smokeMain.isFocused()&&smokeElectron.BrowserWindow.getAllWindows().some(w=>w.webContents.getURL()==='lumilan://app/notch.html'&&w.isVisible()&&!w.isFocused())"), 'idle pill over the watched main window');
     const appState = await mainPage.evaluate<Snapshot>('window.lumilan.state()');
     const { LumilanPeer } = await import('../src/main/peer.js');
     const testPeer = new LumilanPeer({ dataDir: join(profile, 'test-peer'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
@@ -801,6 +801,22 @@ async function main() {
       await nativeBrowser.evaluate('smokeMain.close()');
       await until(() => nativeBrowser.evaluate('!smokeMain.isVisible() && !smokeMain.isFocused()'), 'window hidden to tray and native focus released');
     };
+    // The island morphs in CSS inside one fixed native window. Measure and click only after its transitions settle;
+    // the finite mascot keyframes need not finish first.
+    const settled = "!document.getAnimations().some(a=>a instanceof CSSTransition&&a.playState==='running')";
+    const island = "document.getElementById('island').getBoundingClientRect()";
+    const fixedWindow = async (label: string) => {
+      const native = await nativeBrowser.evaluate<{bounds:{width:number;height:number};area:{width:number;height:number}}>("(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return {bounds:w.getBounds(),area:smokeElectron.screen.getDisplayMatching(w.getBounds()).workArea}})()");
+      assert(Math.abs(native.bounds.width - Math.min(420, native.area.width)) <= 1 && Math.abs(native.bounds.height - Math.min(400, native.area.height)) <= 1,
+        `${label} resized the native window instead of morphing the island: ${JSON.stringify(native)}`);
+    };
+    // The rest of the fixed window is transparent; keep review screenshots to the island itself.
+    const islandShot = async (name: string) => {
+      await until(() => companionPage.evaluate(settled), `${name} morph settled`);
+      const clip = await companionPage.evaluate<{x:number;y:number;width:number;height:number}>(`(()=>{const b=${island},s=parseFloat(getComputedStyle(document.body,'::before').width)||0;return {x:Math.max(0,b.x-s),y:b.y,width:Math.max(1,b.width+2*s),height:Math.max(1,b.height)}})()`);
+      const shot = await companionPage.send('Page.captureScreenshot', { format: 'png', clip: { ...clip, scale: 1 } });
+      writeFileSync(join(dist, name), Buffer.from(shot.data, 'base64'));
+    };
     let hoverStep = 0;
     const hoverNotchHeader = async () => {
       const point = await companionPage.evaluate<{x:number;y:number} | false>(`(()=>{const b=document.querySelector('header').getBoundingClientRect();return !document.hidden&&document.body.dataset.mode!=='hidden'&&b.width>0&&b.height>0&&{x:b.left+12+${hoverStep++ % 2},y:b.top+12}})()`);
@@ -809,7 +825,7 @@ async function main() {
     };
     const click = async (id: string) => {
       const modes = id === 'mascot' ? ['compact', 'expanded'] : ['expanded'];
-      await until(() => companionPage.evaluate(`(()=>{const e=document.getElementById(${JSON.stringify(id)});const b=e.getBoundingClientRect();return !document.hidden&&${JSON.stringify(modes)}.includes(document.body.dataset.mode)&&b.width>0&&b.height>0&&!e.disabled})()`), `visible ${id}`)
+      await until(() => companionPage.evaluate(`(()=>{const e=document.getElementById(${JSON.stringify(id)});const b=e.getBoundingClientRect();return !document.hidden&&${JSON.stringify(modes)}.includes(document.body.dataset.mode)&&${settled}&&b.width>0&&b.height>0&&!e.disabled})()`), `visible ${id}`)
         .catch(async (error: unknown) => {
           // Name the failed condition: a renderer marked hidden by native occlusion differs from a layout or mode race.
           const state = await companionPage.evaluate(`(()=>{const e=document.getElementById(${JSON.stringify(id)}),b=e.getBoundingClientRect();return {visibility:document.visibilityState,focused:document.hasFocus(),mode:document.body.dataset.mode,rect:[b.x,b.y,b.width,b.height],disabled:e.disabled,viewport:[innerWidth,innerHeight]}})()`).catch(() => 'unavailable');
@@ -817,14 +833,13 @@ async function main() {
           throw new Error(`${error instanceof Error ? error.message : String(error)}: ${JSON.stringify({ renderer: state, native })}`);
         });
       // Actual trusted pointer motion renews the production activity timer while
-      // native resize and renderer layout converge; auto-hide cannot satisfy this wait.
+      // the island morph settles; auto-hide cannot satisfy this wait.
       await hoverNotchHeader();
-      // Native resize and renderer layout arrive separately; fractional Windows DPI can round DIP bounds by 1 px.
       const point = await until(async () => {
         await hoverNotchHeader();
         const native = await nativeBrowser.evaluate<{visible:boolean;bounds:{x:number;y:number;width:number;height:number}}>("(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return {visible:w.isVisible(),bounds:w.getBounds()}})()");
         assert(native.visible, `Notch auto-hid before native ${id} click`);
-        return companionPage.evaluate<{x:number;y:number} | false>(`(()=>{const e=document.getElementById(${JSON.stringify(id)}),b=e.getBoundingClientRect(),p={x:b.x+b.width/2,y:b.y+b.height/2};return !document.hidden&&${JSON.stringify(modes)}.includes(document.body.dataset.mode)&&!e.disabled&&b.width>0&&b.height>0&&Math.abs(innerHeight-${native.bounds.height})<=2&&Math.abs(innerWidth-${native.bounds.width})<=2&&e.contains(document.elementFromPoint(p.x,p.y))&&p})()`);
+        return companionPage.evaluate<{x:number;y:number} | false>(`(()=>{const e=document.getElementById(${JSON.stringify(id)}),b=e.getBoundingClientRect(),p={x:b.x+b.width/2,y:b.y+b.height/2};return !document.hidden&&${JSON.stringify(modes)}.includes(document.body.dataset.mode)&&!e.disabled&&b.width>0&&b.height>0&&${settled}&&e.contains(document.elementFromPoint(p.x,p.y))&&p})()`);
       }, `notch layout and hit target for ${id}`);
       await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
       assert(await companionPage.evaluate(`(()=>{const e=document.getElementById(${JSON.stringify(id)});return !document.hidden&&${JSON.stringify(modes)}.includes(document.body.dataset.mode)&&!e.disabled&&e.contains(document.elementFromPoint(${point.x},${point.y}))})()`), `Native ${id} click lost its visible hit target`);
@@ -834,8 +849,9 @@ async function main() {
     const selected = () => companionPage.evaluate<NotchVisibleItem | undefined>('window.lumi.state().then(s=>s.selected)');
     const requireSelected = async () => { const item = await selected(); assert(item, 'Expected selected Lumi item'); return item; };
     const tightPanel = async (label: string) => {
-      await until(() => companionPage.evaluate("document.body.dataset.mode==='expanded' && Math.abs(innerHeight-(document.querySelector('header').getBoundingClientRect().height+document.getElementById('content').scrollHeight+3))<=2"), `${label} content height`);
-      const box = await companionPage.evaluate<{height:number;gap:number;overflow:boolean;scroll:number}>("({height:innerHeight,gap:innerHeight-document.querySelector('footer').getBoundingClientRect().bottom,overflow:document.documentElement.scrollWidth>innerWidth,scroll:document.getElementById('content').scrollHeight-document.getElementById('content').clientHeight})");
+      // Expanded island height: menu bar inset + header + unclipped content.
+      await until(() => companionPage.evaluate(`document.body.dataset.mode==='expanded'&&${settled}&&(()=>{const e=document.getElementById('island');return Math.abs(e.getBoundingClientRect().height-(parseFloat(getComputedStyle(e).paddingTop)+document.querySelector('header').getBoundingClientRect().height+document.getElementById('content').scrollHeight))<=2})()`), `${label} content height`);
+      const box = await companionPage.evaluate<{height:number;gap:number;overflow:boolean;scroll:number}>(`(()=>{const i=${island},c=document.getElementById('content');return {height:i.height,gap:i.bottom-document.querySelector('footer').getBoundingClientRect().bottom,overflow:document.documentElement.scrollWidth>innerWidth,scroll:c.scrollHeight-c.clientHeight}})()`);
       assert(box.gap >= 6 && box.gap <= 13 && !box.overflow && box.scroll<=0, `${label} excess space or clipped footer: ${JSON.stringify(box)}`);
     };
     await background();
@@ -845,24 +861,48 @@ async function main() {
     await until(() => companionPage.evaluate("!!window.lumi && document.readyState==='complete'"), 'companion ready');
     // Keep this isolated test overlay away from the user's centered companion and normal pointer activity.
     await companionPage.evaluate("window.lumi.action({type:'move',delta:-400})");
+    // Record the window shape reported by the island. Only Linux X11 applies one; elsewhere it must stay unset.
+    await nativeBrowser.evaluate("(()=>{const proto=smokeElectron.BrowserWindow.prototype,original=proto.setShape;globalThis.notchShapes=[];proto.setShape=function(rects){if(this.webContents.getURL()==='lumilan://app/notch.html')notchShapes.push(rects);return original.call(this,rects)};return true})()");
     await companionPage.evaluate("globalThis.smokeInputs=[]; for(const type of ['pointermove','pointerdown','click','keydown']) document.addEventListener(type,e=>{smokeInputs.push([Date.now(),type,e.target.id,e.clientX,e.clientY,e.isTrusted]); if(smokeInputs.length>30)smokeInputs.shift()})");
     await nativeBrowser.evaluate("globalThis.notchTrace=[]; const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html'); ['focus','blur','resize','show','hide'].forEach(e=>w.on(e,()=>notchTrace.push([e,Date.now(),w.getBounds(),w.isFocused()])))");
+    // Lumi's eyes blink once when the pill returns. Real pointer motion on this desktop must not decide the check, and
+    // the OS animation preference is pinned to "no preference" only for it.
+    await companionPage.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
+    await companionPage.evaluate("globalThis.smokeBlink=false;document.getElementById('pill-eyes').addEventListener('animationstart',e=>{if(e.animationName==='blink')smokeBlink=true});true");
     await companionPage.evaluate("window.lumi.action({type:'peek'})");
     await until(() => companionPage.evaluate("document.body.dataset.mode==='compact'"), 'manual empty peek');
-    // Windows can clamp a transparent native window to 38 DIP; its visible wake strip must still be only 5 DIP.
+    // Idle: a black 120x30 pill attached to the top edge, or the notch-sized pill under a macOS menu bar inset,
+    // flanked by two concave black shoulders.
     // Exact 4/7-second deadlines are tested with mock timers. Allow real pointer activity to renew them on an active desktop.
-    await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden' && document.getElementById('island').getBoundingClientRect().height===5"), 'manual peek auto hides', 20000);
+    await until(() => companionPage.evaluate(`document.body.dataset.mode==='hidden'&&${settled}&&(()=>{const e=document.getElementById('island'),b=e.getBoundingClientRect(),inset=parseFloat(getComputedStyle(e).paddingTop);return Math.round(b.width)===(inset?330:120)&&Math.round(b.height)===Math.max(30,inset)&&getComputedStyle(e).backgroundColor==='rgb(0, 0, 0)'&&['::before','::after'].every(p=>{const c=getComputedStyle(document.body,p);return c.width==='10px'&&c.height==='10px'&&c.backgroundImage.startsWith('radial-gradient')})})()`), 'manual peek auto hides to the idle pill', 20000);
+    await until(() => companionPage.evaluate('globalThis.smokeBlink'), 'pill blink when the pill returns', 2000);
+    await companionPage.send('Emulation.setEmulatedMedia', { features: [] });
+    await fixedWindow('Idle pill');
+    const pill = await companionPage.evaluate<{clock:string;badge:boolean;eyes:number;display:string}>("({clock:document.getElementById('pill-clock').textContent,badge:document.getElementById('pill-badge').hidden,eyes:document.querySelectorAll('#pill-eyes ellipse').length,display:getComputedStyle(document.getElementById('pill')).display})");
+    const expectedClock = await companionPage.evaluate<string[]>("(()=>{const l={id:'id-ID',en:'en-US',ms:'ms-MY',es:'es-ES',ja:'ja-JP',ko:'ko-KR','zh-Hans':'zh-CN','zh-Hant':'zh-TW'}[document.documentElement.lang]||'id-ID',f=new Intl.DateTimeFormat(l,{hour:'2-digit',minute:'2-digit',hourCycle:'h23'}),n=Date.now();return [f.format(n),f.format(n-60000),f.format(n+60000)]})()");
+    assert(pill.display === 'flex' && pill.eyes === 2 && /^\d\d[.:]\d\d$/.test(pill.clock) && expectedClock.includes(pill.clock), `Idle pill content: ${JSON.stringify({ pill, expectedClock })}`);
     await companionPage.evaluate("window.lumi.action({type:'peek'})");
     await click('mascot');
     await tightPanel('Empty manual panel');
-    const emptyShot = await companionPage.send('Page.captureScreenshot', { format: 'png' });
-    writeFileSync(join(dist, 'ui-notch-empty.png'), Buffer.from(emptyShot.data, 'base64'));
+    if (process.platform === 'linux') {
+      await until(async () => {
+        const [shape, box] = await Promise.all([nativeBrowser.evaluate<Array<{x:number;y:number;width:number;height:number}> | undefined>('notchShapes.at(-1)'),
+          companionPage.evaluate<{x:number;width:number;height:number}>(`(()=>{const b=${island};return {x:b.x,width:b.width,height:b.height}})()`)]);
+        const [rect, band] = shape || [];
+        return Boolean(rect && band && shape?.length === 2 && rect.y === 0 && Math.abs(rect.height - Math.ceil(box.height)) <= 1 && rect.x <= box.x && rect.x + rect.width >= box.x + box.width &&
+          band.y === 0 && band.height === 10 && band.x <= box.x - 10 && band.x + band.width >= box.x + box.width + 10);
+      }, 'X11 window shape follows the expanded island and its shoulders');
+    } else assert.equal(await nativeBrowser.evaluate('notchShapes.length'), 0, 'A window shape was applied outside Linux');
+    await islandShot('ui-notch-empty.png');
     for (const language of ['en', 'es', 'ja', 'id']) {
       await mainPage.evaluate(`window.lumilan.setLanguage(${JSON.stringify(language)})`);
       await until(() => companionPage.evaluate(`document.documentElement.lang===${JSON.stringify(language)}`), `notch ${language} labels`);
       await tightPanel(`Empty ${language} panel`);
     }
-    await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'manual expanded panel auto hides', 20000);
+    // Staying open under the pointer is covered with controlled input in tests/notch.test.ts; a real pointer on this
+    // desktop may cross the overlay. Inside the fixed window but outside the island: the pointer has left.
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 390 });
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'manual panel closes after the pointer leaves', 3000);
     await until(() => nativeBrowser.evaluate("!smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').isFocused()"), 'manual close releases native keyboard focus');
     const automaticNotificationContext = async () => {
       const [native, renderer] = await Promise.all([
@@ -880,7 +920,8 @@ async function main() {
     const automaticCard = await until(() => companionPage.evaluate<{mode:string} | false>("document.getElementById('body').textContent.includes('hello from LAN')&&({mode:document.body.dataset.mode})"), 'ordinary message rendered');
     const automaticMode = automaticCard.mode;
     assert.equal(automaticMode, 'compact', `Ordinary notification did not enter compact mode: ${automaticMode === 'compact' ? '' : JSON.stringify(await automaticNotificationContext())}`);
-    await until(() => companionPage.evaluate('innerHeight<=70 && innerWidth<=302'), 'small compact notification');
+    await until(() => companionPage.evaluate(`${settled}&&(()=>{const e=document.getElementById('island'),b=e.getBoundingClientRect();return Math.round(b.width)<=320&&Math.round(b.height)<=68+parseFloat(getComputedStyle(e).paddingTop)})()`), 'small compact notification');
+    await fixedWindow('Compact notification');
     const focusState = await nativeBrowser.evaluate("({visible:smokeMain.isVisible(),main:smokeMain.isFocused(),notch:smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').isFocused()})");
     assert.deepEqual(focusState, { visible:false,main:false,notch:false }, `Notification stole native window focus: ${JSON.stringify(focusState)}`);
     assert.equal(await companionPage.evaluate('!!window.lumilan || !!window.require || !!window.process'), false, 'Companion exposed main bridge or Node');
@@ -901,8 +942,7 @@ async function main() {
     await mainPage.evaluate("window.lumilan.setNotificationSettings({enabled:true,preview:true,silent:true,background:true,notch:true})");
     await testPeer.sendMessage('Halo, ada pesan baru untuk Anda.', appState.me.id);
     await until(async () => (await selected())?.count === groupedBefore + 1, 'grouped messages');
-    const compactShot = await companionPage.send('Page.captureScreenshot', { format: 'png' });
-    writeFileSync(join(dist, 'ui-notch-compact.png'), Buffer.from(compactShot.data, 'base64'));
+    await islandShot('ui-notch-compact.png');
     await testThird.sendMessage('Unread from a different conversation', appState.me.id);
     await until(() => mainPage.evaluate(`window.lumilan.state().then(s=>s.unread[${JSON.stringify(testThird.id)}]>0)`), 'other conversation unread');
     // Exercise the actual renderer selection while hidden, including its delayed IPC acknowledgement.
@@ -912,17 +952,31 @@ async function main() {
     await companionPage.evaluate(`window.lumi.action({type:'select',key:${JSON.stringify(signature)}})`);
     await click('mascot');
     await tightPanel('Message panel');
-    const shot = await companionPage.send('Page.captureScreenshot', { format: 'png' });
-    writeFileSync(join(dist, 'ui-notch-message.png'), Buffer.from(shot.data, 'base64'));
-    const layout = await companionPage.evaluate<{right:number;width:number;bottom:number;height:number;overflow:boolean}>(`(()=>{const b=document.getElementById('actions').getBoundingClientRect(); const f=document.getElementById('pause').getBoundingClientRect(); return {right:b.right,width:innerWidth,bottom:f.bottom,height:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth}})()`);
+    await islandShot('ui-notch-message.png');
+    const layout = await companionPage.evaluate<{right:number;width:number;bottom:number;height:number;overflow:boolean}>(`(()=>{const b=document.getElementById('actions').getBoundingClientRect(); const f=document.getElementById('pause').getBoundingClientRect(); const i=${island}; return {right:b.right,width:i.right,bottom:f.bottom,height:i.bottom,overflow:document.documentElement.scrollWidth>innerWidth}})()`);
     assert(layout.right <= layout.width && layout.bottom <= layout.height && !layout.overflow, `Clipped controls: ${JSON.stringify(layout)}`);
+    await fixedWindow('Expanded message panel');
     await click('open'); await until(() => nativeBrowser.evaluate('smokeMain.isVisible()'), 'open conversation');
     await until(() => companionPage.evaluate('window.lumi.state().then(s=>!s.items.some(i=>i.key===' + JSON.stringify(signature) + '))'), 'read message dismissed');
     assert(((await mainPage.evaluate<Snapshot>('window.lumilan.state()')).unread[testThird.id] || 0) > 0, 'Opening one conversation marked a different hidden conversation as read');
     console.log('Notch: message, no focus theft, privacy, inert HTML, restricted bridge, open/read passed');
 
-    // Attention: a visible main window behind another window, or a focused one left alone, is not being watched.
+    // Always-on pill: over the watched main window Lumi keeps only its pill; an arrival elsewhere only raises its badge.
     const notchShown = "smokeElectron.BrowserWindow.getAllWindows().some(w=>w.webContents.getURL()==='lumilan://app/notch.html'&&w.isVisible())";
+    await until(async () => await nativeBrowser.evaluate(`smokeMain.isFocused()&&${notchShown}`) && await companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'pill stays over the watched main window');
+    // The badge counts queued cards; a conversation that already has one groups the new message into it.
+    const thirdCard = `window.lumi.state().then(s=>s.items.find(i=>i.key===${JSON.stringify(`message:${testThird.id}`)})?.count||0)`;
+    const thirdBefore = await companionPage.evaluate<number>(thirdCard);
+    await testThird.sendMessage('Badge only while watched', appState.me.id);
+    await until(async () => await companionPage.evaluate<number>(thirdCard) > thirdBefore, 'watched arrival queued for the badge');
+    await until(() => companionPage.evaluate("!document.getElementById('pill-badge').hidden&&Number(document.getElementById('pill-badge').textContent)>0"), 'pill badge shown');
+    await delay(500);
+    assert.equal(await companionPage.evaluate('document.body.dataset.mode'), 'hidden', 'An arrival previewed over the watched main window');
+    assert.equal(await nativeBrowser.evaluate('smokeMain.isFocused()'), true, 'The badge took focus from the main window');
+    // The earlier rule, chosen in Settings: no pill while the main window is watched.
+    await mainPage.evaluate("window.lumilan.setNotificationSettings({enabled:true,preview:true,silent:true,background:true,notch:true,notchIdle:'away'})");
+    await until(async () => !(await nativeBrowser.evaluate(notchShown)), "'away' withdrew the pill from the watched main window");
+    // Attention: a visible main window behind another window, or a focused one left alone, is not being watched.
     const unreadFrom = (id: string) => mainPage.evaluate<number>(`window.lumilan.state().then(s=>s.unread[${JSON.stringify(id)}]||0)`);
     type Cue = [string, unknown];
     const cues = () => nativeBrowser.evaluate<Cue[]>('smokeCues');
@@ -981,15 +1035,16 @@ async function main() {
       await until(async () => (await cues()).some(([name, value]) => name === 'setOverlayIcon' && value !== null), 'unread overlay restored after showing the window');
     }
     await nativeBrowser.evaluate('smokeOther.destroy();for(const restore of smokeCueRestore)restore();true');
-    console.log('Attention: Lumi over a window behind others without focus theft, no idle strip, unattended arrivals unread until real input, taskbar/Dock cues passed');
+    await mainPage.evaluate("window.lumilan.setNotificationSettings({enabled:true,preview:true,silent:true,background:true,notch:true,notchIdle:'always'})");
+    await until(() => nativeBrowser.evaluate(notchShown), 'pill restored over the main window');
+    console.log("Attention: always-on pill with a badge-only watched arrival; with 'away', Lumi over a window behind others without focus theft, no idle strip, unattended arrivals unread until real input, taskbar/Dock cues passed");
 
     await background();
     const source = join(profile, 'sample.bin'); writeFileSync(source, Buffer.alloc(512 * 1024, 42));
     let sending = testPeer.sendFilePath(source, appState.me.id); sending.catch(() => {});
     const offer = await until(async () => { const s = await selected(); return s?.kind === 'file' && s.actionable && s; }, 'file offer');
     await tightPanel('File consent panel');
-    const fileShot = await companionPage.send('Page.captureScreenshot', { format: 'png' });
-    writeFileSync(join(dist, 'ui-notch-file.png'), Buffer.from(fileShot.data, 'base64'));
+    await islandShot('ui-notch-file.png');
     await companionPage.send('Input.dispatchMouseEvent', { type:'mouseMoved', x:-20, y:-20 });
     await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'automatic consent preview auto hides', 25000);
     assert.equal((await requireSelected()).key, offer.key);
@@ -1071,8 +1126,7 @@ async function main() {
     await assert.rejects(testThird.sendCall({ action:'offer', id:randomUUID(), peerId:appState.me.id, sdp }), /panggilan lain/);
     assert.equal((await requireSelected()).key, `call:${id}`, 'A third caller replaced the incoming call');
     await tightPanel('Call consent panel');
-    const callShot = await companionPage.send('Page.captureScreenshot', { format: 'png' });
-    writeFileSync(join(dist, 'ui-notch-call.png'), Buffer.from(callShot.data, 'base64'));
+    await islandShot('ui-notch-call.png');
     await click('decline'); await until(() => !testPeer.activeCall, 'call declined');
     await assert.rejects(companionPage.evaluate(`window.lumi.action({type:'accept',key:'call:${id}'})`));
     id = randomUUID(); await testPeer.sendCall({ action: 'offer', id, peerId: appState.me.id, sdp });
@@ -1231,14 +1285,222 @@ async function main() {
     await mainPage.evaluate("window.lumilan.setNotificationSettings({enabled:true,preview:true,silent:true,background:true,notch:true})");
     console.log('Reminders: overlapping lock/suspend, deferred catch-up once, canceled-item pruning and current privacy passed');
 
-    await background(); await testPeer.sendMessage('Idle measurement', appState.me.id);
+    // Focus: Lumi's own start button, Do not disturb broadcast over the real LAN, a held message, the idle pill
+    // countdown, pause without reopening, then a deadline passed during lock + suspend: the session ends on resume and
+    // its single summary waits for unlock without marking anything read.
+    const statusBefore = await mainPage.evaluate<string>('window.lumilan.state().then(s=>s.me.status)');
+    assert.notEqual(statusBefore, 'dnd', 'Focus fixture must start outside Do not disturb');
+    await mainPage.evaluate('window.lumilan.setFocus(25)');
+    await background();
+    await companionPage.evaluate("window.lumi.action({type:'expand'})");
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='expanded'&&!document.getElementById('deck-nav').hidden&&[...document.querySelectorAll('#dots button')].map(b=>b.dataset.page).join()==='activity,focus,routine,tasks,shelf'"), 'deck offers Activity, Focus, Routine, Tasks and Shelf');
+    await click('next');
+    await until(() => companionPage.evaluate("document.getElementById('page-focus').dataset.current==='true'&&!document.getElementById('focus').hidden&&document.getElementById('prev').disabled===false"), 'focus page with its buttons');
+    await tightPanel('Focus page');
+    await islandShot('ui-notch-deck-focus.png');
+    // Keyboard and a horizontal swipe turn pages too.
+    await companionPage.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowLeft', code: 'ArrowLeft' });
+    await companionPage.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowLeft', code: 'ArrowLeft' });
+    await until(() => companionPage.evaluate("document.getElementById('page-activity').dataset.current==='true'"), 'ArrowLeft returns to Activity');
+    const deckPoint = await companionPage.evaluate<{x:number;y:number}>("(()=>{const b=document.getElementById('deck').getBoundingClientRect();return {x:b.left+b.width/2,y:b.top+Math.min(20,b.height/2)}})()");
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseWheel', ...deckPoint, deltaX: 60, deltaY: 0 });
+    await until(() => companionPage.evaluate("document.getElementById('page-focus').dataset.current==='true'"), 'horizontal wheel turns to Focus');
+    await click('focus-25');
+    await until(() => mainPage.evaluate("window.lumilan.state().then(s=>s.me.status==='dnd')"), 'focus sets Do not disturb');
+    await until(() => testPeer.trusted.get(appState.me.id)?.status === 'dnd', 'contact sees Do not disturb');
+    const focusCard = await requireSelected();
+    assert(focusCard.kind === 'focus' && focusCard.status === 'running' && typeof focusCard.until === 'number' && Math.abs(focusCard.until - Date.now() - 25 * 60_000) < 60_000,
+      `Unexpected focus card: ${JSON.stringify(focusCard)}`);
+    await until(() => companionPage.evaluate("!document.getElementById('clock').hidden&&/^\\d+:\\d\\d$/.test(document.getElementById('clock').textContent)"), 'expanded countdown');
+    await islandShot('notch-focus-expanded.png');
+    await companionPage.evaluate('window.lumi.action({type:"collapse"})');
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'&&!document.hidden&&getComputedStyle(document.getElementById('timer')).display==='flex'&&/\\d/.test(document.getElementById('timer').textContent)"), 'idle pill countdown');
+    await islandShot('notch-focus-pill.png');
+    // Layout only: over a macOS camera notch the countdown must clear a 200 pt camera. Simulated in the renderer where
+    // the OS reports no notch menu bar; native notch placement still needs a notched Mac.
+    await companionPage.evaluate("document.body.dataset.notch='true';document.body.style.setProperty('--inset','37px')");
+    await until(() => companionPage.evaluate(settled), 'simulated notch pill settled');
+    const camera = await companionPage.evaluate<{clear:number;height:number}>("(()=>{const i=document.getElementById('island').getBoundingClientRect(),r=document.createRange();r.selectNodeContents(document.getElementById('timer'));const t=r.getBoundingClientRect();return {clear:t.left-(i.left+i.width/2+100),height:t.height}})()");
+    await companionPage.evaluate("document.body.dataset.notch='false';document.body.style.setProperty('--inset','0px')");
+    await until(() => companionPage.evaluate(settled), 'pill restored');
+    assert(camera.clear >= 4 && camera.height > 0, `Focus countdown would sit under the camera notch: ${JSON.stringify(camera)}`);
+    await testPeer.sendMessage('Held during focus', appState.me.id);
+    await until(() => mainPage.evaluate(`window.lumilan.state().then(s=>(s.unread[${JSON.stringify(testPeer.id)}]||0)>0)`), 'held message stored unread');
+    await delay(500);
+    assert.equal(await companionPage.evaluate('document.body.dataset.mode'), 'hidden', 'A message interrupted the focus session');
+    await mainPage.evaluate("window.lumilan.focus({type:'pause'})");
+    await until(() => companionPage.evaluate("(t=>t.length>0&&!/\\d/.test(t))(document.getElementById('timer').textContent)"), 'paused pill');
+    assert.equal(await companionPage.evaluate('document.body.dataset.mode'), 'hidden', 'Pausing reopened the hidden preview');
+    await mainPage.evaluate("window.lumilan.focus({type:'resume'})");
+    await nativeBrowser.evaluate('globalThis.smokeRealNow=Date.now;true');
+    try {
+      await setLocked(nativeBrowser, true); await nativeBrowser.evaluate("smokeElectron.powerMonitor.emit('suspend')");
+      // The device slept past the deadline: move the main-process wall clock, then wake it.
+      await nativeBrowser.evaluate("Date.now=()=>smokeRealNow()+26*60000;smokeElectron.powerMonitor.emit('resume');true");
+      await until(() => mainPage.evaluate(`window.lumilan.state().then(s=>s.me.status===${JSON.stringify(statusBefore)})`), 'deadline passed during sleep ends on resume');
+      await until(() => testPeer.trusted.get(appState.me.id)?.status === statusBefore, 'contact sees the previous status');
+      await delay(300);
+      assert.equal(await companionPage.evaluate("window.lumi.state().then(s=>s.items.some(i=>i.key==='focus:done'))"), false, 'Focus summary appeared on a locked screen');
+      await setLocked(nativeBrowser, false);
+      const focusSummary = await until(() => companionPage.evaluate<NotchVisibleItem | undefined>("window.lumi.state().then(s=>s.items.find(i=>i.key==='focus:done'))"), 'focus summary after unlock');
+      assert(focusSummary.count === 1 && focusSummary.title === 'Sesi fokus selesai' && /1/.test(focusSummary.body) && !focusSummary.body.includes('Held during focus'),
+        `Unexpected focus summary: ${JSON.stringify(focusSummary)}`);
+    } finally { await nativeBrowser.evaluate('if(globalThis.smokeRealNow){Date.now=smokeRealNow;delete globalThis.smokeRealNow}true'); }
+    await nativeBrowser.evaluate("smokeElectron.powerMonitor.emit('unlock-screen');smokeElectron.powerMonitor.emit('resume')"); await delay(300);
+    assert.equal(await companionPage.evaluate("window.lumi.state().then(s=>s.items.filter(i=>i.kind==='focus').length)"), 1, 'A repeated unlock or resume duplicated the summary');
+    assert(await mainPage.evaluate(`window.lumilan.state().then(s=>(s.unread[${JSON.stringify(testPeer.id)}]||0)>0)`), 'The focus summary marked the held message read');
+    await companionPage.evaluate("window.lumi.action({type:'open',key:'focus:done'})");
+    await until(() => companionPage.evaluate("window.lumi.state().then(s=>!s.items.some(i=>i.kind==='focus'))"), 'summary removed after opening');
+    await mainPage.evaluate('window.lumilan.setFocus(0)');
+    console.log('Focus: Lumi start, LAN Do not disturb broadcast/restore, held message, idle pill countdown, pause without reopening, lock → suspend → resume → unlock summary once passed');
+
+    // Routine and Tasks: a water reminder due while the window is closed, Drink from Lumi, the hourly chart, and a task
+    // added, finished and deleted from Lumi while typing keeps the panel open.
+    await mainPage.evaluate("window.lumilan.routine({action:'settings',value:{enabled:true,servingMl:250,goalMl:500,startHour:0,endHour:24,intervalMinutes:15}})");
+    await background();
+    await nativeBrowser.evaluate('globalThis.smokeRealNow=Date.now;true');
+    try {
+      // One interval later: move the main-process clock and wake the timer the way a resume does.
+      await nativeBrowser.evaluate("Date.now=()=>smokeRealNow()+16*60000;smokeElectron.powerMonitor.emit('resume');true");
+      const water = await until(async () => { const item = await selected(); return item?.key === 'routine:water' && item; }, 'water reminder in Lumi');
+      assert(water.kind === 'routine' && water.title === 'Waktunya minum' && /0[.,]0 \/ 0[.,]5 L/.test(water.body), `Unexpected water card: ${JSON.stringify(water)}`);
+      await until(() => companionPage.evaluate("document.body.dataset.mode==='compact'"), 'water reminder previewed');
+    } finally { await nativeBrowser.evaluate('if(globalThis.smokeRealNow){Date.now=smokeRealNow;delete globalThis.smokeRealNow}true'); }
+    await click('mascot');
+    await until(() => companionPage.evaluate("document.getElementById('page-routine').dataset.current==='true'"), 'water preview opens the Routine page');
+    await until(() => companionPage.evaluate("document.querySelectorAll('#routine-bars rect').length===24&&!document.querySelector('#routine-bars rect.filled')"), 'empty hourly chart');
+    await click('routine-drink');
+    await until(() => mainPage.evaluate('window.lumilan.routineState().then(v=>v.todayMl===250)'), 'drink logged from Lumi');
+    await until(() => companionPage.evaluate("window.lumi.state().then(s=>!s.items.some(i=>i.key==='routine:water'))&&document.querySelectorAll('#routine-bars rect.filled').length===1"), 'drink answered the card and filled the chart');
+    await tightPanel('Routine page');
+    await islandShot('notch-routine.png');
+    await click('next');
+    await until(() => companionPage.evaluate("document.getElementById('page-tasks').dataset.current==='true'"), 'Tasks page');
+    await companionPage.evaluate("document.getElementById('tasks-input').focus()");
+    await companionPage.send('Input.insertText', { text: 'Balas pesan Dina' });
+    // Typing holds the panel open even when the pointer leaves the island.
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 390 });
+    await delay(1000);
+    assert.equal(await companionPage.evaluate('document.body.dataset.mode'), 'expanded', 'The pointer leaving closed a panel the person was typing in');
+    await companionPage.evaluate("document.getElementById('tasks-form').requestSubmit()");
+    await until(() => mainPage.evaluate("window.lumilan.tasksState().then(v=>v.total===1&&v.items[0].title==='Balas pesan Dina')"), 'task added from Lumi');
+    await until(() => companionPage.evaluate("document.querySelectorAll('#tasks-list li').length===1&&document.getElementById('tasks-input').value===''"), 'task row shown');
+    await companionPage.evaluate("document.querySelector('#tasks-list input').click()");
+    await until(() => companionPage.evaluate("document.getElementById('tasks-count').textContent==='1/1'&&document.querySelector('#tasks-list li').classList.contains('done')"), 'task done from Lumi');
+    await tightPanel('Tasks page');
+    await islandShot('notch-tasks.png');
+    await companionPage.evaluate("document.querySelector('#tasks-list button').click()");
+    await until(() => mainPage.evaluate('window.lumilan.tasksState().then(v=>v.total===0)'), 'task deleted from Lumi');
+    for (const action of ["{type:'tasks',action:'add',value:{title:'x',path:'C:/secret'}}", "{type:'routine',action:'drink',value:1,extra:2}", "{type:'tasks',action:'eval'}"])
+      await assert.rejects(companionPage.evaluate(`window.lumi.action(${action})`), action);
+    // Leaving the field ends the typing hold; the pointer is already outside, so the panel closes.
+    await companionPage.evaluate("document.activeElement.blur()");
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'panel closes once typing ends', 3000);
+    await mainPage.evaluate("window.lumilan.routine({action:'settings',value:{enabled:false,servingMl:250,goalMl:2000,startHour:8,endHour:22,intervalMinutes:60}})");
+    console.log('Routine and Tasks: water reminder after a resume, Drink from Lumi with chart, add/done/delete while typing holds the panel, refused page actions passed');
+
+    // Shelf: real files dropped on the island (paths read by the Lumi preload, never by the page), open and drag-out
+    // through the stored path, a consented send to the loopback peer, cancel while waiting, save to notes, and remove.
+    const shelfDir = join(profile, 'shelf-files'); mkdirSync(shelfDir);
+    const shelfText = join(shelfDir, 'rak-a.txt'), shelfImage = join(shelfDir, 'rak-b.png'), shelfEmpty = join(shelfDir, 'empty.bin'), shelfBig = join(shelfDir, 'rak-c.bin');
+    writeFileSync(shelfText, 'Lumilan shelf '.repeat(220));
+    writeFileSync(shelfImage, Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a5ff0000000049454e44ae426082', 'hex'));
+    writeFileSync(shelfEmpty, ''); writeFileSync(shelfBig, Buffer.alloc(2 * 1024 * 1024, 7));
+    await background();
+    await companionPage.evaluate("(()=>{const i=document.createElement('input');i.type='file';i.multiple=true;i.id='smoke-shelf-files';i.hidden=true;document.body.append(i);return true})()");
+    // Click a row's action once the row shows it; a failure names what the row showed instead.
+    const rowAction = async (name: string, action: string) => {
+      const row = `[...document.querySelectorAll('#shelf-list li')].find(li=>li.querySelector('.name')?.textContent===${JSON.stringify(name)})`;
+      await until(() => companionPage.evaluate(`(r=>!!r?.querySelector('[data-action=${action}]'))(${row})`), `${name} offers ${action}`)
+        .catch(async (error: unknown) => { throw new Error(`${error instanceof Error ? error.message : String(error)}: ${await companionPage.evaluate(`(r=>r?r.innerText:'missing row')(${row})`)}`); });
+      await companionPage.evaluate(`${row}.querySelector('[data-action=${action}]').click()`);
+    };
+    const shelfInput = async (paths: string[]) => {
+      const dom = await companionPage.send('DOM.getDocument');
+      const node = await companionPage.send('DOM.querySelector', { nodeId: dom.root.nodeId, selector: '#smoke-shelf-files' });
+      await companionPage.send('DOM.setFileInputFiles', { nodeId: node.nodeId, files: paths });
+    };
+    // A synthetic drag carrying those File objects over the island centre.
+    const dragFiles = (type: string) => companionPage.evaluate(`(()=>{const d=new DataTransfer();for(const f of document.getElementById('smoke-shelf-files').files)d.items.add(f);
+      const b=document.getElementById('island').getBoundingClientRect();document.getElementById('island').dispatchEvent(new DragEvent(${JSON.stringify(type)},{bubbles:true,cancelable:true,dataTransfer:d,clientX:b.left+b.width/2,clientY:b.top+Math.min(20,b.height/2)}));return true})()`);
+    await shelfInput([shelfText, shelfImage, shelfEmpty]);
+    await dragFiles('dragenter');
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='expanded'&&document.getElementById('page-shelf').dataset.current==='true'"), 'dragging files over Lumi opens the shelf');
+    assert.equal(await nativeBrowser.evaluate("smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').isFocused()"), false, 'Opening the shelf for a drag took focus');
+    await until(() => companionPage.evaluate(settled), 'shelf settled');
+    await dragFiles('drop');
+    await until(() => companionPage.evaluate("document.querySelectorAll('#shelf-list li').length===2&&/2.*0.*1/.test(document.getElementById('shelf-status').textContent)"), 'two files shelved, the empty one skipped');
+    assert.deepEqual(await companionPage.evaluate<string[]>("[...document.querySelectorAll('#shelf-list use')].map(u=>u.getAttribute('href'))"), ['#g-image', '#g-document']);
+    assert(!(await companionPage.evaluate<string>('window.lumi.state().then(s=>JSON.stringify(s))')).includes('shelf-files'), 'A shelf path reached the Lumi renderer');
+    const savedShelf = JSON.parse(readFileSync(join(profile, 'lumilan', 'shelf.json'), 'utf8')) as Array<Record<string, unknown>>;
+    assert(savedShelf.length === 2 && savedShelf.every(item => Object.keys(item).sort().join() === 'addedAt,id,name,path,size'), `Unexpected shelf.json: ${JSON.stringify(savedShelf)}`);
+    await tightPanel('Shelf page');
+    await islandShot('ui-notch-shelf.png');
+    // Open and drag out reach the stored path in main; both native calls are recorded instead of acting on the desktop.
+    await nativeBrowser.evaluate(`(()=>{globalThis.smokeOpened=[];globalThis.smokeOpenPath=smokeElectron.shell.openPath;smokeElectron.shell.openPath=async p=>{smokeOpened.push(p);return ''};
+      const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');globalThis.smokeDrags=[];
+      w.webContents.startDrag=item=>{smokeDrags.push({file:item.file,icon:!item.icon.isEmpty()})};return true})()`);
+    try {
+      await companionPage.evaluate("[...document.querySelectorAll('#shelf-list li')].find(li=>li.textContent.includes('rak-a.txt')).querySelector('.name').click()");
+      await until(async () => (await nativeBrowser.evaluate<string[]>('smokeOpened')).includes(shelfText), 'shelf opens the stored file');
+      await companionPage.evaluate("[...document.querySelectorAll('#shelf-list li')].find(li=>li.textContent.includes('rak-b.png')).dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true}))");
+      await until(async () => JSON.stringify(await nativeBrowser.evaluate('smokeDrags')) === JSON.stringify([{ file: shelfImage, icon: true }]), 'drag out starts a native file drag');
+    } finally { await nativeBrowser.evaluate('if(globalThis.smokeOpenPath){smokeElectron.shell.openPath=smokeOpenPath;delete globalThis.smokeOpenPath}true'); }
+    // Send to a contact: the picker lists online contacts only after Send; the recipient still consents and verifies.
+    assert.equal(await companionPage.evaluate('window.lumi.state().then(s=>s.pages.shelf.picker)'), undefined, 'Contacts were listed before the picker opened');
+    testPeer.acceptFile = async () => true;
+    const textRow = "[...document.querySelectorAll('#shelf-list li')].find(li=>li.textContent.includes('rak-a.txt'))";
+    await rowAction('rak-a.txt', 'pick');
+    await until(() => companionPage.evaluate("!document.getElementById('shelf-picker').hidden&&[...document.querySelectorAll('#shelf-contacts button')].some(b=>b.textContent==='Alice LAN')"), 'recipient picker');
+    await companionPage.evaluate("[...document.querySelectorAll('#shelf-contacts button')].find(b=>b.textContent==='Alice LAN').click()");
+    await until(() => testPeer.state.messages.some(m => m.kind === 'file' && m.name === 'rak-a.txt'), 'shelf file received by the contact');
+    await until(() => companionPage.evaluate(`${textRow}.querySelector('.meta').textContent.includes('Alice LAN')`), 'sent notice on the shelf row');
+    // Cancel while the recipient has not answered yet.
+    testPeer.acceptFile = () => new Promise<boolean>(() => {});
+    await shelfInput([shelfBig]); await dragFiles('dragenter'); await dragFiles('drop');
+    const bigRow = "[...document.querySelectorAll('#shelf-list li')].find(li=>li.textContent.includes('rak-c.bin'))";
+    await until(() => companionPage.evaluate(`!!${bigRow}`), 'large file shelved');
+    await rowAction('rak-c.bin', 'pick');
+    await until(() => companionPage.evaluate("!document.getElementById('shelf-picker').hidden"), 'picker for the large file');
+    await companionPage.evaluate("[...document.querySelectorAll('#shelf-contacts button')].find(b=>b.textContent==='Alice LAN').click()");
+    await until(() => companionPage.evaluate("window.lumi.state().then(s=>s.pages.shelf.items.some(i=>i.name==='rak-c.bin'&&i.job?.status==='waiting'))"), 'waiting for consent');
+    await rowAction('rak-c.bin', 'cancel');
+    await until(() => companionPage.evaluate("window.lumi.state().then(s=>s.pages.shelf.items.some(i=>i.name==='rak-c.bin'&&!i.job&&i.failed))"), 'canceled send reported on the row');
+    testPeer.acceptFile = async () => true;
+    // Save to Personal notes: a local copy, no network.
+    await rowAction('rak-b.png', 'note');
+    await until(() => mainPage.evaluate("window.lumilan.listMessages('notes',null).then(m=>m.some(x=>x.kind==='file'&&x.name==='rak-b.png'))"), 'shelf file saved to Personal notes');
+    // Remove leaves the file on disk.
+    await until(() => companionPage.evaluate("window.lumi.state().then(s=>s.pages.shelf.items.some(i=>i.name==='rak-b.png'&&!i.job))"), 'save to notes finished');
+    await rowAction('rak-b.png', 'remove');
+    await until(() => companionPage.evaluate("![...document.querySelectorAll('#shelf-list li')].some(li=>li.textContent.includes('rak-b.png'))"), 'file removed from the shelf');
+    assert(existsSync(shelfImage), 'Removing from the shelf deleted the file');
+    await assert.rejects(companionPage.evaluate("window.lumi.shelve('C:/secret.txt')"));
+    await assert.rejects(companionPage.evaluate("window.lumi.action({type:'shelf',action:'open',value:'not-an-id'})"));
+    await assert.rejects(companionPage.evaluate(`window.lumi.action({type:'shelf',action:'send',value:{id:${JSON.stringify(savedShelf[0]!.id)},to:'../x'}})`));
+    await companionPage.evaluate('window.lumi.action({type:"collapse"})');
+    console.log('Shelf: drop on Lumi with paths kept in main, open and native drag-out, consented send with notice, cancel while waiting, save to notes, remove keeps the file, refused actions passed');
+
+    await background();
+    const countBeforePower = await companionPage.evaluate<number>('window.lumi.state().then(s=>s.count)');
+    await nativeBrowser.evaluate("smokeElectron.powerMonitor.emit('on-battery');true");
+    await until(async () => (await selected())?.key === 'device:power' && await companionPage.evaluate("document.body.dataset.mode==='compact'"), 'charger notice preview');
+    const powerRevision = await companionPage.evaluate<number>('window.lumi.state().then(s=>s.revision)');
+    await nativeBrowser.evaluate("smokeElectron.powerMonitor.emit('on-battery');smokeElectron.powerMonitor.emit('on-ac');true"); await delay(300);
+    const powerCard = await requireSelected();
+    assert(powerCard.key === 'device:power' && powerCard.status === 'ac' && await companionPage.evaluate<number>('window.lumi.state().then(s=>s.revision)') === powerRevision,
+      `A repeated power event took attention again: ${JSON.stringify(powerCard)}`);
+    assert.equal(await companionPage.evaluate('window.lumi.state().then(s=>s.count)'), countBeforePower, 'A device notice raised the activity badge');
+    console.log(`Device: charger notice once per window passed; renderer battery API ${await companionPage.evaluate("navigator.getBattery?navigator.getBattery().then(b=>'level '+Math.round(b.level*100)+'%',e=>'refused: '+e.name):'absent'")}`);
+    await companionPage.evaluate('window.lumi.action({type:"collapse"})');
+    await testPeer.sendMessage('Idle measurement', appState.me.id);
     await until(async () => (await selected())?.kind === 'message', 'idle fixture');
     await companionPage.evaluate('window.lumi.action({type:"collapse"})'); await delay(2000);
     assert.equal(await companionPage.evaluate('document.getAnimations().filter(a=>a.playState==="running").length'), 0, 'Idle animations kept running');
     await companionPage.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
     await companionPage.evaluate('window.lumi.action({type:"expand"})');
-    // The action resolves after the native resize; the renderer publication and layout follow separately.
-    await until(() => companionPage.evaluate("!document.hidden&&document.body.dataset.mode==='expanded'&&document.querySelector('header').getBoundingClientRect().width>0"), 'reduced-motion panel expanded');
+    // The renderer publication and layout follow the action separately.
+    await until(() => companionPage.evaluate("!document.hidden&&document.body.dataset.mode==='expanded'&&getComputedStyle(document.querySelector('header')).visibility==='visible'"), 'reduced-motion panel expanded');
     await hoverNotchHeader();
     assert.equal(await companionPage.evaluate('document.getAnimations().length'), 0, 'Reduced motion ignored');
     await companionPage.send('Emulation.setEmulatedMedia', { features: [] });
@@ -1247,12 +1509,14 @@ async function main() {
     await click('reset');
     await until(() => mainPage.evaluate('window.lumilan.notificationSettings().then(s=>s.notchPosition?.fraction===.5)'), 'centered keyboard fixture');
     await companionPage.evaluate("document.getElementById('drag').focus()");
+    const pageBeforeMove = await companionPage.evaluate<string>("document.querySelector('#deck > section[data-current=\"true\"]').dataset.page");
     const before = await nativeBrowser.evaluate<{x:number;y:number;width:number;height:number}>("smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').getBounds()");
     await companionPage.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowRight', code: 'ArrowRight' });
     await companionPage.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowRight', code: 'ArrowRight' });
     await until(async () => {
       const bounds = await nativeBrowser.evaluate<{x:number;y:number;width:number;height:number}>("smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').getBounds()");
       assert.equal(await companionPage.evaluate('document.body.dataset.mode'), 'expanded', 'Keyboard reposition collapsed the panel');
+      assert.equal(await companionPage.evaluate("document.querySelector('#deck > section[data-current=\"true\"]').dataset.page"), pageBeforeMove, 'Arrow keys on the position handle turned the page');
       return bounds.width === before.width && Math.abs(bounds.x - before.x - 20) <= 1;
     }, 'keyboard reposition by 20 px without resizing');
     await click('reset');

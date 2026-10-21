@@ -16,8 +16,10 @@ Lumilan connects devices directly on the same LAN or Wi-Fi. No accounts, central
 | --- | --- |
 | **Direct messages & invitation-only Rooms** — talk privately or bring a team together. | **Personal notes** — keep messages and attachments on your own device. |
 | **File sharing & image paste** — transfer each file up to 5 GB to compatible clients; paste a copied image, review it, and select Send. | **Reminders** — schedule your own tasks or ask an online contact to choose and accept a time. |
-| **Voice calls** — one-to-one audio over your local network. | **Lumi** — compact alerts whenever you are not looking at Lumilan, with system notification fallback where needed. |
+| **Voice calls** — one-to-one audio over your local network. | **Lumi** — a Dynamic Island-style pill with the time that opens into pages, and alerts whenever you are not looking at Lumilan, with system notification fallback where needed. |
 | **Link previews** — static cards for YouTube, Shorts, and Instagram links (Instagram when available without login); Facebook, Threads, and X get a link card. | **Opt-in fetching** — only your device contacts YouTube or Instagram, and only after you turn it on. |
+| **Focus sessions** — start 25, 45, or 60 minutes from Lumi or Settings; contacts see Do not disturb, and your previous status returns afterward. | **One quiet summary** — messages wait during the session; at the end you see how many arrived, without names, text, or marking them read. |
+| **Water routine & tasks** — log a drink, get reminders during your active hours, and tick off tasks from Lumi or Settings. | **File shelf** — drop files on Lumi to keep them close, drag them out, send them to a contact, or save them to Personal notes. |
 
 <details>
 <summary><strong>See dark mode and settings</strong></summary>
@@ -44,7 +46,7 @@ Get the latest package from the [official Releases page](https://github.com/iyan
 | macOS 13+ Apple Silicon | Apple Silicon / arm64 DMG |
 | Linux 64-bit | `*.AppImage` |
 
-Platform-specific features depend on the installed package and desktop environment. Lumi is implemented for Windows, macOS Intel/Apple Silicon, and Linux X11; Linux Wayland uses system notifications. Build success alone does not establish native compatibility for every feature.
+Platform-specific features depend on the installed package and desktop environment. Lumi is implemented for Windows, macOS Intel/Apple Silicon, and Linux X11; on Macs with a camera notch it covers the notch above the menu bar, and Linux Wayland uses system notifications. Build success alone does not establish native compatibility for every feature.
 
 ## Start in three steps
 
@@ -62,7 +64,7 @@ Connections use **libp2p Noise** to encrypt traffic and authenticate device iden
 
 Discovery depends on local mDNS, and direct traffic must be allowed by firewalls and Wi-Fi/VLAN rules. Lumilan has no internet relay to bypass network isolation. Voice calls need microphone access and direct local UDP traffic.
 
-Link previews are optional. After you turn them on, only the sending device contacts YouTube or Instagram over HTTPS to fetch a title and thumbnail; recipients receive the card over the LAN and never go online. Facebook, Threads, and X links get a card made on your device without any connection.
+Focus sessions are off until you choose a length in **Settings → Focus**; while one runs, connected contacts see your status as Do not disturb. Water logs, tasks, and the shelf stay on your device; the shelf keeps only where each file is and never deletes a file. Lumi's pill stays at the top of the screen while you use the app; **Settings → Notifications** can show it only when you are not looking at the window. Dropping files on Lumi is tested on Windows; on macOS and Linux use the open panel or **Settings → Shelf**. Link previews are optional. After you turn them on, only the sending device contacts YouTube or Instagram over HTTPS to fetch a title and thumbnail; recipients receive the card over the LAN and never go online. Facebook, Threads, and X links get a card made on your device without any connection.
 
 ## Help Lumilan grow
 

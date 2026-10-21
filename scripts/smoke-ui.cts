@@ -3,7 +3,7 @@ import type { Message } from '../src/shared/model.js';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const { createHash }: typeof import('node:crypto') = require('node:crypto');
 const { spawn }: typeof import('node:child_process') = require('node:child_process');
-const { mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync }: typeof import('node:fs') = require('node:fs');
+const { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync }: typeof import('node:fs') = require('node:fs');
 const { rm }: typeof import('node:fs/promises') = require('node:fs/promises');
 const { createServer }: typeof import('node:net') = require('node:net');
 const { tmpdir }: typeof import('node:os') = require('node:os');
@@ -79,7 +79,8 @@ async function main() {
     while (Date.now() < timeoutAt) {
       try {
         const result = await send('Runtime.evaluate', {
-          expression: "({ ready: document.readyState, appVisible: !document.querySelector('#app')?.hidden, joinVisible: !document.querySelector('#join-screen')?.hidden })",
+          // An element that does not exist yet (the initial blank document) is not visible.
+          expression: "({ ready: document.readyState, appVisible: document.querySelector('#app')?.hidden === false, joinVisible: document.querySelector('#join-screen')?.hidden === false })",
           returnByValue: true,
         });
         state = result.result.value as typeof state;
@@ -196,6 +197,128 @@ async function main() {
       `Top bar overflows a narrow window: ${JSON.stringify(narrowShell)}`);
     const narrowChatScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
     writeFileSync(join(dist, 'ui-audit-chat-narrow.png'), Buffer.from(narrowChatScreenshot.data, 'base64'));
+    // Focus from the main window: the real setting, start, status broadcast and restore, plus the shared select style
+    // and long translated text in light/dark narrow windows.
+    const waitFor = async (expression: string, label: string) => {
+      for (const end = Date.now() + 10_000; Date.now() < end; await delay(100)) if (await evaluate<boolean>(expression, true)) return;
+      throw new Error(`Timed out: ${label}`);
+    };
+    await evaluate("document.querySelector('#settings-dialog').showModal(); document.querySelector('#focus-select').value = '25'; document.querySelector('#focus-select').dispatchEvent(new Event('change'))");
+    await waitFor("window.lumilan.notificationSettings().then(s => s.focus === 25)", 'focus setting saved');
+    const statusBefore = await evaluate<string>("window.lumilan.state().then(s => s.me.status)", true);
+    await evaluate("document.querySelector('#focus-start').click()");
+    await waitFor("window.lumilan.state().then(s => s.me.status === 'dnd' && !document.querySelector('#focus-end').hidden && document.querySelector('#focus-start').hidden)", 'focus session started');
+    assert.match(await evaluate<string>("document.querySelector('#focus-status').textContent"), /\d/, 'Focus status did not show the end time');
+    for (const width of [375, 320]) for (const theme of ['light', 'dark']) {
+      await setViewport(width, 700);
+      const focusLayout = await evaluate<{ appearance: string; arrow: string; paddingRight: number; inside: boolean; overflow: boolean; buttons: boolean; textOverlap: boolean }>(`(() => {
+        document.documentElement.dataset.theme = '${theme}';
+        document.querySelector('#focus-status').textContent = 'Focus session paused · 180 min left. Your previous status returns when the session ends.';
+        document.querySelector('#focus-toggle').textContent = 'Resume focus session'; document.querySelector('#focus-end').textContent = 'Finish focus session now';
+        const dialog = document.querySelector('#settings-dialog'), select = document.querySelector('#focus-select'), style = getComputedStyle(select);
+        select.closest('section').scrollIntoView({ block: 'center' });
+        const box = dialog.getBoundingClientRect(), field = select.getBoundingClientRect();
+        const buttons = [...select.closest('section').querySelectorAll('.dialog-actions button')].filter(button => !button.hidden).map(button => button.getBoundingClientRect());
+        return { appearance: style.appearance, arrow: style.backgroundImage, paddingRight: parseFloat(style.paddingRight),
+          inside: field.left >= box.left && field.right <= box.right, overflow: dialog.scrollWidth > dialog.clientWidth,
+          buttons: buttons.every(button => button.left >= box.left && button.right <= box.right),
+          textOverlap: buttons.some((a, i) => buttons.some((b, j) => i < j && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)) }; })()`);
+      assert(focusLayout.appearance === 'none' && focusLayout.arrow !== 'none' && focusLayout.paddingRight >= 32 && focusLayout.inside && !focusLayout.overflow && focusLayout.buttons && !focusLayout.textOverlap,
+        `Focus settings are inconsistent at ${width} px in ${theme}: ${JSON.stringify(focusLayout)}`);
+      await delay(400); // Let the theme's color transitions finish before the review screenshot.
+      const focusShot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
+      writeFileSync(join(dist, `ui-audit-focus-${theme}-${width}.png`), Buffer.from(focusShot.data, 'base64'));
+    }
+    await evaluate("document.documentElement.dataset.theme = 'light'; document.querySelector('#focus-end').click()");
+    await waitFor(`window.lumilan.state().then(s => s.me.status === ${JSON.stringify(statusBefore)} && !document.querySelector('#focus-start').hidden)`, 'focus session ended and status restored');
+    await evaluate("document.querySelector('#focus-select').value = '0'; document.querySelector('#focus-select').dispatchEvent(new Event('change'))");
+    await waitFor("window.lumilan.notificationSettings().then(s => s.focus === 0)", 'focus setting off');
+    await evaluate("document.querySelector('#settings-dialog').close()");
+    assert.equal(failures.length, 0, `Renderer errors after focus: ${failures.join('; ')}`);
+    console.log('Focus: main-window start/end with status broadcast and restore, shared select style, light/dark 375/320 px passed');
+    // Routine and Tasks in Settings: the main-window home of Lumi's pages for Wayland and for people who turn Lumi off.
+    await setViewport(1100, 800);
+    await evaluate("document.querySelector('#settings-button').click()");
+    await waitFor("document.querySelector('#settings-dialog').open && document.querySelector('#routine-serving').options.length > 0 && document.querySelector('#routine-end').options.length === 24", 'routine settings filled');
+    await evaluate(`(() => { for (const [id, value] of [['#routine-serving', '250'], ['#routine-goal', '1500'], ['#routine-start', '8'], ['#routine-end', '22'], ['#routine-interval', '60']])
+      document.querySelector(id).value = value; document.querySelector('#routine-enabled').checked = true; document.querySelector('#routine-save').click(); })()`);
+    await waitFor("window.lumilan.routineState().then(v => v.settings.enabled && v.settings.goalMl === 1500 && v.settings.intervalMinutes === 60)", 'routine saved');
+    await evaluate("document.querySelector('#routine-start').value = '20'; document.querySelector('#routine-end').value = '9'; document.querySelector('#routine-save').click()");
+    await delay(300);
+    assert.equal(await evaluate<number>("window.lumilan.routineState().then(v => v.settings.startHour)", true), 8, 'An end time before the start time was saved');
+    await evaluate("document.querySelector('#routine-drink').click()");
+    await waitFor("window.lumilan.routineState().then(v => v.todayMl === 250 && /0[.,][23]/.test(document.querySelector('#routine-status').textContent))", 'drink logged in Settings');
+    await evaluate("document.querySelector('#tasks-title').value = 'Kirim laporan mingguan'; document.querySelector('#tasks-form').requestSubmit()");
+    await waitFor("window.lumilan.tasksState().then(v => v.total === 1 && document.querySelectorAll('#tasks-list li').length === 1)", 'task added');
+    await evaluate("document.querySelector('#tasks-list input').click()");
+    await waitFor("window.lumilan.tasksState().then(v => v.done === 1 && document.querySelector('#tasks-list li').classList.contains('done'))", 'task done');
+    // A due time is backed by a local reminder; removing the due time withdraws it.
+    await evaluate(`(() => { const d = new Date(Date.now() + 2 * 3600_000), p = n => String(n).padStart(2, '0');
+      document.querySelector('#tasks-title').value = 'Tugas berwaktu'; document.querySelector('#tasks-due').value = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+      document.querySelector('#tasks-form').requestSubmit(); })()`);
+    await waitFor("window.lumilan.reminders().then(r => r.some(x => x.title === 'Tugas berwaktu' && x.status === 'scheduled'))", 'due task scheduled as a reminder');
+    await evaluate("[...document.querySelectorAll('#tasks-list li')].find(li => li.textContent.includes('Tugas berwaktu')).querySelector('.task-actions button').click()");
+    await waitFor("!document.querySelector('#tasks-cancel').hidden && document.querySelector('#tasks-title').value === 'Tugas berwaktu' && document.querySelector('#tasks-due').value !== ''", 'task edit form');
+    await evaluate("document.querySelector('#tasks-due').value = ''; document.querySelector('#tasks-form').requestSubmit()");
+    await waitFor("window.lumilan.reminders().then(r => !r.some(x => x.title === 'Tugas berwaktu') && document.querySelector('#tasks-cancel').hidden)", 'removing the due time withdrew the reminder');
+    for (const width of [375, 320]) for (const theme of ['light', 'dark']) {
+      await setViewport(width, 700);
+      const pageLayout = await evaluate<{ appearance: string; arrow: string; paddingRight: number; inside: boolean; overflow: boolean; rows: boolean; buttons: boolean }>(`(() => {
+        document.documentElement.dataset.theme = '${theme}';
+        document.querySelector('#routine-status').textContent = 'Today 0.3 of 1.5 L · Next at 16:00 · a long translated line that must wrap inside the dialog';
+        const dialog = document.querySelector('#settings-dialog'), select = document.querySelector('#routine-interval'), style = getComputedStyle(select);
+        document.querySelector('#tasks-section').scrollIntoView({ block: 'center' });
+        const box = dialog.getBoundingClientRect(), field = select.getBoundingClientRect();
+        const rows = [...document.querySelectorAll('#tasks-list li')].map(row => row.getBoundingClientRect());
+        const buttons = [...document.querySelectorAll('#tasks-list button, #routine-section .dialog-actions button, #tasks-form button')].filter(button => !button.hidden).map(button => button.getBoundingClientRect());
+        return { appearance: style.appearance, arrow: style.backgroundImage, paddingRight: parseFloat(style.paddingRight),
+          inside: field.left >= box.left && field.right <= box.right, overflow: dialog.scrollWidth > dialog.clientWidth,
+          rows: rows.every(row => row.left >= box.left && row.right <= box.right),
+          buttons: buttons.every(button => button.left >= box.left && button.right <= box.right) && !buttons.some((a, i) => buttons.some((b, j) => i < j && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)) }; })()`);
+      assert(pageLayout.appearance === 'none' && pageLayout.arrow !== 'none' && pageLayout.paddingRight >= 32 && pageLayout.inside && !pageLayout.overflow && pageLayout.rows && pageLayout.buttons,
+        `Routine and Tasks settings are inconsistent at ${width} px in ${theme}: ${JSON.stringify(pageLayout)}`);
+      await delay(400);
+      const pageShot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
+      writeFileSync(join(dist, `ui-audit-routine-tasks-${theme}-${width}.png`), Buffer.from(pageShot.data, 'base64'));
+    }
+    await evaluate("document.documentElement.dataset.theme = 'light'");
+    await evaluate("window.lumilan.tasksState().then(async v => { for (const item of v.items) await window.lumilan.tasks({ action: 'delete', value: item.id }); })");
+    await evaluate(`window.lumilan.routine({ action: 'settings', value: { enabled: false, servingMl: 250, goalMl: 2000, startHour: 8, endHour: 22, intervalMinutes: 60 } })`);
+    await waitFor("window.lumilan.tasksState().then(v => v.total === 0 && document.querySelectorAll('#tasks-list li').length === 0)", 'tasks cleaned up');
+    await evaluate("document.querySelector('#settings-dialog').close()");
+    assert.equal(failures.length, 0, `Renderer errors after routine and tasks: ${failures.join('; ')}`);
+    console.log('Routine and Tasks: Settings save/validation, drink, add/done/edit/delete, due task reminder link, shared select style, light/dark 375/320 px passed');
+    // Settings → Shelf: the main-window home of Lumi's shelf. A file dropped here is listed, opened and removed; the file stays.
+    const shelfFile = join(profile, 'smoke-shelf.txt');
+    writeFileSync(shelfFile, 'Lumilan shelf smoke');
+    await setViewport(1100, 800);
+    await evaluate("document.querySelector('#settings-button').click()");
+    await waitFor("document.querySelector('#settings-dialog').open && document.querySelectorAll('#shelf-items li.empty').length === 1", 'empty shelf in Settings');
+    await evaluate("(() => { const input = document.createElement('input'); input.type = 'file'; input.id = 'smoke-shelf-input'; input.hidden = true; document.querySelector('#shelf-section').append(input); return true; })()");
+    const shelfDom = await send('DOM.getDocument');
+    const shelfNode = await send('DOM.querySelector', { nodeId: shelfDom.root.nodeId, selector: '#smoke-shelf-input' });
+    await send('DOM.setFileInputFiles', { nodeId: shelfNode.nodeId, files: [shelfFile] });
+    await evaluate(`(() => { const d = new DataTransfer(); d.items.add(document.querySelector('#smoke-shelf-input').files[0]); const zone = document.querySelector('#shelf-drop-zone');
+      for (const type of ['dragenter', 'dragover', 'drop']) zone.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: d })); return true; })()`);
+    await waitFor("window.lumilan.shelf({ op: 'list' }).then(v => v.items.length === 1 && v.items[0].name === 'smoke-shelf.txt' && document.querySelectorAll('#shelf-items li:not(.empty)').length === 1)", 'file shelved from Settings');
+    assert(!(await evaluate<string>("window.lumilan.shelf({ op: 'list' }).then(v => JSON.stringify(v))", true)).includes('lumilan-ui-smoke-'), 'A path reached the Settings view');
+    for (const theme of ['light', 'dark']) {
+      await setViewport(320, 700);
+      const shelfLayout = await evaluate<{ inside: boolean; overflow: boolean }>(`(() => { document.documentElement.dataset.theme = '${theme}';
+        const dialog = document.querySelector('#settings-dialog'), box = dialog.getBoundingClientRect(); document.querySelector('#shelf-section').scrollIntoView({ block: 'center' });
+        const parts = [document.querySelector('#shelf-drop-zone'), ...document.querySelectorAll('#shelf-items li, #shelf-items button')].map(e => e.getBoundingClientRect());
+        return { inside: parts.every(r => r.left >= box.left && r.right <= box.right), overflow: dialog.scrollWidth > dialog.clientWidth }; })()`);
+      assert(shelfLayout.inside && !shelfLayout.overflow, `Settings shelf overflows at 320 px in ${theme}: ${JSON.stringify(shelfLayout)}`);
+      await delay(400);
+      const shelfShot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
+      writeFileSync(join(dist, `ui-audit-shelf-${theme}-320.png`), Buffer.from(shelfShot.data, 'base64'));
+    }
+    await evaluate("document.documentElement.dataset.theme = 'light'; [...document.querySelectorAll('#shelf-items .task-actions button')][1].click()");
+    await waitFor("window.lumilan.shelf({ op: 'list' }).then(v => v.items.length === 0 && document.querySelectorAll('#shelf-items li.empty').length === 1)", 'shelf item removed in Settings');
+    assert(existsSync(shelfFile), 'Removing from the shelf deleted the file');
+    await evaluate("document.querySelector('#settings-dialog').close()");
+    assert.equal(failures.length, 0, `Renderer errors after the Settings shelf: ${failures.join('; ')}`);
+    console.log('Shelf: Settings drop, list without paths, remove keeps the file, light/dark 320 px passed');
     await setViewport(320, 700);
     const minimumShell = await evaluate<{ topbarOverflow:boolean; pageOverflow:boolean }>(`(() => { const topbar = document.querySelector('.topbar');
       return { topbarOverflow: topbar.scrollWidth > topbar.clientWidth, pageOverflow: document.documentElement.scrollWidth > innerWidth }; })()`);

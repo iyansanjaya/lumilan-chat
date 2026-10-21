@@ -4,7 +4,9 @@ import { EventEmitter } from 'node:events';
 import { LumiNotch, notchBounds } from '../src/main/notch.js';
 import type { NotchIpcEvent, NotchPeer, NotchReminder } from '../src/main/notch.js';
 import type { BrowserWindowConstructorOptions, Rectangle } from 'electron';
-import type { NotchSettings, NotchSnapshot } from '../src/shared/notch.js';
+import type { NotchSettings, NotchSnapshot, RoutineView, ShelfDropResult, ShelfView, TasksView } from '../src/shared/notch.js';
+import { FocusTimer, type FocusEnd } from '../src/main/focus.js';
+import type { Status } from '../src/shared/model.js';
 
 class TestContents extends EventEmitter {
   mainFrame = { url: 'lumilan://app/notch.html' };
@@ -21,6 +23,8 @@ class Window extends EventEmitter {
   focused = false;
   ignored = false;
   bounds: Rectangle = { x: 0, y: 0, width: 0, height: 0 };
+  shape: Rectangle[] | undefined;
+  level: string | undefined;
   last: NotchSnapshot | undefined;
   open: (details: { url: string }) => { action: 'deny' } = () => ({ action: 'deny' });
   constructor(readonly options: BrowserWindowConstructorOptions) {
@@ -28,7 +32,12 @@ class Window extends EventEmitter {
   }
   isDestroyed() { return this.dead; }
   isMinimized() { return false; }
-  setAlwaysOnTop() {} setFocusable(value: boolean) {
+  setAlwaysOnTop(_value: boolean, level: string) { this.level = level; }
+  setShape(rects: Rectangle[]) {
+    assert.notEqual(process.platform, 'darwin', 'Electron setShape is only available on Windows/Linux');
+    this.shape = rects;
+  }
+  setFocusable(value: boolean) {
     assert.notEqual(process.platform, 'linux', 'Electron setFocusable is only available on Windows/macOS');
     this.focusable = value;
   }
@@ -54,8 +63,12 @@ function selectedItem(notch: LumiNotch<Window>) { const item = notch.selected();
 function itemOf(notch: LumiNotch<Window>, key: string) { const item = notch.items.get(key); assert(item); return item; }
 
 
-function fixture() {
-  const display = { id: 1, workArea: { x: 0, y: 0, width: 1920, height: 1080 } };
+function pointer(notch: LumiNotch<Window>, inside: boolean) {
+  notch.ipcMain.emit('lumi:pointer', { sender: windowOf(notch).webContents, senderFrame: windowOf(notch).webContents.mainFrame }, inside);
+}
+
+function fixture(pages: ConstructorParameters<typeof LumiNotch>[0]['pages'] = undefined, addToShelf?: (paths: string[]) => Promise<ShelfDropResult>) {
+  const display = { id: 1, workArea: { x: 0, y: 0, width: 1920, height: 1080 }, bounds: { x: 0, y: 0, width: 1920, height: 1080 } };
   const screen = Object.assign(new EventEmitter(), { getPrimaryDisplay: () => display, getAllDisplays: () => [display], getDisplayNearestPoint: () => display, getCursorScreenPoint: () => ({ x: 500, y: 0 }) });
   const ipcMain = new TestIpc();
   const main = { visible: false, minimized: false, focused: false, fullScreen: false, isDestroyed: () => false, isVisible: () => main.visible,
@@ -63,25 +76,46 @@ function fixture() {
   // The person watches the main window only while it is visible, focused and recently used.
   const watch = (value: boolean) => { main.visible = main.focused = value; };
   const clock = { idle: 0, getSystemIdleTime: () => clock.idle };
-  const settings: NotchSettings = { notch: true, enabled: true, preview: false, silent: true, language: 'id' };
-  const peer: NotchPeer & { state: { status: string; mutedThreads: string[]; reminders: NotchReminder[] } } = { state: { status: 'active', mutedThreads: [], reminders: [] }, trusted: new Map([['alice', { name: 'Alice' }]]), sendCall: async () => { peer.activeCall = null; } };
-  const decisions: Array<[string, boolean]> = [], opens: Array<string | undefined> = [], accepts: string[] = [], pending = new Set(['f1']);
+  const settings: NotchSettings = { notch: true, enabled: true, preview: false, silent: true, language: 'id', focus: 0, notchIdle: 'always' };
+  const peer: NotchPeer & { state: { status: Status; mutedThreads: string[]; reminders: NotchReminder[] } } = { state: { status: 'active', mutedThreads: [], reminders: [] }, trusted: new Map([['alice', { name: 'Alice' }]]), sendCall: async () => { peer.activeCall = null; } };
+  const decisions: Array<[string, boolean]> = [], opens: Array<string | undefined> = [], accepts: string[] = [], pending = new Set(['f1']), ends: FocusEnd[] = [];
+  // Wired like main: a status change reaches Lumi through the peer change event.
+  const focus = new FocusTimer({ read: () => undefined, write: () => {}, getStatus: () => peer.state.status,
+    setStatus: status => { peer.state.status = status; notch.prune(); }, onChange: () => notch.sync(), onEnd: end => ends.push(end) });
   const notch = new LumiNotch({ BrowserWindow: Window, ipcMain, screen, powerMonitor: new EventEmitter(), idleClock: clock, preloadDir: '.', getMain: () => main,
     getSettings: () => settings, getPeer: () => peer, reveal: thread => opens.push(thread), acceptCall: id => accepts.push(id),
     decideFile: async (id, value) => { if (!pending.delete(id)) throw new Error('expired'); decisions.push([id, value]); },
-    savePosition: value => { settings.notchPosition = value; } });
+    savePosition: value => { settings.notchPosition = value; }, getFocus: () => focus.view(),
+    focusAction: (type, minutes) => type === 'start' ? focus.start(minutes) : type === 'pause' ? focus.pause() : type === 'resume' ? focus.resume() : focus.end(), ...(pages ? { pages } : {}), ...(addToShelf ? { addToShelf } : {}) });
   notch.sync(); notch.ready = true;
-  return { notch, settings, peer, main, watch, clock, ipcMain, decisions, opens, accepts, pending };
+  return { notch, settings, peer, main, watch, clock, ipcMain, decisions, opens, accepts, pending, focus, ends };
 }
 
 test('Lumi bounds remain inside small, negative-coordinate and scaled display work areas', () => {
   for (const area of [{ x: -1600, y: 25, width: 1600, height: 900 }, { x: 0, y: 40, width: 320, height: 260 }]) {
-    for (const mode of ['hidden', 'compact', 'expanded'] as const) for (const fraction of [NaN, -500, 0, .5, 1, 500]) {
-      const b = notchBounds({ workArea: area }, mode, fraction);
+    for (const fraction of [NaN, -500, 0, .5, 1, 500]) {
+      const b = notchBounds({ workArea: area }, fraction);
       assert(b.x >= area.x && b.x + b.width <= area.x + area.width);
       assert(b.y >= area.y && b.y + b.height <= area.y + area.height);
+      assert(b.width <= 420 && b.height <= 400 && b.inset === 0);
     }
   }
+});
+
+test('Lumi covers a macOS camera notch only beside a notch-height menu bar', () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  try {
+    // 37 pt: MacBook menu bar beside a camera notch. 25 pt: an ordinary Mac or external display menu bar.
+    for (const [platform, top, inset] of [['darwin', 37, 37], ['darwin', 25, 0], ['win32', 37, 0], ['linux', 37, 0]] as const) {
+      Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+      const screen = { x: 1512, y: -200, width: 1512, height: 982 };
+      const b = notchBounds({ workArea: { ...screen, y: screen.y + top, height: screen.height - top }, bounds: screen });
+      assert.equal(b.inset, inset, `${platform} ${top}`);
+      assert.equal(b.y, inset ? screen.y : screen.y + top, 'The island must start at the screen edge only over a notch');
+      assert.deepEqual([b.x, b.width, b.height], [screen.x + 546, 420, 400]);
+      assert(b.y + b.height <= screen.y + screen.height);
+    }
+  } finally { Object.defineProperty(process, 'platform', platformDescriptor!); }
 });
 
 test('Lumi reminders redact queued content, obey mute, remove answered requests, and never grant consent',async()=>{
@@ -120,6 +154,7 @@ test('Lumi IPC rejects foreign windows, frames, URLs and arbitrary actions', asy
 
 test('Lumi redacts queued content immediately and obeys DND, mute, visibility and notification settings', async () => {
   const { notch, settings, peer, watch } = fixture();
+  settings.notchIdle = 'away';
   try {
     notch.message({}, 'alice', 'Alice', '<img src=x onerror=alert(1)> secret');
     assert.equal(notch.mode, 'compact', 'Ordinary messages must not automatically cover the desktop with a full card');
@@ -142,7 +177,8 @@ test('Lumi redacts queued content immediately and obeys DND, mute, visibility an
 });
 
 test('Lumi covers a visible main window behind other windows without taking focus and withdraws once it is watched', () => {
-  const { notch, main, watch } = fixture();
+  const { notch, main, watch, settings } = fixture();
+  settings.notchIdle = 'away';
   try {
     watch(true); notch.sync();
     assert.equal(notch.message({}, 'alice', 'Alice', 'While reading'), false, 'Lumi interrupted a main window being watched');
@@ -155,7 +191,7 @@ test('Lumi covers a visible main window behind other windows without taking focu
     assert.equal(windowOf(notch).visible, false, 'An idle strip appeared over a main window that is only behind other windows');
     assert.equal(notch.timers.size, 0);
     main.visible = false; notch.sync(); // Closed to the tray: the strip leads back to the queue.
-    assert.equal(windowOf(notch).visible, true); assert.equal(windowOf(notch).bounds.height, 5);
+    assert.equal(windowOf(notch).visible, true); assert.deepEqual([windowOf(notch).bounds.width, windowOf(notch).bounds.height], [420, 400]);
     main.visible = true; notch.sync();
     assert.equal(windowOf(notch).visible, false, 'Restoring the main window behind others kept the idle strip');
     notch.message({}, 'alice', 'Alice', 'Second arrival behind another window');
@@ -169,7 +205,8 @@ test('Lumi covers a visible main window behind other windows without taking focu
 });
 
 test('Lumi covers a focused main window only after the person has been away for three minutes', () => {
-  const { notch, watch, clock } = fixture();
+  const { notch, watch, clock, settings } = fixture();
+  settings.notchIdle = 'away';
   try {
     watch(true);
     clock.idle = 179; assert.equal(notch.message({}, 'alice', 'Alice', 'Still here'), false);
@@ -192,7 +229,8 @@ test('Lumi prioritizes consent, rechecks expired IDs, prevents double consent an
     await notch.action({ type: 'peek' }); assert.equal(notch.mode, 'expanded', 'A stale hover must not collapse a new consent card');
     notch.pointerInside = true;
     notch.ipcMain.emit('lumi:pointer', { sender: windowOf(notch).webContents, senderFrame: windowOf(notch).webContents.mainFrame }, false);
-    assert.equal(windowOf(notch).ignored, false, 'Expanded consent became click-through and lost focus before the leave timer');
+    // The fixed window is larger than the panel: outside the island it must pass clicks to the desktop below.
+    assert.equal(windowOf(notch).ignored, process.platform !== 'linux', 'The transparent area beside the expanded panel intercepted clicks');
     await notch.action({ type: 'collapse' }); assert.equal(windowOf(notch).ignored, process.platform !== 'linux');
     await notch.action({ type: 'expand' }); assert.equal(windowOf(notch).ignored, false);
     for (let i = 0; i < 100; i++) notch.message({}, `thread-${i}`, 'Sender', 'Message');
@@ -380,14 +418,18 @@ test('Lumi automatically hides manual and automatic previews without deleting pe
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { notch, settings, decisions } = fixture();
   try {
-    await notch.action({ type: 'peek' });
-    t.mock.timers.tick(3999); assert.equal(notch.mode, 'compact');
+    notch.sync(); // The idle pill is on screen before the pointer reaches it.
+    pointer(notch, true); await notch.action({ type: 'peek' });
+    t.mock.timers.tick(10_000); assert.equal(notch.mode, 'compact', 'A hover peek closed under the pointer');
+    pointer(notch, false);
+    t.mock.timers.tick(399); assert.equal(notch.mode, 'compact');
     t.mock.timers.tick(1); assert.equal(notch.mode, 'hidden');
     notch.setMode('expanded'); // Also used by the tray's Show Lumi action.
-    notch.pointerInside = true; // A stationary cursor must not keep the panel open indefinitely.
+    notch.pointerInside = true; // A stationary cursor must not keep an automatic panel open indefinitely.
     t.mock.timers.tick(4000); assert.equal(notch.mode, 'hidden');
     await notch.action({ type: 'expand' }); assert.equal(windowOf(notch).isFocused(), true);
-    t.mock.timers.tick(4000); assert.equal(notch.mode, 'hidden');
+    t.mock.timers.tick(10_000); assert.equal(notch.mode, 'expanded', 'A panel the person opened closed under the pointer');
+    pointer(notch, false); t.mock.timers.tick(400); assert.equal(notch.mode, 'hidden');
     assert.equal(windowOf(notch).isFocused(), false, 'The closed preview kept keyboard focus');
     assert.equal(windowOf(notch).ignored, process.platform !== 'linux', 'The hidden transparent area still intercepts mouse clicks');
     notch.message({}, 'alice', 'Alice', 'Unread message');
@@ -425,27 +467,42 @@ test('Lumi activity renews the deadline, while stale activity and background pro
     t.mock.timers.tick(150); assert.equal(notch.mode, 'hidden');
     assert.equal(notch.timers.size, 0);
     await notch.action({ type: 'expand' });
-    t.mock.timers.tick(4000); assert.equal(notch.mode, 'hidden');
+    pointer(notch, false); t.mock.timers.tick(400); assert.equal(notch.mode, 'hidden');
   } finally { notch.dispose(); }
 });
 
-test('Lumi accepts bounded content heights only for the current expanded panel and keeps its dismissal deadline', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { notch } = fixture();
-  try {
-    await notch.action({ type: 'expand' });
-    const revision = notch.revision;
-    for (const height of [NaN, Infinity, '200', 200.5, 139, 361]) await assert.rejects(notch.action({ type: 'resize', height, revision }));
-    assert.equal(await notch.action({ type: 'resize', height: 185, revision: revision - 1 }), false);
-    assert.equal(await notch.action({ type: 'resize', height: 185, revision }), true);
-    assert.equal(windowOf(notch).bounds.height, 185);
-    t.mock.timers.tick(3000);
-    await notch.action({ type: 'resize', height: 227, revision });
-    assert.equal(windowOf(notch).bounds.height, 227);
-    t.mock.timers.tick(1000); assert.equal(notch.mode, 'hidden', 'Layout changes extended the preview deadline');
-    assert.equal(await notch.action({ type: 'resize', height: 360, revision }), false);
-    assert.equal(windowOf(notch).bounds.height, 5, 'Stale layout expanded the hidden wake strip');
-  } finally { notch.dispose(); }
+test('Lumi keeps one fixed window and shapes it to the island only where X11 cannot forward clicks', async t => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  const sessionType = process.env.XDG_SESSION_TYPE;
+  for (const platform of ['win32', 'darwin', 'linux'] as const) {
+    await t.test(platform, async () => {
+      let notch: LumiNotch<Window> | undefined;
+      try {
+        Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+        process.env.XDG_SESSION_TYPE = 'x11';
+        notch = fixture().notch;
+        notch.message({}, 'alice', 'Alice', 'Test');
+        const win = windowOf(notch), fixed = { ...win.bounds };
+        assert.deepEqual([fixed.width, fixed.height], [420, 400]);
+        for (const shape of [{ width: NaN, height: 30 }, { width: 0, height: 30 }, { width: 1.5, height: 30 }, { width: '200', height: 30 },
+          { width: 421, height: 30 }, { width: 120, height: 401 }, { width: 120 }, { width: 120, height: 30, x: 0 }, { width: 120, height: 30, shoulder: 10 }])
+          await assert.rejects(notch.action({ type: 'shape', ...shape }));
+        assert.equal(win.shape, undefined, 'An invalid shape reached the native window');
+        assert.equal(await notch.action({ type: 'shape', width: 320, height: 64 }), true);
+        // Centered in the 420 DIP window with one DIP of slack on each side, plus a band for the top shoulders.
+        assert.deepEqual(win.shape, platform === 'linux' ? [{ x: 49, y: 0, width: 322, height: 64 }, { x: 39, y: 0, width: 342, height: 10 }] : undefined);
+        await notch.action({ type: 'expand' }); assert.equal(notch.mode, 'expanded');
+        notch.collapse(); assert.equal(notch.mode, 'hidden');
+        assert.deepEqual(win.bounds, fixed, 'A mode change resized the native window instead of morphing the island');
+        assert.equal(notch.snapshot().inset, 0);
+      } finally {
+        notch?.dispose();
+        Object.defineProperty(process, 'platform', platformDescriptor!);
+        if (sessionType === undefined) delete process.env.XDG_SESSION_TYPE;
+        else process.env.XDG_SESSION_TYPE = sessionType;
+      }
+    });
+  }
 });
 
 test('Lumi focus respects Windows/macOS, X11 and Wayland capabilities', async t => {
@@ -458,6 +515,7 @@ test('Lumi focus respects Windows/macOS, X11 and Wayland capabilities', async t 
         Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
         process.env.XDG_SESSION_TYPE = session;
         const context = fixture(); notch = context.notch;
+        context.settings.notchIdle = 'away';
         assert.equal(notch.supported, session !== 'wayland');
         assert.equal(notch.message({}, 'alice', 'Alice', 'Test'), session !== 'wayland');
         if (session === 'wayland') {
@@ -469,11 +527,16 @@ test('Lumi focus respects Windows/macOS, X11 and Wayland capabilities', async t 
         }
         assert.equal(windowOf(notch).options.focusable, platform === 'linux');
         assert.equal(windowOf(notch).options.type, platform === 'darwin' ? 'panel' : undefined, 'macOS needs a native panel to follow Spaces and fullscreen apps');
+        assert.equal(windowOf(notch).options.enableLargerThanScreen, platform === 'darwin' ? true : undefined, 'AppKit keeps a window below the menu bar without it');
+        assert.equal(windowOf(notch).level, platform === 'darwin' ? 'status' : 'floating', 'The macOS island must sit above the menu bar');
         assert.equal(windowOf(notch).isFocused(), false, 'Automatic notifications must not steal focus');
         await notch.action({ type: 'expand' });
         assert.equal(windowOf(notch).focusable, true);
         assert.equal(windowOf(notch).isFocused(), true);
         assert.equal(windowOf(notch).ignored, false, 'Manual expansion must allow pointer input');
+        notch.ipcMain.emit('lumi:pointer', { sender: windowOf(notch).webContents, senderFrame: windowOf(notch).webContents.mainFrame }, false);
+        assert.equal(windowOf(notch).ignored, platform !== 'linux', 'Beside the expanded island, Windows/macOS must pass clicks through; X11 uses the shape');
+        assert.equal(windowOf(notch).isFocused(), true, 'Leaving the island must keep keyboard focus in the expanded panel');
         context.watch(true); notch.sync();
         assert.equal(windowOf(notch).visible, false);
         assert.equal(windowOf(notch).focusable, platform === 'linux');
@@ -493,4 +556,232 @@ test('Lumi focus respects Windows/macOS, X11 and Wayland capabilities', async t 
       }
     });
   }
+});
+
+test('Lumi focus actions are opt-in and validated, and the session keeps the idle pill while arrivals wait quietly', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const { notch, settings, peer, focus, ends } = fixture();
+  try {
+    await assert.rejects(notch.action({ type: 'focus', minutes: 25 }), /ditolak/, 'Focus started before the person opted in');
+    settings.focus = 25;
+    for (const action of [{ type: 'focus' }, { type: 'focus', minutes: 4 }, { type: 'focus', minutes: 181 }, { type: 'focus', minutes: 25.5 }, { type: 'focus', minutes: '25' },
+      { type: 'focus', minutes: 25, path: 'C:/secret' }, { type: 'peek', minutes: 25 }, { type: 'focus-pause', minutes: 25 }, { type: 'focus-pause' }, { type: 'focus-stop' }])
+      await assert.rejects(notch.action(action), JSON.stringify(action));
+    assert.deepEqual([peer.state.status, focus.session], ['active', undefined]);
+
+    await notch.action({ type: 'expand' });
+    await notch.action({ type: 'focus', minutes: 25 });
+    assert.equal(peer.state.status, 'dnd');
+    assert.equal(notch.mode, 'expanded', 'Starting a session closed the panel');
+    const card = selectedSnapshot(notch);
+    assert.deepEqual([card.key, card.kind, card.status, card.title, card.until, card.remaining], ['focus', 'focus', 'running', 'Sesi fokus', 1_000_000 + 25 * 60_000, undefined]);
+    assert.equal(notch.snapshot().count, 0, 'The session counted as an activity');
+    await notch.action({ type: 'collapse' });
+    assert.deepEqual([notch.mode, windowOf(notch).visible, notch.eligible()], ['hidden', true, false], 'The session lost its idle pill or let arrivals interrupt');
+
+    assert.equal(notch.message({}, 'alice', 'Alice', 'Held message'), false);
+    assert.equal(notch.file({ id: 'f1', thread: 'alice', fromName: 'Alice', name: 'a.zip', size: 1 }), false);
+    t.mock.timers.tick(200);
+    assert.deepEqual([notch.mode, selectedSnapshot(notch).key], ['hidden', 'focus'], 'An arrival took attention during the session');
+    const published = notch.lastPublication;
+    t.mock.timers.tick(10 * 60_000);
+    assert.deepEqual([notch.mode, notch.lastPublication], ['hidden', published], 'Time passing published or reopened the pill');
+
+    await notch.action({ type: 'focus-pause' });
+    assert.equal(notch.mode, 'hidden', 'Pausing reopened the hidden preview');
+    assert.deepEqual([selectedSnapshot(notch).status, selectedSnapshot(notch).until, selectedSnapshot(notch).remaining], ['paused', undefined, 15 * 60_000 - 200]);
+    await notch.action({ type: 'focus-resume' });
+    assert.equal(selectedSnapshot(notch).until, 1_000_000 + 25 * 60_000, 'Resume lost or added time');
+    await notch.action({ type: 'focus-end' });
+    assert.deepEqual([peer.state.status, ends.length, notch.snapshot().items.some(i => i.key === 'focus')], ['active', 1, false]);
+    assert.equal(notch.items.has('message:alice'), true, 'The held message was dropped');
+  } finally { focus.dispose(); notch.dispose(); }
+});
+
+test('Lumi Do not disturb without a focus session still hides the island', () => {
+  const { notch, peer, focus } = fixture();
+  try {
+    assert.deepEqual([notch.sync(), windowOf(notch).visible], [true, true]);
+    peer.state.status = 'dnd';
+    assert.deepEqual([notch.sync(), notch.shown(), windowOf(notch).visible], [false, false, false]);
+  } finally { focus.dispose(); notch.dispose(); }
+});
+
+test('Lumi shows one focus summary, redacted with previews off, that opens the conversations and leaves them unread', async () => {
+  const { notch, settings, peer, opens } = fixture();
+  try {
+    notch.focusDone({ count: 3, threads: 2, thread: 'inbox' }, '3 pesan dari 2 percakapan');
+    assert.equal(notch.mode, 'compact');
+    let card = selectedSnapshot(notch);
+    assert.deepEqual([card.kind, card.status, card.title, card.body], ['focus', 'done', 'Lumilan Chat', 'Sesi fokus selesai.']);
+    settings.preview = true; card = selectedSnapshot(notch);
+    assert.deepEqual([card.title, card.body], ['Sesi fokus selesai', '3 pesan dari 2 percakapan']);
+    notch.focusDone({ count: 1, threads: 1, thread: 'alice' }, '1 pesan dari 1 percakapan');
+    assert.equal(notch.items.size, 1, 'A second summary was queued beside the first');
+    await notch.action({ type: 'open', key: 'focus:done' });
+    assert.deepEqual([opens, notch.items.size], [['alice'], 0]);
+    peer.state.mutedThreads = ['alice'];
+    assert.equal(notch.focusDone({ count: 1, threads: 1, thread: 'alice' }, 'x'), false, 'A muted conversation produced a summary');
+    peer.state.mutedThreads = [];
+    notch.focusDone({ count: 1, threads: 1, thread: 'alice' }, 'x'); notch.dismiss('alice');
+    assert.equal(notch.items.size, 0, 'Reading the conversation kept its summary');
+  } finally { notch.dispose(); }
+});
+
+test('Lumi keeps its idle pill over a watched main window and only badges arrivals there', async () => {
+  const { notch, settings, watch } = fixture();
+  try {
+    watch(true);
+    assert.deepEqual([notch.sync(), windowOf(notch).visible, notch.mode], [true, true, 'hidden'], 'The pill left a watched main window');
+    assert.equal(notch.message({}, 'alice', 'Alice', 'While reading'), false, 'Lumi interrupted a main window being watched');
+    assert.deepEqual([notch.mode, notch.snapshot().count, selectedSnapshot(notch).key], ['hidden', 1, 'message:alice']);
+    assert.equal(windowOf(notch).isFocused(), false);
+    notch.dismiss('alice');
+    assert.equal(notch.snapshot().count, 0, 'Reading the conversation kept the badge');
+    await notch.action({ type: 'expand' }); assert.equal(notch.mode, 'expanded');
+    await notch.action({ type: 'collapse' });
+    watch(false);
+    assert.equal(notch.message({}, 'alice', 'Alice', 'Away again'), true);
+    assert.equal(notch.mode, 'compact');
+    notch.collapse(); settings.notchIdle = 'away'; watch(true);
+    assert.deepEqual([notch.sync(), windowOf(notch).visible], [false, false], "'away' kept the pill over a watched window");
+    assert.equal(notch.timers.size, 0, 'The idle pill must not poll');
+  } finally { notch.dispose(); }
+});
+
+test('Lumi stays open under the pointer after the person opens it and closes shortly after the pointer leaves', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { notch } = fixture();
+  try {
+    notch.sync(); // The idle pill is on screen before the person clicks it.
+    await notch.action({ type: 'expand' });
+    t.mock.timers.tick(60_000); assert.equal(notch.mode, 'expanded');
+    assert.equal(notch.timers.size, 0, 'An open panel under the pointer kept a timer');
+    pointer(notch, false); t.mock.timers.tick(399); assert.equal(notch.mode, 'expanded');
+    pointer(notch, true); t.mock.timers.tick(5000); assert.equal(notch.mode, 'expanded', 'Returning to the island did not cancel the close');
+    pointer(notch, false);
+    notch.file({ id: 'f1', fromName: 'Alice', name: 'Test.zip', size: 100, thread: 'alice' });
+    t.mock.timers.tick(400); assert.equal(notch.mode, 'expanded', 'A request arriving after the pointer left used the hover close');
+    t.mock.timers.tick(6600); assert.equal(notch.mode, 'hidden');
+    // Typing in the panel survives the pointer drifting off the island; finishing the edit restores the hover close.
+    await notch.action({ type: 'expand' });
+    await notch.action({ type: 'editing', value: true });
+    pointer(notch, false); t.mock.timers.tick(10_000); assert.equal(notch.mode, 'expanded', 'The pointer leaving discarded the typing');
+    await notch.action({ type: 'editing', value: false }); t.mock.timers.tick(400); assert.equal(notch.mode, 'hidden');
+    for (const action of [{ type: 'editing' }, { type: 'editing', value: 'yes' }, { type: 'editing', value: true, action: 'add' }, { type: 'peek', value: true }])
+      await assert.rejects(notch.action(action), JSON.stringify(action));
+    await notch.action({ type: 'editing', value: true });
+    assert.equal(notch.editing, false, 'A closed panel accepted a typing hold');
+    await notch.action({ type: 'expand' });
+    windowOf(notch).emit('blur'); assert.deepEqual([notch.mode, notch.held], ['hidden', false]);
+    await notch.action({ type: 'expand' });
+    notch.remove('file:f1');
+    assert.equal(notch.mode, 'expanded', 'Answering the last card closed a panel the person is using');
+  } finally { notch.dispose(); }
+});
+
+test('Lumi device notices are passing, rate-limited, and quiet under lock and Do not disturb', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const { notch, peer, settings, focus } = fixture();
+  try {
+    notch.powerMonitor.emit('on-battery');
+    assert.deepEqual([notch.mode, selectedSnapshot(notch).key, selectedSnapshot(notch).status], ['compact', 'device:power', 'battery']);
+    assert.equal(selectedSnapshot(notch).title, 'Daya', 'A device notice was redacted like private content');
+    assert.equal(notch.snapshot().count, 0, 'A device notice counted as queued activity');
+    const revision = notch.revision;
+    notch.powerMonitor.emit('on-battery'); assert.equal(notch.revision, revision, 'A repeated event took attention again');
+    notch.powerMonitor.emit('on-ac');
+    assert.deepEqual([notch.revision, selectedSnapshot(notch).status], [revision, 'ac'], 'A change inside the window reopened the preview');
+    t.mock.timers.tick(4000); assert.equal(notch.mode, 'hidden');
+    assert.equal(notch.items.has('device:power'), false, 'A device notice outlived its preview');
+    notch.network(true); assert.equal(notch.mode, 'hidden', 'The starting network state was announced');
+    notch.network(false); assert.deepEqual([notch.mode, selectedSnapshot(notch).body], ['compact', 'Jaringan terputus']);
+    notch.collapse();
+    notch.presence(2); assert.deepEqual([selectedSnapshot(notch).key, selectedSnapshot(notch).count], ['device:peers', 2]);
+    notch.presence(3); assert.equal(selectedSnapshot(notch).count, 3);
+    notch.presence(0); assert.equal(notch.items.has('device:peers'), false);
+    notch.collapse(); notch.presence(1); assert.equal(notch.mode, 'hidden', 'Presence was announced again within ten minutes');
+    t.mock.timers.tick(60_000);
+    notch.powerMonitor.emit('lock-screen'); notch.powerMonitor.emit('on-battery');
+    assert.equal(notch.items.size, 0, 'A device notice was queued on a locked screen');
+    notch.powerMonitor.emit('unlock-screen'); peer.state.status = 'dnd'; notch.powerMonitor.emit('on-ac');
+    assert.equal(notch.items.size, 0, 'A device notice appeared during Do not disturb');
+    peer.state.status = 'active'; settings.focus = 25; focus.start(25); notch.powerMonitor.emit('on-battery');
+    assert.equal(notch.items.size, 0, 'A device notice interrupted a focus session');
+  } finally { focus.dispose(); notch.dispose(); }
+});
+
+test('Lumi page modules publish a view only while on and receive validated actions', async () => {
+  let on = true;
+  const calls: Array<[string, unknown]> = [];
+  const view: TasksView = { done: 1, total: 2, items: [{ id: 't1', title: 'Write report', done: false, dueAt: undefined }] };
+  const { notch } = fixture({ tasks: { view: () => on ? view : undefined, act: (action, value) => { if (action !== 'toggle') throw new Error('unknown'); calls.push([action, value]); } } });
+  try {
+    assert.deepEqual(notch.snapshot().pages, { tasks: view });
+    assert.equal(await notch.action({ type: 'tasks', action: 'toggle', value: 't1' }), true);
+    assert.deepEqual(calls, [['toggle', 't1']]);
+    for (const action of [{ type: 'tasks' }, { type: 'tasks', value: 't1' }, { type: 'shelf', action: 'open', value: 'x' }, { type: 'tasks', action: 'Toggle()', value: 't1' },
+      { type: 'tasks', action: 'toggle', value: 't1', path: 'C:/secret' }, { type: 'peek', action: 'toggle' }, { type: 'tasks', action: 'toggle', value: 'x'.repeat(5000) },
+      { type: 'tasks', action: 'remove', value: 't1' }])
+      await assert.rejects(notch.action(action), JSON.stringify(action).slice(0, 80));
+    on = false;
+    assert.deepEqual(notch.snapshot().pages, {}, 'A page stayed in the deck after its feature was turned off');
+    await assert.rejects(notch.action({ type: 'tasks', action: 'toggle', value: 't1' }), /ditolak/);
+    assert.equal(calls.length, 1, 'A refused action reached the module');
+  } finally { notch.dispose(); }
+});
+
+test('Lumi water card is not private, goes once the goal is reached, and is answered by Drink', async () => {
+  const routine: RoutineView = { settings: { enabled: true, servingMl: 250, goalMl: 2000, startHour: 8, endHour: 22, intervalMinutes: 60 }, todayMl: 500, percent: 25, reached: false,
+    hours: Array<number>(24).fill(0), nextAt: undefined };
+  const drinks: unknown[] = [];
+  const { notch } = fixture({ routine: { view: () => routine, act: action => { if (action !== 'drink') throw new Error('unknown'); drinks.push(action); routine.todayMl += 250; } } });
+  try {
+    assert.equal(notch.water('0.5 / 2.0 L'), true);
+    const card = selectedSnapshot(notch);
+    assert.deepEqual([card.kind, card.title, card.body, notch.mode], ['routine', 'Waktunya minum', '0.5 / 2.0 L', 'compact'], 'The water card was redacted or not previewed');
+    await notch.action({ type: 'routine', action: 'drink' });
+    assert.deepEqual([drinks.length, notch.items.has('routine:water')], [1, false], 'Drinking left the reminder card');
+    notch.water('0.8 / 2.0 L'); routine.reached = true; notch.sync();
+    assert.equal(notch.items.has('routine:water'), false, 'A reached goal kept the reminder card');
+    routine.reached = false; notch.water('0.8 / 2.0 L'); routine.settings.enabled = false; notch.sync();
+    assert.equal(notch.items.has('routine:water'), false, 'Turning reminders off kept the card');
+    assert.equal(notch.snapshot().pages.routine, routine);
+  } finally { notch.dispose(); }
+});
+
+test('Lumi shelf drops reach main only as validated paths from the Lumi window, and a drag opens the shelf without focus', async () => {
+  const drops: string[][] = [], view: ShelfView = { items: [], picker: undefined };
+  const { notch, ipcMain } = fixture({ shelf: { view: () => view, act: action => { if (action !== 'open') throw new Error('unknown'); } } },
+    async paths => { drops.push(paths); return { added: paths.length, replaced: 0, skipped: 0 }; });
+  try {
+    notch.sync();
+    const drop = ipcMain.handlers.get('lumi:drop'); assert(drop);
+    const event = { sender: windowOf(notch).webContents, senderFrame: windowOf(notch).webContents.mainFrame };
+    assert.deepEqual(await drop(event, ['C:/Users/a/report.pdf']), { added: 1, replaced: 0, skipped: 0 });
+    assert.deepEqual(drops, [['C:/Users/a/report.pdf']]);
+    for (const bad of ['C:/x', Array(11).fill('C:/a'), [''], [5], ['x'.repeat(4097)], null])
+      assert.throws(() => drop(event, bad), /ditolak/, JSON.stringify(bad)?.slice(0, 40));
+    assert.throws(() => drop({ ...event, sender: {} }, ['C:/a']), /ditolak/, 'Another window reached the shelf');
+    assert.equal(drops.length, 1);
+    await notch.action({ type: 'shelf', action: 'reveal' });
+    assert.deepEqual([notch.mode, windowOf(notch).isFocused(), windowOf(notch).ignored, notch.held], ['expanded', false, false, true],
+      'Opening the shelf for a drag took focus or kept the window click-through');
+    for (const action of [{ type: 'shelf', action: 'reveal', value: 1 }, { type: 'shelf', action: 'send', value: { id: 'x', to: 'c0' } }])
+      await assert.rejects(notch.action(action), JSON.stringify(action));
+    notch.collapse();
+    notch.shelfDone('Terkirim ke Alice.');
+    assert.deepEqual([notch.mode, selectedSnapshot(notch).title, selectedSnapshot(notch).body], ['compact', 'Rak', 'Terkirim ke Alice.']);
+    assert.equal(notch.snapshot().count, 0, 'A shelf notice raised the activity badge');
+  } finally { notch.dispose(); }
+  assert.equal(ipcMain.handlers.has('lumi:drop'), false, 'The drop handler outlived Lumi');
+});
+
+test('Lumi refuses shelf drops when the shelf is not wired', () => {
+  const { notch, ipcMain } = fixture();
+  try {
+    notch.sync();
+    const drop = ipcMain.handlers.get('lumi:drop'); assert(drop);
+    assert.throws(() => drop({ sender: windowOf(notch).webContents, senderFrame: windowOf(notch).webContents.mainFrame }, ['C:/a']), /ditolak/);
+  } finally { notch.dispose(); }
 });
