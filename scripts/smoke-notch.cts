@@ -807,7 +807,7 @@ async function main() {
     const island = "document.getElementById('island').getBoundingClientRect()";
     const fixedWindow = async (label: string) => {
       const native = await nativeBrowser.evaluate<{bounds:{width:number;height:number};area:{width:number;height:number}}>("(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return {bounds:w.getBounds(),area:smokeElectron.screen.getDisplayMatching(w.getBounds()).workArea}})()");
-      assert(Math.abs(native.bounds.width - Math.min(420, native.area.width)) <= 1 && Math.abs(native.bounds.height - Math.min(400, native.area.height)) <= 1,
+      assert(Math.abs(native.bounds.width - Math.min(680, native.area.width)) <= 1 && Math.abs(native.bounds.height - Math.min(280, native.area.height)) <= 1,
         `${label} resized the native window instead of morphing the island: ${JSON.stringify(native)}`);
     };
     // The rest of the fixed window is transparent; keep review screenshots to the island itself.
@@ -850,10 +850,13 @@ async function main() {
     const requireSelected = async () => { const item = await selected(); assert(item, 'Expected selected Lumi item'); return item; };
     const shapedPanels: string[] = [];
     const tightPanel = async (label: string) => {
-      // Expanded island height: menu bar inset + header + unclipped content.
-      await until(() => companionPage.evaluate(`document.body.dataset.mode==='expanded'&&${settled}&&(()=>{const e=document.getElementById('island');return Math.abs(e.getBoundingClientRect().height-(parseFloat(getComputedStyle(e).paddingTop)+document.querySelector('header').getBoundingClientRect().height+document.getElementById('content').scrollHeight))<=2})()`), `${label} content height`);
-      const box = await companionPage.evaluate<{height:number;gap:number;overflow:boolean;scroll:number}>(`(()=>{const i=${island},c=document.getElementById('content');return {height:i.height,gap:i.bottom-document.querySelector('footer').getBoundingClientRect().bottom,overflow:document.documentElement.scrollWidth>innerWidth,scroll:c.scrollHeight-c.clientHeight}})()`);
-      assert(box.gap >= 6 && box.gap <= 13 && !box.overflow && box.scroll<=0, `${label} excess space or clipped footer: ${JSON.stringify(box)}`);
+      // The open island is as tall as its taller column, Lumi or the page: the inset, whichever column ends lower, then the
+      // padding. Nothing is clipped, and nothing overflows sideways.
+      await until(() => companionPage.evaluate(`document.body.dataset.mode==='expanded'&&${settled}`), `${label} settled`);
+      const box = await companionPage.evaluate<{height:number;gap:number;overflow:boolean;scroll:number}>(`(()=>{const i=${island},c=document.getElementById('content');
+        const ends=[...document.querySelectorAll('#mascot,#summary,#deck-nav,#deck > section[data-current="true"] > *,#error')].filter(e=>e.getClientRects().length).map(e=>e.getBoundingClientRect().bottom);
+        return {height:i.height,gap:i.bottom-Math.max(...ends),overflow:document.documentElement.scrollWidth>innerWidth,scroll:c.scrollHeight-c.clientHeight}})()`);
+      assert(box.gap >= 6 && box.gap <= 16 && !box.overflow && box.scroll<=0, `${label} excess space or clipped content: ${JSON.stringify(box)}`);
       // X11 limits input to the island with a window shape; it must follow every panel and page height.
       if (process.platform === 'linux') await until(async () => {
         const [shape, isle] = await Promise.all([nativeBrowser.evaluate<Array<{x:number;y:number;width:number;height:number}> | undefined>('notchShapes.at(-1)'),
@@ -903,7 +906,7 @@ async function main() {
     }
     // Staying open under the pointer is covered with controlled input in tests/notch.test.ts; a real pointer on this
     // desktop may cross the overlay. Inside the fixed window but outside the island: the pointer has left.
-    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 390 });
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 200 });
     await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'manual panel closes after the pointer leaves', 3000);
     await until(() => nativeBrowser.evaluate("!smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').isFocused()"), 'manual close releases native keyboard focus');
     const automaticNotificationContext = async () => {
@@ -955,7 +958,7 @@ async function main() {
     await click('mascot');
     await tightPanel('Message panel');
     await islandShot('ui-notch-message.png');
-    const layout = await companionPage.evaluate<{right:number;width:number;bottom:number;height:number;overflow:boolean}>(`(()=>{const b=document.getElementById('actions').getBoundingClientRect(); const f=document.getElementById('pause').getBoundingClientRect(); const i=${island}; return {right:b.right,width:i.right,bottom:f.bottom,height:i.bottom,overflow:document.documentElement.scrollWidth>innerWidth}})()`);
+    const layout = await companionPage.evaluate<{right:number;width:number;bottom:number;height:number;overflow:boolean}>(`(()=>{const b=document.getElementById('actions').getBoundingClientRect(); const f=document.getElementById('open').getBoundingClientRect(); const i=${island}; return {right:b.right,width:i.right,bottom:f.bottom,height:i.bottom,overflow:document.documentElement.scrollWidth>innerWidth}})()`);
     assert(layout.right <= layout.width && layout.bottom <= layout.height && !layout.overflow, `Clipped controls: ${JSON.stringify(layout)}`);
     await fixedWindow('Expanded message panel');
     await click('open'); await until(() => nativeBrowser.evaluate('smokeMain.isVisible()'), 'open conversation');
@@ -1295,9 +1298,9 @@ async function main() {
     await mainPage.evaluate('window.lumilan.setFocus(25)');
     await background();
     await companionPage.evaluate("window.lumi.action({type:'expand'})");
-    await until(() => companionPage.evaluate("document.body.dataset.mode==='expanded'&&!document.getElementById('deck-nav').hidden&&[...document.querySelectorAll('#dots button')].map(b=>b.dataset.page).join()==='activity,focus,routine,tasks,shelf'"), 'deck offers Activity, Focus, Routine, Tasks and Shelf');
-    await click('next');
-    await until(() => companionPage.evaluate("document.getElementById('page-focus').dataset.current==='true'&&!document.getElementById('focus').hidden&&document.getElementById('prev').disabled===false"), 'focus page with its buttons');
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='expanded'&&!document.getElementById('dots').hidden&&[...document.querySelectorAll('#dots button')].map(b=>b.dataset.page).join()==='activity,focus,routine,tasks,shelf'"), 'deck offers Activity, Focus, Routine, Tasks and Shelf');
+    await click('tab-focus');
+    await until(() => companionPage.evaluate("document.getElementById('page-focus').dataset.current==='true'&&!document.getElementById('focus').hidden&&document.getElementById('tab-focus').getAttribute('aria-selected')==='true'"), 'focus page with its buttons');
     await tightPanel('Focus page');
     await islandShot('ui-notch-deck-focus.png');
     // Keyboard and a horizontal swipe turn pages too.
@@ -1390,12 +1393,12 @@ async function main() {
     await until(() => companionPage.evaluate("window.lumi.state().then(s=>!s.items.some(i=>i.key==='routine:water'))&&document.querySelectorAll('#routine-bars rect.filled').length===1"), 'drink answered the card and filled the chart');
     await tightPanel('Routine page');
     await islandShot('notch-routine.png');
-    await click('next');
+    await click('tab-tasks');
     await until(() => companionPage.evaluate("document.getElementById('page-tasks').dataset.current==='true'"), 'Tasks page');
     await companionPage.evaluate("document.getElementById('tasks-input').focus()");
     await companionPage.send('Input.insertText', { text: 'Balas pesan Dina' });
     // Typing holds the panel open even when the pointer leaves the island.
-    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 390 });
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 200 });
     await delay(1000);
     assert.equal(await companionPage.evaluate('document.body.dataset.mode'), 'expanded', 'The pointer leaving closed a panel the person was typing in');
     await companionPage.evaluate("document.getElementById('tasks-form').requestSubmit()");
@@ -1521,9 +1524,17 @@ async function main() {
     await hoverNotchHeader();
     assert.equal(await companionPage.evaluate('document.getAnimations().length'), 0, 'Reduced motion ignored');
     await companionPage.send('Emulation.setEmulatedMedia', { features: [] });
+    // The options menu opens from the bar with focus on its first item, inside the island that grows to hold it; Escape
+    // closes the menu, not the panel, and returns focus to its button. Activity is the shortest page.
+    await click('tab-activity'); await click('more');
+    await until(() => companionPage.evaluate(`document.getElementById('menu').matches(':popover-open')&&document.activeElement?.id==='reset'&&${settled}&&(()=>{const m=document.getElementById('menu').getBoundingClientRect(),i=${island};return m.bottom<=i.bottom-6&&m.right<=i.right&&m.top>=i.top})()`), 'options menu open inside the island');
+    await islandShot('ui-notch-menu.png');
+    await companionPage.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await companionPage.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await until(() => companionPage.evaluate("!document.getElementById('menu').matches(':popover-open')&&document.body.dataset.mode==='expanded'&&document.activeElement?.id==='more'"), 'Escape closes only the menu');
     // Earlier fixtures move toward the screen edge. A 20 px move can be clamped there;
     // the later auto-hide resize must never be mistaken for successful keyboard movement.
-    await click('reset');
+    await click('more'); await click('reset');
     await until(() => mainPage.evaluate('window.lumilan.notificationSettings().then(s=>s.notchPosition?.fraction===.5)'), 'centered keyboard fixture');
     await companionPage.evaluate("document.getElementById('drag').focus()");
     const pageBeforeMove = await companionPage.evaluate<string>("document.querySelector('#deck > section[data-current=\"true\"]').dataset.page");
@@ -1536,7 +1547,7 @@ async function main() {
       assert.equal(await companionPage.evaluate("document.querySelector('#deck > section[data-current=\"true\"]').dataset.page"), pageBeforeMove, 'Arrow keys on the position handle turned the page');
       return bounds.width === before.width && Math.abs(bounds.x - before.x - 20) <= 1;
     }, 'keyboard reposition by 20 px without resizing');
-    await click('reset');
+    await click('more'); await click('reset');
     await until(() => mainPage.evaluate('window.lumilan.notificationSettings().then(s=>s.notchPosition?.fraction===.5)'), 'reset button restores center');
     await companionPage.evaluate('window.lumi.action({type:"collapse"})');
     await companionPage.send('Performance.enable');
@@ -1557,7 +1568,7 @@ async function main() {
       : nativeMetrics.memory?.workingSetSize;
     console.log(`Notch native process: ${nativeMetrics.cpu.percentCPUUsage.toFixed(2)}% CPU; ${typeof nativeMemory === 'number' && Number.isFinite(nativeMemory) ? (nativeMemory / 1024).toFixed(1) + ' MiB ' + (process.platform === 'linux' ? 'RSS' : 'working set') : 'native memory unavailable'}`);
     await companionPage.evaluate("window.lumi.action({type:'peek'})");
-    await click('mascot'); await click('pause');
+    await click('mascot'); await click('more'); await click('pause');
     // Trusted input completion does not await IPC or Chromium's visibility update.
     const pausedWindow = "(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return !!w&&!w.isVisible()&&!w.isFocused()})()";
     await until(async () => await nativeBrowser.evaluate(pausedWindow) &&

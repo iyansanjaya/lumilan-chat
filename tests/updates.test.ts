@@ -2,8 +2,11 @@ import type { MessageBoxOptions } from 'electron';
 import type { UpdateService } from '../src/main/updates.js';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { startUpdates, updateFailureDetail } from '../src/main/updates.js';
+import { fileURLToPath } from 'node:url';
+import { RELEASE_REPOSITORY, startUpdates, updateFailureDetail } from '../src/main/updates.js';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
@@ -90,6 +93,16 @@ test('pesan kegagalan update membedakan internet, metadata, dan izin', () => {
   assert.match(updateFailureDetail(new Error('403 Forbidden')), /Akses/);
   assert.doesNotMatch(updateFailureDetail(new Error('HttpError: 404 Not Found')), /Koneksi internet/);
   assert.match(updateFailureDetail({ code: 'ENOTFOUND' }, source => `Translated: ${source}`), /^Translated: /);
+  // A copy without an update feed is told to download, not to try again.
+  for (const error of [Object.assign(new Error("ENOENT: no such file or directory, open 'C:\\Lumilan\\resources\\app-update.yml'"), { code: 'ENOENT' }),
+    new Error('APPIMAGE env is not defined, current application is not an AppImage')])
+    assert.match(updateFailureDetail(error), /tidak dapat memperbarui dirinya sendiri/);
+});
+
+test('macOS memeriksa repositori rilis yang sama dengan build.publish', () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const { owner, repo } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).build.publish;
+  assert.equal(RELEASE_REPOSITORY, `${owner}/${repo}`);
 });
 
 

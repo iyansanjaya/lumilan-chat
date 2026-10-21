@@ -101,7 +101,7 @@ test('Lumi bounds remain inside small, negative-coordinate and scaled display wo
       const b = notchBounds({ workArea: area }, fraction);
       assert(b.x >= area.x && b.x + b.width <= area.x + area.width);
       assert(b.y >= area.y && b.y + b.height <= area.y + area.height);
-      assert(b.width <= 420 && b.height <= 400 && b.inset === 0);
+      assert(b.width <= 680 && b.height <= 280 && b.inset === 0);
     }
   }
 });
@@ -116,7 +116,7 @@ test('Lumi covers a macOS camera notch only beside a notch-height menu bar', () 
       const b = notchBounds({ workArea: { ...screen, y: screen.y + top, height: screen.height - top }, bounds: screen });
       assert.equal(b.inset, inset, `${platform} ${top}`);
       assert.equal(b.y, inset ? screen.y : screen.y + top, 'The island must start at the screen edge only over a notch');
-      assert.deepEqual([b.x, b.width, b.height], [screen.x + 546, 420, 400]);
+      assert.deepEqual([b.x, b.width, b.height], [screen.x + 416, 680, 280]);
       assert(b.y + b.height <= screen.y + screen.height);
     }
   } finally { Object.defineProperty(process, 'platform', platformDescriptor!); }
@@ -195,7 +195,7 @@ test('Lumi covers a visible main window behind other windows without taking focu
     assert.equal(windowOf(notch).visible, false, 'An idle strip appeared over a main window that is only behind other windows');
     assert.equal(notch.timers.size, 0);
     main.visible = false; notch.sync(); // Closed to the tray: the strip leads back to the queue.
-    assert.equal(windowOf(notch).visible, true); assert.deepEqual([windowOf(notch).bounds.width, windowOf(notch).bounds.height], [420, 400]);
+    assert.equal(windowOf(notch).visible, true); assert.deepEqual([windowOf(notch).bounds.width, windowOf(notch).bounds.height], [680, 280]);
     main.visible = true; notch.sync();
     assert.equal(windowOf(notch).visible, false, 'Restoring the main window behind others kept the idle strip');
     notch.message({}, 'alice', 'Alice', 'Second arrival behind another window');
@@ -487,14 +487,14 @@ test('Lumi keeps one fixed window and shapes it to the island only where X11 can
         notch = fixture().notch;
         notch.message({}, 'alice', 'Alice', 'Test');
         const win = windowOf(notch), fixed = { ...win.bounds };
-        assert.deepEqual([fixed.width, fixed.height], [420, 400]);
+        assert.deepEqual([fixed.width, fixed.height], [680, 280]);
         for (const shape of [{ width: NaN, height: 30 }, { width: 0, height: 30 }, { width: 1.5, height: 30 }, { width: '200', height: 30 },
-          { width: 421, height: 30 }, { width: 120, height: 401 }, { width: 120 }, { width: 120, height: 30, x: 0 }, { width: 120, height: 30, shoulder: 10 }])
+          { width: 681, height: 30 }, { width: 120, height: 281 }, { width: 120 }, { width: 120, height: 30, x: 0 }, { width: 120, height: 30, shoulder: 10 }])
           await assert.rejects(notch.action({ type: 'shape', ...shape }));
         assert.equal(win.shape, undefined, 'An invalid shape reached the native window');
         assert.equal(await notch.action({ type: 'shape', width: 320, height: 64 }), true);
-        // Centered in the 420 DIP window with one DIP of slack on each side, plus a band for the top shoulders.
-        assert.deepEqual(win.shape, platform === 'linux' ? [{ x: 49, y: 0, width: 322, height: 64 }, { x: 39, y: 0, width: 342, height: 10 }] : undefined);
+        // Centered in the 680 DIP window with one DIP of slack on each side, plus a band for the top shoulders.
+        assert.deepEqual(win.shape, platform === 'linux' ? [{ x: 179, y: 0, width: 322, height: 64 }, { x: 169, y: 0, width: 342, height: 10 }] : undefined);
         await notch.action({ type: 'expand' }); assert.equal(notch.mode, 'expanded');
         notch.collapse(); assert.equal(notch.mode, 'hidden');
         assert.deepEqual(win.bounds, fixed, 'A mode change resized the native window instead of morphing the island');
