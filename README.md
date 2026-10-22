@@ -65,8 +65,6 @@ Connections use **libp2p Noise** to encrypt traffic and authenticate device iden
 
 Discovery depends on local mDNS, and direct traffic must be allowed by firewalls and Wi-Fi/VLAN rules. Lumilan has no internet relay to bypass network isolation. Voice calls need microphone access and direct local UDP traffic.
 
-Focus sessions are off until you choose a length in **Settings → Focus** or press **Turn on** on Lumi's **Focus** page; while one runs, connected contacts see your status as Do not disturb. Work breaks are off until you turn on reminders on Lumi's **Breaks** page or in **Settings → Work breaks**; on Linux Wayland the break screen is one solid dark fullscreen window, and games in exclusive fullscreen can stay above it. Water logs, tasks, and the shelf stay on your device; the shelf keeps only where each file is and never deletes a file. Lumi's pill stays at the top of the screen while you use the app; **Settings → Notifications** can show it only when you are not looking at the window, or open the panel on hover instead of a click. Dropping files on Lumi is tested on Windows; on macOS and Linux use the open panel or **Settings → Shelf**. Link previews are optional. After you turn them on, only the sending device contacts YouTube or Instagram over HTTPS to fetch a title and thumbnail; recipients receive the card over the LAN and never go online. Facebook, Threads, and X links get a card made on your device without any connection.
-
 ## Help Lumilan grow
 
 Developed by [Iyan Sanjaya](https://iyansanjaya.com/). Found a problem? Use **Report a bug** in the app header or [open an issue](https://github.com/iyansanjaya/lumilan-chat/issues).

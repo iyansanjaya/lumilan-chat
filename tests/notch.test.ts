@@ -84,7 +84,7 @@ function fixture(pages: ConstructorParameters<typeof LumiNotch>[0]['pages'] = un
   const clock = { idle: 0, getSystemIdleTime: () => clock.idle };
   const settings: NotchSettings = { notch: true, enabled: true, preview: false, silent: true, language: 'id', focus: 0, notchIdle: 'always', notchOpen: 'click', notchOpened: true };
   const peer: NotchPeer & { state: { status: Status; mutedThreads: string[]; reminders: NotchReminder[] } } = { state: { status: 'active', mutedThreads: [], reminders: [] }, trusted: new Map([['alice', { name: 'Alice' }]]), sendCall: async () => { peer.activeCall = null; } };
-  const decisions: Array<[string, boolean]> = [], opens: Array<string | undefined> = [], accepts: string[] = [], pending = new Set(['f1']), ends: FocusEnd[] = [], firstOpens: number[] = [];
+  const decisions: Array<[string, boolean]> = [], opens: Array<string | undefined> = [], accepts: string[] = [], pending = new Set(['f1']), ends: FocusEnd[] = [], firstOpens: number[] = [], pauses: number[] = [];
   // Wired like main: a status change reaches Lumi through the peer change event.
   const focus = new FocusTimer({ read: () => undefined, write: () => {}, getStatus: () => peer.state.status,
     setStatus: status => { peer.state.status = status; notch.prune(); }, onChange: () => notch.sync(), onEnd: end => ends.push(end) });
@@ -93,9 +93,9 @@ function fixture(pages: ConstructorParameters<typeof LumiNotch>[0]['pages'] = un
     decideFile: async (id, value) => { if (!pending.delete(id)) throw new Error('expired'); decisions.push([id, value]); },
     savePosition: value => { settings.notchPosition = value; }, getFocus: () => focus.view(),
     focusAction: (type, minutes) => type === 'enable' ? settings.focus ||= 25 : type === 'start' ? focus.start(minutes) : type === 'pause' ? focus.pause() : type === 'resume' ? focus.resume() : focus.end(), ...(pages ? { pages } : {}), ...(addToShelf ? { addToShelf } : {}),
-    onOpened: () => { settings.notchOpened = true; firstOpens.push(Date.now()); } });
+    onOpened: () => { settings.notchOpened = true; firstOpens.push(Date.now()); }, onPause: () => pauses.push(notch.pausedUntil) });
   notch.sync(); notch.ready = true;
-  return { notch, settings, peer, main, watch, clock, ipcMain, decisions, opens, accepts, pending, focus, ends, firstOpens };
+  return { notch, settings, peer, main, watch, clock, ipcMain, decisions, opens, accepts, pending, focus, ends, firstOpens, pauses };
 }
 
 test('Lumi bounds remain inside small, negative-coordinate and scaled display work areas', () => {
@@ -421,6 +421,24 @@ test('Lumi pause survives background updates, screen lock suspends it, and shutd
   assert.equal(notch.powerMonitor.listenerCount('lock-screen'), 0); assert(windowOf(notch).isDestroyed());
 });
 
+test('Lumi hides for 30 minutes and returns by itself or at once from the tray; Turn off… opens its Settings', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { notch, opens, pauses } = fixture();
+  try {
+    // Every change reaches main, which swaps the tray's Hide Lumi for Show Lumi now and back.
+    await notch.action({ type: 'pause' });
+    assert.equal(notch.shown(), false); assert.deepEqual(pauses, [30 * 60_000]);
+    t.mock.timers.tick(30 * 60_000 + 10);
+    assert.equal(notch.shown(), true); assert.deepEqual(pauses, [30 * 60_000, 0], 'The tray kept offering Show Lumi now');
+    notch.pause(30 * 60_000); notch.pause(0);
+    assert.equal(notch.shown(), true); assert.equal(notch.pauseTimer, undefined);
+    t.mock.timers.tick(30 * 60_000 + 10); assert.equal(pauses.length, 4, 'A hide ended from the tray fired again later');
+    await notch.action({ type: 'expand' }); assert.equal(notch.mode, 'expanded');
+    await notch.action({ type: 'settings' });
+    assert.equal(notch.mode, 'hidden'); assert.deepEqual(opens, ['lumi-settings']);
+  } finally { notch.dispose(); }
+});
+
 test('Lumi automatically hides manual and automatic previews without deleting pending activity', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { notch, settings, decisions } = fixture();
@@ -512,7 +530,7 @@ test('Lumi introduces itself once until the panel is first opened, as a quiet ca
     pointer(notch, true); await notch.action({ type: 'peek' });
     const card = selectedSnapshot(notch);
     // Lumi's own text survives previews being off; it names no person or message.
-    assert.deepEqual([notch.mode, card.key, card.title, card.body], ['compact', 'lumi:intro', 'Halo, saya Lumi', 'Klik untuk membuka Fokus, Rehat, Rutinitas, Tugas, dan Rak.']);
+    assert.deepEqual([notch.mode, card.key, card.title, card.body], ['compact', 'lumi:intro', 'Halo, saya Lumi', 'Klik saya untuk Fokus, Rehat, Rutinitas, Tugas, dan Rak. Klik kanan untuk menyembunyikan saya.']);
     await notch.action({ type: 'expand' });
     assert.deepEqual([notch.items.has('lumi:intro'), settings.notchOpened, firstOpens.length, notch.snapshot().count], [false, true, 1, 0]);
     notch.collapse(); await notch.action({ type: 'expand' });

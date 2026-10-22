@@ -269,25 +269,55 @@ async function main() {
     // The language is chosen in the open dialog, as a person would; the lengths must relabel without reopening it.
     const languageBefore = await evaluate<string>("document.querySelector('#language-select').value");
     const chooseLanguage = (value: string) => evaluate(`document.querySelector('#language-select').value = ${JSON.stringify(value)}; document.querySelector('#language-select').dispatchEvent(new Event('change'))`);
-    await setViewport(320, 700);
+    let englishFooter = '';
     for (const language of ['en', 'ms', 'es', 'ja', 'ko', 'zh-Hans', 'zh-Hant', 'id']) {
+      await setViewport(320, 700);
       await chooseLanguage(language);
       await waitFor(`document.documentElement.lang === ${JSON.stringify(language)} && (document.querySelector('#break-work').options[0]?.textContent === '25 menit') === ${language === 'id'}`, `breaks relabeled in ${language}`);
-      const fits = await evaluate<{ inside: boolean; overflow: boolean; clipped: string[] }>(`(() => {
-        const dialog = document.querySelector('#settings-dialog'), section = document.querySelector('#break-section');
-        section.scrollIntoView({ block: 'center' });
-        const box = dialog.getBoundingClientRect(), parts = [...section.querySelectorAll('select, label, button, h3, .setting-note')].filter(e => e.getClientRects().length);
-        return { inside: parts.every(e => { const b = e.getBoundingClientRect(); return b.left >= box.left && b.right <= box.right; }), overflow: dialog.scrollWidth > dialog.clientWidth,
-          clipped: [...section.querySelectorAll('select, button')].filter(e => e.scrollWidth > e.clientWidth + 1).map(e => e.id) }; })()`);
-      assert(fits.inside && !fits.overflow && !fits.clipped.length, `Break settings do not fit at 320 px in ${language}: ${JSON.stringify(fits)}`);
+      // Breaks, and Lumi with its turn-off and hide wording.
+      for (const id of ['#break-section', '#lumi-section']) {
+        const fits = await evaluate<{ inside: boolean; overflow: boolean; clipped: string[] }>(`(() => {
+          const dialog = document.querySelector('#settings-dialog'), section = document.querySelector('${id}');
+          section.scrollIntoView({ block: 'center' });
+          const box = dialog.getBoundingClientRect(), parts = [...section.querySelectorAll('select, label, button, h3, small, .setting-note')].filter(e => e.getClientRects().length);
+          return { inside: parts.every(e => { const b = e.getBoundingClientRect(); return b.left >= box.left && b.right <= box.right; }), overflow: dialog.scrollWidth > dialog.clientWidth,
+            clipped: [...section.querySelectorAll('select, button')].filter(e => e.scrollWidth > e.clientWidth + 1).map(e => e.id) }; })()`);
+        assert(fits.inside && !fits.overflow && !fits.clipped.length, `${id} does not fit at 320 px in ${language}: ${JSON.stringify(fits)}`);
+      }
+      // The sidebar tabs stay whole at every width that shows the sidebar: the last one was once cut off behind a hidden scroll.
+      // The footer relabels with the language instead of waiting for the next network event.
+      for (const width of [1440, 1160, 980, 800, 390]) {
+        await setViewport(width, 700);
+        const sidebar = await evaluate<{ scrolls: boolean; cut: unknown[]; footer: string }>(`(() => {
+          const listed = document.body.classList.contains('show-list'); document.body.classList.add('show-list');
+          const bar = document.querySelector('.sidebar .filter-bar'), box = bar.getBoundingClientRect();
+          const result = { scrolls: bar.scrollWidth > bar.clientWidth + 1, footer: document.querySelector('#connection-text').textContent,
+            cut: [...bar.querySelectorAll('.filter')].map(tab => { const b = tab.getBoundingClientRect(), range = document.createRange(); range.selectNodeContents(tab);
+              const text = range.getBoundingClientRect();
+              return [tab.textContent, +(b.right - box.right).toFixed(2), +(text.right - box.right).toFixed(2), tab.scrollWidth - tab.clientWidth, bar.dataset.fit || '']; })
+              // Text must be whole; the tab's own edge may lose under a pixel of padding, the tolerance fitFilterBar allows.
+              .filter(([, tabOut, textOut, inner]) => tabOut > 1 || textOut > 0 || inner > 1) };
+          document.body.classList.toggle('show-list', listed);
+          return result; })()`);
+        assert(!sidebar.scrolls && !sidebar.cut.length, `Sidebar tabs cut off at ${width} px in ${language}: ${JSON.stringify(sidebar)}`);
+        if (language === 'en') englishFooter = sidebar.footer;
+        else assert.notEqual(sidebar.footer, englishFooter, `Footer stayed in English after switching to ${language}`);
+      }
     }
     await chooseLanguage(languageBefore);
     await waitFor(`document.querySelector('#language-select').value === ${JSON.stringify(languageBefore)}`, 'language restored');
     await evaluate("document.documentElement.dataset.theme = 'light'; document.querySelector('#break-enabled').click()");
     await waitFor("window.lumilan.breaksState().then(v => !v.settings.enabled && v.nextAt === undefined)", 'break reminders off');
+    // Lumi has its own section and saves each change at once, without the Notifications form; restored afterwards.
+    const lumiBefore = await evaluate<string>("window.lumilan.notificationSettings().then(s => s.notchIdle)", true);
+    const chooseIdle = (value: string) => evaluate(`document.querySelector('#notch-idle-select').value = ${JSON.stringify(value)}; document.querySelector('#notch-idle-select').dispatchEvent(new Event('change'))`);
+    await chooseIdle(lumiBefore === 'away' ? 'always' : 'away');
+    await waitFor(`window.lumilan.notificationSettings().then(s => s.notchIdle === ${JSON.stringify(lumiBefore === 'away' ? 'always' : 'away')})`, 'Lumi section saves at once');
+    await chooseIdle(lumiBefore);
+    await waitFor(`window.lumilan.notificationSettings().then(s => s.notchIdle === ${JSON.stringify(lumiBefore)})`, 'Lumi setting restored');
     await evaluate("document.querySelector('#settings-dialog').close()");
     assert.equal(failures.length, 0, `Renderer errors after breaks: ${failures.join('; ')}`);
-    console.log('Breaks: main-window lengths and toggle, shared select style, light/dark 375/320 px passed');
+    console.log('Breaks: main-window lengths and toggle, shared select style, light/dark 375/320 px passed; sidebar tabs and footer in 8 languages at 1440–390 px passed; Lumi section fits and saves at once');
     // Routine and Tasks in Settings: the main-window home of Lumi's pages for Wayland and for people who turn Lumi off.
     await setViewport(1100, 800);
     await evaluate("document.querySelector('#settings-button').click()");

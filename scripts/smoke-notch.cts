@@ -1701,7 +1701,7 @@ async function main() {
     // The options menu opens from the bar with focus on its first item, inside the island that grows to hold it; Escape
     // closes the menu, not the panel, and returns focus to its button. Activity is the shortest page.
     await click('tab-activity'); await click('more');
-    await until(() => companionPage.evaluate(`document.getElementById('menu').matches(':popover-open')&&document.activeElement?.id==='reset'&&${settled}&&(()=>{const m=document.getElementById('menu').getBoundingClientRect(),i=${island};return m.bottom<=i.bottom-6&&m.right<=i.right&&m.top>=i.top})()`), 'options menu open inside the island');
+    await until(() => companionPage.evaluate(`document.getElementById('menu').matches(':popover-open')&&document.activeElement?.id==='pause'&&${settled}&&(()=>{const m=document.getElementById('menu').getBoundingClientRect(),i=${island};return m.bottom<=i.bottom-6&&m.right<=i.right&&m.top>=i.top})()`), 'options menu open inside the island');
     await islandShot('ui-notch-menu.png');
     await companionPage.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await companionPage.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
@@ -1723,6 +1723,28 @@ async function main() {
     }, 'keyboard reposition by 20 px without resizing');
     await click('more'); await click('reset');
     await until(() => mainPage.evaluate('window.lumilan.notificationSettings().then(s=>s.notchPosition?.fraction===.5)'), 'reset button restores center');
+    // Right-click on the closed Lumi opens the panel with the same options, Hide first: that is where people look to hide it.
+    await companionPage.evaluate('window.lumi.action({type:"collapse"})');
+    await until(() => companionPage.evaluate(`document.body.dataset.mode==='hidden'&&${settled}`), 'Lumi closed before the right-click');
+    const menuPoint = await companionPage.evaluate<{x:number;y:number}>(`(()=>{const b=${island};return {x:b.x+b.width/2,y:b.y+b.height/2}})()`);
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...menuPoint });
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...menuPoint, button: 'right', clickCount: 1 });
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...menuPoint, button: 'right', clickCount: 1 });
+    await until(() => companionPage.evaluate(`document.body.dataset.mode==='expanded'&&document.getElementById('menu').matches(':popover-open')&&document.activeElement?.id==='pause'&&${settled}&&(()=>{const m=document.getElementById('menu').getBoundingClientRect(),i=${island};return m.bottom<=i.bottom-6&&m.right<=i.right&&m.top>=i.top})()`), 'right-click opens Lumi with its options')
+      .catch(async (error: unknown) => {
+        const state = await companionPage.evaluate(`({mode:document.body.dataset.mode,menu:document.getElementById('menu').matches(':popover-open'),active:document.activeElement?.id,settled:${settled},menuRect:(()=>{const r=document.getElementById('menu').getBoundingClientRect();return [r.x,r.y,r.width,r.height]})(),island:(()=>{const b=${island};return [b.x,b.y,b.width,b.height]})()})`).catch(() => 'unavailable');
+        throw new Error(`${error instanceof Error ? error.message : String(error)}: ${JSON.stringify(state)}`);
+      });
+    await islandShot('ui-notch-menu-right-click.png');
+    // Turn off… opens Settings › Lumi in the main window on the switch itself, and closes the panel; Lumi stays on until the person
+    // turns it off there.
+    await click('off');
+    await until(() => mainPage.evaluate(`document.querySelector('#settings-dialog').open&&document.activeElement?.id==='notify-notch'&&(()=>{const r=document.querySelector('#lumi-section').getBoundingClientRect(),d=document.querySelector('#settings-dialog').getBoundingClientRect();return r.top>=d.top-1&&r.top<d.bottom})()`), 'Turn off… opens Settings at the Lumi switch');
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'Turn off… closes the panel');
+    assert(await mainPage.evaluate<boolean>('window.lumilan.notificationSettings().then(s=>s.notch)'), 'Turn off… turned Lumi off without the switch');
+    await mainPage.evaluate("document.querySelector('#settings-dialog').close()");
+    await background();
+    console.log('Notch: right-click options with Hide first, Turn off… opens Settings › Lumi passed');
     await companionPage.evaluate('window.lumi.action({type:"collapse"})');
     await companionPage.send('Performance.enable');
     const nativeExpression = "(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return smokeElectron.app.getAppMetrics().find(m=>m.pid===w.webContents.getOSProcessId())})()";
