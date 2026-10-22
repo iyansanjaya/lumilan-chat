@@ -1573,9 +1573,15 @@ async function main() {
       await at(32);
       await until(async () => (await selected())?.key === 'break:due', 'break reminder again after the snooze');
       // The minute passes without an answer: the break starts by itself. The shifted clock stays until it ends, so the
-      // input guard measures real time.
-      await at(33.2);
+      // input guard measures real time. Only the clock moves here: a resume makes Linux re-read the lock state first,
+      // which rightly holds the break for a fresh minute. A status change makes the timer look again instead, as an
+      // ended call does; the previous status returns afterwards.
+      await nativeBrowser.evaluate('Date.now=()=>smokeRealNow()+33.2*60000;true');
+      const status = (value: string) => mainPage.evaluate(`window.lumilan.state().then(s=>window.lumilan.setProfile({name:s.me.name,status:${value},about:s.me.about||'',avatar:s.me.avatar||''}))`);
+      const statusBefore = await mainPage.evaluate<string>('window.lumilan.state().then(s=>s.me.status||"active")');
+      await status(JSON.stringify(statusBefore === 'busy' ? 'away' : 'busy'));
       await breakScreen('Automatic break', 'escape');
+      await status(JSON.stringify(statusBefore));
       assert.equal(await companionPage.evaluate("window.lumi.state().then(s=>s.items.some(i=>i.key==='break:due'))"), false, 'A started break kept its reminder card');
     } finally { await nativeBrowser.evaluate('if(globalThis.smokeRealNow){Date.now=smokeRealNow;delete globalThis.smokeRealNow}true'); }
     await mainPage.evaluate("window.lumilan.breaks({action:'start'})");

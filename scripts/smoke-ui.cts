@@ -200,8 +200,13 @@ async function main() {
     writeFileSync(join(dist, 'ui-audit-chat-narrow.png'), Buffer.from(narrowChatScreenshot.data, 'base64'));
     // Focus from the main window: the real setting, start, status broadcast and restore, plus the shared select style
     // and long translated text in light/dark narrow windows.
-    const waitFor = async (expression: string, label: string) => {
-      for (const end = Date.now() + 10_000; Date.now() < end; await delay(100)) if (await evaluate<boolean>(expression, true)) return;
+    // One request may outlast a slow frame (the first CJK font fallback on a fresh CI machine took over 5 s on Windows);
+    // the condition is then asked again until the wait's own deadline instead of failing on that request.
+    const waitFor = async (expression: string, label: string, ms = 10_000) => {
+      for (const end = Date.now() + ms; Date.now() < end; await delay(100)) {
+        try { if (await evaluate<boolean>(expression, true)) return; }
+        catch (error) { if (!(error instanceof Error && error.message.startsWith('Runtime.evaluate timed out'))) throw error; }
+      }
       throw new Error(`Timed out: ${label}`);
     };
     await evaluate("document.querySelector('#settings-dialog').showModal(); document.querySelector('#focus-select').value = '25'; document.querySelector('#focus-select').dispatchEvent(new Event('change'))");
@@ -272,8 +277,10 @@ async function main() {
     let englishFooter = '';
     for (const language of ['en', 'ms', 'es', 'ja', 'ko', 'zh-Hans', 'zh-Hant', 'id']) {
       await setViewport(320, 700);
+      const switched = Date.now();
       await chooseLanguage(language);
-      await waitFor(`document.documentElement.lang === ${JSON.stringify(language)} && (document.querySelector('#break-work').options[0]?.textContent === '25 menit') === ${language === 'id'}`, `breaks relabeled in ${language}`);
+      await waitFor(`document.documentElement.lang === ${JSON.stringify(language)} && (document.querySelector('#break-work').options[0]?.textContent === '25 menit') === ${language === 'id'}`, `breaks relabeled in ${language}`, 30_000);
+      if (Date.now() - switched > 2000) console.log(`Language switch to ${language} took ${((Date.now() - switched) / 1000).toFixed(1)} s`);
       // Breaks, and Lumi with its turn-off and hide wording.
       for (const id of ['#break-section', '#lumi-section']) {
         const fits = await evaluate<{ inside: boolean; overflow: boolean; clipped: string[] }>(`(() => {
