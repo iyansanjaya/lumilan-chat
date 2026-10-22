@@ -182,11 +182,13 @@ test('package verifier follows renderer pages, cross-process imports and icons, 
   const icon = [...sourceFiles.keys()].find(file => file.startsWith('node_modules/reicon/icons/'));
   assert(icon, 'Renderer fixture imports no reicon icons');
   for (const [platform, arch] of platforms) {
-    for (const missing of ['out/src/renderer/notch.js', 'out/src/renderer/avatar.js', 'out/src/renderer/i18n.js', icon, 'node_modules/reicon/createIcon.js'])
+    for (const missing of ['out/src/renderer/notch.js', 'out/src/renderer/break.js', 'out/src/renderer/avatar.js', 'out/src/renderer/i18n.js', icon, 'node_modules/reicon/createIcon.js'])
       await assert.rejects(verify(platform, arch, { packaged: { [missing]: null } }), new RegExp(`Missing ${missing.replaceAll('/', '\/').replaceAll('.', '\.')} in `), `${missing} was not required`);
     await assert.rejects(verify(platform, arch, { packaged: { 'out/src/renderer/panel.js': 'export const panel = 2;\n' }, local: { 'out/src/renderer/panel.js': 'export const panel = 1;\n' } }),
       /Packaged out\/src\/renderer\/panel\.js differs from compiled output/, 'A renderer file packaged through the glob escaped the byte check');
     await assert.rejects(verify(platform, arch, { packaged: { 'out/src/main/orphan.js': 'export {};\n' } }), /Packaged out\/src\/main\/orphan\.js has no compiled counterpart/);
     await assert.rejects(verify(platform, arch, { packaged: { 'out/src/renderer/app.css': null } }), /Missing out\/src\/renderer\/app\.css in /);
+    for (const missing of ['out/src/renderer/break.html', 'out/src/renderer/break.css', 'out/src/preload/break-preload.cjs'])
+      await assert.rejects(verify(platform, arch, { packaged: { [missing]: null } }), new RegExp(`Missing ${missing.replaceAll('.', '\\.')} in `), `${missing} was not required`);
   }
 });

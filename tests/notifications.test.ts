@@ -6,7 +6,7 @@ import { Notifier, type FileOffer, type NotifierNotch, type NotifierPeer, type N
 import { parseSettings } from '../src/main/settings.js';
 import { translate } from '../src/renderer/i18n.js';
 import type { Message, ReminderRecord, TextMessage } from '../src/shared/model.js';
-import type { RoutineView } from '../src/shared/notch.js';
+import type { BreakView, RoutineView } from '../src/shared/notch.js';
 
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
 
@@ -35,25 +35,26 @@ function fixture() {
   const peer: NotifierPeer = { id: 'me', state: { status: 'active', mutedThreads: [], messages: [], unread: {}, reminders: [] },
     trusted: new Map([['alice', { name: 'Alice' }], ['bob', { name: 'Bob' }]]), room: () => undefined,
     markRead: (thread: string) => { reads.push(thread); }, reminders: { tick: () => { counts.ticks++; } } };
-  const handled = { message: false, file: false, focus: false, water: false };
-  const waters: string[] = [];
+  const handled = { message: false, file: false, focus: false, water: false, break: false };
+  const waters: string[] = [], rests: string[] = [];
+  const breaks: { view: BreakView | undefined } = { view: undefined };
   const routine: { view: RoutineView | undefined } = { view: undefined };
   const summaries: Array<{ count: number; threads: number; thread: string; body: string }> = [];
   const notch: NotifierNotch = { ready: false, eligible: () => false, sync: () => { counts.syncs++; return true; },
     dismiss: (thread: string) => { dismissed.push(thread); }, message: () => handled.message, reminder: () => false,
     file: offer => { files.push(offer.id); return handled.file; },
     focusDone: (summary, body) => { summaries.push({ ...summary, body }); return handled.focus; },
-    water: body => { waters.push(body); return handled.water; } };
+    water: body => { waters.push(body); return handled.water; }, breakDue: body => { rests.push(body); return handled.break; } };
   const settings = parseSettings({ preview: true }, 'ID');
   const clock = { idle: 0 };
   const notifier = new Notifier({ Notification: Banner, powerMonitor: { getSystemIdleTime: () => clock.idle }, getWindow: () => window, getPeer: () => peer,
-    getSettings: () => settings, getNotch: () => notch, getRoutine: () => routine.view, isQuitting: () => false, reveal: thread => { opened.push(thread); },
+    getSettings: () => settings, getNotch: () => notch, getRoutine: () => routine.view, getBreak: () => breaks.view, isQuitting: () => false, reveal: thread => { opened.push(thread); },
     translate: (source, values) => translate('id', source, values) });
   let sequence = 0;
   const message = (fields: Partial<TextMessage> = {}): Message => ({ id: `m${++sequence}`, kind: 'text', from: 'alice', to: 'me', at: Date.now(), text: 'Halo', ...fields });
   const reminder = (fields: Partial<ReminderRecord> = {}): ReminderRecord => ({ id: `r${++sequence}`, kind: 'local', from: 'me', to: 'me', createdAt: 0, status: 'due',
     title: 'Bayar listrik', note: '', dueAt: 0, ...fields });
-  return { notifier, banners, sent, reads, dismissed, opened, files, env, view, counts, peer, handled, notch, settings, clock, message, reminder, summaries, waters, routine };
+  return { notifier, banners, sent, reads, dismissed, opened, files, env, view, counts, peer, handled, notch, settings, clock, message, reminder, summaries, waters, routine, rests, breaks };
 }
 
 test('reads the open conversation only while watched and asks the renderer to confirm a return', () => withPlatform('win32', () => {
@@ -256,4 +257,30 @@ test('water reminders wait for lock and suspend in either order, show once, and 
   f.peer.state.status = 'active'; f.settings.enabled = false; f.notifier.water();
   f.settings.enabled = true; f.routine.view = view({ settings: { ...view().settings, enabled: false } }); f.notifier.water();
   assert.deepEqual(f.waters, [], 'Do not disturb, disabled notifications or disabled reminders still reminded');
+});
+
+test('break reminders show in Lumi first, never while locked or asleep, and only while still due', async () => {
+  const f = fixture();
+  const view = (fields: Partial<BreakView> = {}): BreakView => ({ settings: { enabled: true, workMinutes: 45, breakMinutes: 10 }, phase: 'due', nextAt: undefined,
+    until: Date.now() + 60_000, ...fields });
+  f.breaks.view = view();
+  f.notifier.breakDue();
+  assert.deepEqual(f.rests, ['Istirahat 10 menit']);
+  assert.deepEqual(f.banners.map(b => [b.options.title, b.options.body, b.options.silent]), [['Waktunya rehat', 'Istirahat 10 menit', false]], 'Without a Lumi card the system banner was not shown');
+  f.banners[0]!.emit('click'); assert.deepEqual(f.opened, ['break']);
+  f.handled.break = true; f.notifier.breakDue();
+  assert.equal(f.banners.length, 1, 'A Lumi card was duplicated by a system banner');
+  // The break module reminds again after the last block itself; the notifier keeps nothing to replay.
+  for (const order of [['locked', 'suspended'], ['suspended', 'locked']]) {
+    f.rests.length = 0;
+    for (const reason of order) f.notifier.block(reason);
+    f.notifier.breakDue();
+    for (const reason of order) f.notifier.unblock(reason);
+    await flush();
+    assert.deepEqual(f.rests, [], `${order.join(' then ')}: a break reminder appeared while blocked or was replayed`);
+  }
+  f.peer.state.status = 'dnd'; f.notifier.breakDue();
+  f.peer.state.status = 'active'; f.settings.enabled = false; f.notifier.breakDue();
+  f.settings.enabled = true; f.breaks.view = view({ phase: 'break' }); f.notifier.breakDue();
+  assert.deepEqual(f.rests, [], 'Do not disturb, disabled notifications or a running break still reminded');
 });

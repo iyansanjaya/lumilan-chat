@@ -24,7 +24,7 @@ if (existsSync(output) && realpathSync(output) !== output) throw new Error('Refu
 rmSync(output, { recursive: true, force: true });
 check();
 run([compiler, '-p', 'tsconfig.json']);
-for (const asset of ['index.html', 'notch.html', 'app.css', 'notch.css', 'fonts'])
+for (const asset of ['index.html', 'notch.html', 'break.html', 'app.css', 'notch.css', 'break.css', 'fonts'])
   cpSync(join(root, 'src', 'renderer', asset), join(output, 'src', 'renderer', asset), { recursive: true });
 mkdirSync(join(output, 'build'), { recursive: true });
 for (const asset of ['icon.png', 'icon.ico', 'trayTemplate.png', 'trayTemplate@2x.png'])

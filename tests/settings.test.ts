@@ -5,7 +5,7 @@ import { parseSettings } from '../src/main/settings.js';
 test('settings default safely for a missing, empty or non-object saved file', () => {
   for (const saved of [undefined, null, {}, [], 'text', 42]) {
     assert.deepEqual(parseSettings(saved, 'ID'), { enabled: true, preview: false, silent: false, background: true, notch: true,
-      notchPosition: undefined, languageMode: 'auto', language: 'id', linkPreviews: 'ask', focus: 0, notchIdle: 'always' }, JSON.stringify(saved));
+      notchPosition: undefined, languageMode: 'auto', language: 'id', linkPreviews: 'ask', focus: 0, notchIdle: 'always', notchOpen: 'click', notchOpened: false }, JSON.stringify(saved));
   }
   // Only an explicit false disables; only an explicit true enables privacy-sensitive previews and silence.
   const saved = parseSettings({ enabled: 0, preview: 'yes', silent: 1, background: null, notch: '' }, 'US');
@@ -43,4 +43,13 @@ test('the Lumi pill stays on screen unless the earlier only-while-unwatched beha
   assert.equal(parseSettings({ notchIdle: 'away' }, 'ID').notchIdle, 'away');
   for (const value of [undefined, 'always', 'ALWAYS', 'never', true, 1, null, { away: true }])
     assert.equal(parseSettings({ notchIdle: value }, 'ID').notchIdle, 'always', JSON.stringify(value));
+});
+
+test('the Lumi panel opens on click unless hover was saved, and the intro ends only after an explicit first opening', () => {
+  assert.equal(parseSettings({ notchOpen: 'hover' }, 'ID').notchOpen, 'hover');
+  for (const value of [undefined, 'click', 'HOVER', true, 1, null, { hover: true }])
+    assert.equal(parseSettings({ notchOpen: value }, 'ID').notchOpen, 'click', JSON.stringify(value));
+  assert.equal(parseSettings({ notchOpened: true }, 'ID').notchOpened, true);
+  for (const value of [undefined, 'true', 1, null, {}])
+    assert.equal(parseSettings({ notchOpened: value }, 'ID').notchOpened, false, JSON.stringify(value));
 });

@@ -13,7 +13,7 @@ export function debugPages(value: unknown): DebugPage[] {
   });
 }
 
-export interface Evaluation { result: { value?: unknown; objectId?: string }; exceptionDetails?: { text?: string } }
+export interface Evaluation { result: { value?: unknown; objectId?: string }; exceptionDetails?: { text?: string; exception?: { description?: string } } }
 export interface Metrics { metrics: Array<{ name: string; value: number }> }
 export interface EventListeners { listeners: Array<{ type: string; handler?: { objectId?: string } }> }
 export type CdpResponse<M extends string> = M extends 'Runtime.evaluate' | 'Runtime.callFunctionOn' ? Evaluation :
@@ -33,6 +33,67 @@ export interface CdpConnection {
   send<M extends string>(method: M, params?: Record<string, unknown>, timeout?: number): Promise<CdpResponse<M>>;
   evaluate<T = unknown>(expression: string, awaitPromise?: boolean): Promise<T>;
   close(): Promise<void>;
+}
+
+// Elements a person can click whose cursor stays an arrow: native controls, plus any element with a click or press
+// listener. Text fields keep their caret, and containers that only delegate to the controls inside them are skipped.
+// A label counts only when clicking it acts (a switch, a choice, a file picker), not when it only focuses a field, and
+// hidden or transparent inputs behind those labels are never pointed at. A message row is clickable only while messages are being
+// selected. getEventListeners is the DevTools command-line API, so this evaluates with includeCommandLineAPI.
+export async function arrowCursors(connection: CdpConnection): Promise<string[]> {
+  const expression = `(() => {
+    const textual = el => el.matches('input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=range]):not([type=color]):not([type=button]):not([type=submit]), textarea, [contenteditable=""], [contenteditable=true]');
+    const delegate = el => el.matches('dialog, form, details, nav, section, main, aside, header, ul, ol, [role=menu], [role=toolbar], [role=group], [role=tablist], [role=listbox], .filter-bar, .thread-actions-menu, #messages')
+      || el.matches('article.message') && !el.querySelector('.message-select-button.select-mode');
+    const native = el => el.matches('button, summary, select, option, a[href], [role=button], [role=tab], [role=option], [role=menuitem], input[type=checkbox], input[type=radio], input[type=file], input[type=range], input[type=color]')
+      || el.matches('label') && Boolean(el.control?.matches('input[type=checkbox], input[type=radio], input[type=file]'));
+    const ok = new Set(['pointer', 'zoom-in', 'grab', 'grabbing', 'ew-resize', 'move', 'text', 'not-allowed', 'wait', 'copy']);
+    const name = el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\\s+/).join('.') : '');
+    const found = new Set();
+    for (const el of document.querySelectorAll('*')) {
+      if (textual(el) || delegate(el) || el.matches(':disabled, [hidden]')) continue;
+      const listeners = getEventListeners(el);
+      if (!native(el) && !['click', 'dblclick', 'pointerdown', 'mousedown'].some(type => listeners[type]?.length)) continue;
+      const style = getComputedStyle(el);
+      if (style.opacity !== '0' && !ok.has(style.cursor)) found.add(name(el) + ' cursor=' + style.cursor);
+    }
+    return [...found];
+  })()`;
+  const result = await connection.send('Runtime.evaluate', { expression, includeCommandLineAPI: true, returnByValue: true });
+  assert(!result.exceptionDetails, JSON.stringify(result.exceptionDetails));
+  assert(Array.isArray(result.result.value), 'Cursor scan returned no list');
+  return result.result.value.map(String);
+}
+
+// Electron logs every ipcMain.handle rejection on the main process stderr. A smoke provokes many on purpose and
+// receives each one through evaluate, so a logged rejection without a matching refusal is one the app swallowed (a
+// renderer `.catch(() => {})` hiding a request the main process will never accept). Matching is by channel and
+// message and ignores timing.
+export const refused: string[] = [];
+const refusal = (line: string) => /Error invoking remote method '([^']+)': (?:Error: )?(.*)/.exec(line);
+export function handlerErrors(stream: NodeJS.ReadableStream | null): string[] {
+  const logged: string[] = [];
+  let rest = '';
+  stream?.on('data', chunk => {
+    const lines = (rest + String(chunk)).split('\n'); rest = lines.pop() ?? '';
+    for (const line of lines) {
+      const match = /Error occurred in handler for '([^']+)': (?:Error: )?(.*)/.exec(line);
+      if (match) logged.push(`${match[1]}: ${match[2]!.trim()}`);
+    }
+  });
+  return logged;
+}
+// Outcomes the main process reports by rejecting and the main window shows on the transfer row or as a toast.
+// ponytail: matched by exact message, so a swallowed copy of one of these passes; have the renderer acknowledge
+// rejections if one of them is ever hidden.
+const reported = ['lumilan:file: Penerima menolak file.', 'lumilan:file: Pengiriman dibatalkan.',
+  'lumilan:clipboard-image: Gambar clipboard tidak valid atau terlalu besar (maksimal 40 juta piksel dan 120 frame).'];
+export function swallowedRejections(logged: string[]): string[] {
+  const left = [...refused];
+  return logged.filter(line => {
+    const index = left.indexOf(line); if (index >= 0) left.splice(index, 1);
+    return index < 0 && !reported.includes(line);
+  });
 }
 
 export async function connect(url: string, failures: string[], page = true, requestTimeout = 30000): Promise<CdpConnection> {
@@ -86,6 +147,8 @@ export async function connect(url: string, failures: string[], page = true, requ
   }
   async function evaluate<T = unknown>(expression: string, awaitPromise = true): Promise<T> {
     const result = await send('Runtime.evaluate', { expression, awaitPromise, returnByValue: true });
+    const match = refusal(result.exceptionDetails?.exception?.description?.split('\n')[0] ?? '');
+    if (match) refused.push(`${match[1]}: ${match[2]!.trim()}`);
     assert(!result.exceptionDetails, JSON.stringify(result.exceptionDetails));
     return result.result.value as T;
   }

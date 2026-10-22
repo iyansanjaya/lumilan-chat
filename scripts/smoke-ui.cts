@@ -50,6 +50,7 @@ async function main() {
   child.once('error', error => { launchError = error; });
   let logs = '';
   for (const stream of [child.stdout, child.stderr]) stream?.on('data', chunk => { logs = (logs + chunk).slice(-8000); });
+  const handlerErrors = cdp.handlerErrors(child.stderr);
   let socket: WebSocket | undefined, quit: (() => Promise<unknown>) | undefined;
   let passed = false;
   try {
@@ -223,7 +224,7 @@ async function main() {
           inside: field.left >= box.left && field.right <= box.right, overflow: dialog.scrollWidth > dialog.clientWidth,
           buttons: buttons.every(button => button.left >= box.left && button.right <= box.right),
           textOverlap: buttons.some((a, i) => buttons.some((b, j) => i < j && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)) }; })()`);
-      assert(focusLayout.appearance === 'none' && focusLayout.arrow !== 'none' && focusLayout.paddingRight >= 32 && focusLayout.inside && !focusLayout.overflow && focusLayout.buttons && !focusLayout.textOverlap,
+      assert(['none', 'base-select'].includes(focusLayout.appearance) && focusLayout.arrow !== 'none' && focusLayout.paddingRight >= 32 && focusLayout.inside && !focusLayout.overflow && focusLayout.buttons && !focusLayout.textOverlap,
         `Focus settings are inconsistent at ${width} px in ${theme}: ${JSON.stringify(focusLayout)}`);
       await delay(400); // Let the theme's color transitions finish before the review screenshot.
       const focusShot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
@@ -236,6 +237,57 @@ async function main() {
     await evaluate("document.querySelector('#settings-dialog').close()");
     assert.equal(failures.length, 0, `Renderer errors after focus: ${failures.join('; ')}`);
     console.log('Focus: main-window start/end with status broadcast and restore, shared select style, light/dark 375/320 px passed');
+    // Work breaks in Settings: lengths apply on change, the toggle turns reminders on, and the shared select style holds
+    // with long translated text in light/dark narrow windows. The break screen itself is covered by the notch smoke.
+    await setViewport(1100, 800);
+    await evaluate("document.querySelector('#settings-button').click()");
+    await waitFor("document.querySelector('#settings-dialog').open && document.querySelector('#break-work').options.length === 5 && document.querySelector('#break-length').options.length === 4", 'break settings filled');
+    assert.deepEqual(await evaluate("window.lumilan.breaksState().then(v => [v.settings, v.phase])", true), [{ enabled: false, workMinutes: 45, breakMinutes: 10 }, 'work'], 'Breaks did not start off with their defaults');
+    await evaluate("document.querySelector('#break-work').value = '30'; document.querySelector('#break-work').dispatchEvent(new Event('change'))");
+    await waitFor("window.lumilan.breaksState().then(v => v.settings.workMinutes === 30 && !v.settings.enabled)", 'work length saved while off');
+    await evaluate("document.querySelector('#break-enabled').click()");
+    await waitFor("window.lumilan.breaksState().then(v => v.settings.enabled && v.nextAt > Date.now() + 29 * 60000 && /\\d/.test(document.querySelector('#break-status').textContent))", 'break reminders on with the next time shown');
+    for (const width of [375, 320]) for (const theme of ['light', 'dark']) {
+      await setViewport(width, 700);
+      const breakLayout = await evaluate<{ appearance: string; arrow: string; paddingRight: number; inside: boolean; overflow: boolean; buttons: boolean }>(`(() => {
+        document.documentElement.dataset.theme = '${theme}';
+        document.querySelector('#break-status').textContent = 'Next break at 16:00 · a long translated line that must wrap inside the dialog without overlapping';
+        const dialog = document.querySelector('#settings-dialog'), select = document.querySelector('#break-length'), style = getComputedStyle(select);
+        select.closest('section').scrollIntoView({ block: 'center' });
+        const box = dialog.getBoundingClientRect(), fields = [...select.closest('section').querySelectorAll('select')].map(field => field.getBoundingClientRect());
+        const buttons = [...select.closest('section').querySelectorAll('.dialog-actions button')].map(button => button.getBoundingClientRect());
+        return { appearance: style.appearance, arrow: style.backgroundImage, paddingRight: parseFloat(style.paddingRight),
+          inside: fields.every(field => field.left >= box.left && field.right <= box.right), overflow: dialog.scrollWidth > dialog.clientWidth,
+          buttons: buttons.every(button => button.left >= box.left && button.right <= box.right) }; })()`);
+      assert(['none', 'base-select'].includes(breakLayout.appearance) && breakLayout.arrow !== 'none' && breakLayout.paddingRight >= 32 && breakLayout.inside && !breakLayout.overflow && breakLayout.buttons,
+        `Break settings are inconsistent at ${width} px in ${theme}: ${JSON.stringify(breakLayout)}`);
+      await delay(400);
+      const breakShot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
+      writeFileSync(join(dist, `ui-audit-breaks-${theme}-${width}.png`), Buffer.from(breakShot.data, 'base64'));
+    }
+    // Every language at the narrowest width: labels, lengths and the button stay inside the dialog.
+    // The language is chosen in the open dialog, as a person would; the lengths must relabel without reopening it.
+    const languageBefore = await evaluate<string>("document.querySelector('#language-select').value");
+    const chooseLanguage = (value: string) => evaluate(`document.querySelector('#language-select').value = ${JSON.stringify(value)}; document.querySelector('#language-select').dispatchEvent(new Event('change'))`);
+    await setViewport(320, 700);
+    for (const language of ['en', 'ms', 'es', 'ja', 'ko', 'zh-Hans', 'zh-Hant', 'id']) {
+      await chooseLanguage(language);
+      await waitFor(`document.documentElement.lang === ${JSON.stringify(language)} && (document.querySelector('#break-work').options[0]?.textContent === '25 menit') === ${language === 'id'}`, `breaks relabeled in ${language}`);
+      const fits = await evaluate<{ inside: boolean; overflow: boolean; clipped: string[] }>(`(() => {
+        const dialog = document.querySelector('#settings-dialog'), section = document.querySelector('#break-section');
+        section.scrollIntoView({ block: 'center' });
+        const box = dialog.getBoundingClientRect(), parts = [...section.querySelectorAll('select, label, button, h3, .setting-note')].filter(e => e.getClientRects().length);
+        return { inside: parts.every(e => { const b = e.getBoundingClientRect(); return b.left >= box.left && b.right <= box.right; }), overflow: dialog.scrollWidth > dialog.clientWidth,
+          clipped: [...section.querySelectorAll('select, button')].filter(e => e.scrollWidth > e.clientWidth + 1).map(e => e.id) }; })()`);
+      assert(fits.inside && !fits.overflow && !fits.clipped.length, `Break settings do not fit at 320 px in ${language}: ${JSON.stringify(fits)}`);
+    }
+    await chooseLanguage(languageBefore);
+    await waitFor(`document.querySelector('#language-select').value === ${JSON.stringify(languageBefore)}`, 'language restored');
+    await evaluate("document.documentElement.dataset.theme = 'light'; document.querySelector('#break-enabled').click()");
+    await waitFor("window.lumilan.breaksState().then(v => !v.settings.enabled && v.nextAt === undefined)", 'break reminders off');
+    await evaluate("document.querySelector('#settings-dialog').close()");
+    assert.equal(failures.length, 0, `Renderer errors after breaks: ${failures.join('; ')}`);
+    console.log('Breaks: main-window lengths and toggle, shared select style, light/dark 375/320 px passed');
     // Routine and Tasks in Settings: the main-window home of Lumi's pages for Wayland and for people who turn Lumi off.
     await setViewport(1100, 800);
     await evaluate("document.querySelector('#settings-button').click()");
@@ -275,7 +327,7 @@ async function main() {
           inside: field.left >= box.left && field.right <= box.right, overflow: dialog.scrollWidth > dialog.clientWidth,
           rows: rows.every(row => row.left >= box.left && row.right <= box.right),
           buttons: buttons.every(button => button.left >= box.left && button.right <= box.right) && !buttons.some((a, i) => buttons.some((b, j) => i < j && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)) }; })()`);
-      assert(pageLayout.appearance === 'none' && pageLayout.arrow !== 'none' && pageLayout.paddingRight >= 32 && pageLayout.inside && !pageLayout.overflow && pageLayout.rows && pageLayout.buttons,
+      assert(['none', 'base-select'].includes(pageLayout.appearance) && pageLayout.arrow !== 'none' && pageLayout.paddingRight >= 32 && pageLayout.inside && !pageLayout.overflow && pageLayout.rows && pageLayout.buttons,
         `Routine and Tasks settings are inconsistent at ${width} px in ${theme}: ${JSON.stringify(pageLayout)}`);
       await delay(400);
       const pageShot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
@@ -342,7 +394,7 @@ async function main() {
       return { open: dialog.open, right: rect.right, viewport: innerWidth, overflow: dialog.scrollWidth > dialog.clientWidth,
         gap, appearance: select.appearance, arrow: select.backgroundImage, paddingRight: parseFloat(select.paddingRight) }; })()`);
     assert(roomLayout.open && roomLayout.right <= roomLayout.viewport && !roomLayout.overflow &&
-      roomLayout.gap >= 6.5 && roomLayout.appearance === 'none' && roomLayout.arrow !== 'none' && roomLayout.paddingRight >= 32,
+      roomLayout.gap >= 6.5 && ['none', 'base-select'].includes(roomLayout.appearance) && roomLayout.arrow !== 'none' && roomLayout.paddingRight >= 32,
       `Room dialog or select control is inconsistent: ${JSON.stringify(roomLayout)}`);
     const roomScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
     writeFileSync(join(dist, 'ui-audit-room-light.png'), Buffer.from(roomScreenshot.data, 'base64'));
@@ -811,7 +863,8 @@ async function main() {
           visibility: document.visibilityState, pageHidden: document.documentElement.dataset.pageHidden,
           reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
           focusSurface: contrast(focus.outlineColor, surface), focusChat: contrast(focus.outlineColor, chat),
-          selection: contrast(selected.borderTopColor, selected.backgroundColor), outgoing: contrast(own.borderTopColor, own.backgroundColor),
+          // An outgoing bubble's edge shows through its outline or, for a filled bubble, its fill against the conversation.
+          selection: contrast(selected.borderTopColor, selected.backgroundColor), outgoing: Math.max(contrast(own.borderTopColor, own.backgroundColor), contrast(own.backgroundColor, chat)),
           outgoingNearWhite: borderRgb.every(n => n > 220), inputTransitions: inputStyle.transitionDuration.split(',').map(parseFloat),
           inputProperties: inputStyle.transitionProperty.split(',').map(s => s.trim()) }; })()`);
       assert(motion === 'native' || borders.reducedMotion === (motion === 'reduce'), `Motion emulation failed (${motion}): ${JSON.stringify(borders)}`);
@@ -863,6 +916,9 @@ async function main() {
     assert(Number.isFinite(idleHeap) && Number.isFinite(idleTasks) && idleHeap <= 96 && idleTasks <= .25,
       `Renderer idle budget exceeded: ${JSON.stringify({ jsHeapMiB: idleHeap, taskSeconds: idleTasks })}`);
     console.log(`UI polish: scrollable accessible emoji, symmetric Settings, focus/selection contrast and reduced motion passed; idle renderer JS heap ${idleHeap.toFixed(2)} MiB, task time ${idleTasks.toFixed(3)} s/1 s`);
+    // Everything a person can click says so: no arrow over a button, a select, a switch or a clickable row.
+    assert.deepEqual(await cdp.arrowCursors(remote), [], 'Clickable controls keep the arrow cursor in the main window');
+    assert.deepEqual(cdp.swallowedRejections(handlerErrors), [], 'The main process rejected requests the renderer hid');
     assert.equal(failures.length, 0, `Renderer errors: ${failures.join('; ')}`);
     passed = true;
     console.log('Packaged UI rendered: welcome, chat, details, settings, room, contact dialog, call, avatar, animated GIF preview, and older-message reactions without scroll jumps');

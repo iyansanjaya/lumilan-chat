@@ -52,6 +52,7 @@ async function main() {
   const failures: string[] = [];
   child.once('error', error => { launchError = error; });
   for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => { logs = (logs + chunk).slice(-16000); });
+  const handlerErrors = cdp.handlerErrors(child.stderr);
   try {
     const pages = await until(async () => {
       if (launchError) throw launchError;
@@ -753,6 +754,78 @@ async function main() {
       assert(await mainPage.evaluate("['#emoji-picker','#message-input','#settings-dialog','#call-panel'].every(selector=>getComputedStyle(document.querySelector(selector)).animationPlayState.split(',').every(v=>v.trim()==='running'))"),
         'Shown main renderer retained hidden animation pauses');
     };
+    // The break screen: one dimmed window per display above everything (one fullscreen window on Wayland) that counts down,
+    // takes keyboard focus on one display at most, enables Back to work after its input guard, stays within the
+    // companion's resource budget, and closes with the button or Escape.
+    // The inspector can evaluate this in the middle of a window's destroy(), when it is not yet destroyed but has no contents.
+    const breakWindows = "smokeElectron.BrowserWindow.getAllWindows().filter(w=>!w.isDestroyed()&&w.webContents&&!w.webContents.isDestroyed()&&w.webContents.getURL()==='lumilan://app/break.html')";
+    const breakTargets = async () => cdp.debugPages(await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).filter(p => p.url === 'lumilan://app/break.html');
+    const breakScreen = async (label: string, end: 'click' | 'escape', shot?: string) => {
+      const wayland = process.platform === 'linux' && process.env.XDG_SESSION_TYPE === 'wayland';
+      const expected = wayland ? 1 : await nativeBrowser.evaluate<number>('smokeElectron.screen.getAllDisplays().length');
+      const targets = await until(async () => { const list = await breakTargets(); return list.length === expected && list; }, `${label}: one break window per display`);
+      type Shown = Array<{top:boolean;full:boolean;focused:boolean;bounds:{x:number;y:number;width:number;height:number};display:{x:number;y:number;width:number;height:number}}>;
+      const shown = await until(() => nativeBrowser.evaluate<Shown | false>(`(()=>{const w=${breakWindows};return w.length===${expected}&&w.every(x=>x.isVisible())&&w.map(x=>({top:x.isAlwaysOnTop(),full:x.isFullScreen(),focused:x.isFocused(),bounds:x.getBounds(),display:smokeElectron.screen.getDisplayMatching(x.getBounds()).bounds}))})()`), `${label}: break windows shown`);
+      const covers = (w: Shown[number]) => (['x', 'y', 'width', 'height'] as const).every(key => Math.abs(w.bounds[key] - w.display[key]) <= 1);
+      if (wayland) assert(shown.every(w => w.full), `${label}: the Wayland break window is not fullscreen: ${JSON.stringify(shown)}`);
+      else assert(shown.every(w => w.top && covers(w)), `${label}: break windows do not cover their displays above other windows: ${JSON.stringify(shown)}`);
+      assert(shown.filter(w => w.focused).length <= 1, `${label}: more than one break window took focus`);
+      const page = await connect(targets[0]!.webSocketDebuggerUrl, failures);
+      try {
+        await until(() => page.evaluate("!!window.lumiBreak&&document.readyState==='complete'&&/^\\d+:\\d\\d$/.test(document.getElementById('clock').textContent)&&document.getElementById('title').textContent==='Saatnya rehat sejenak'"), `${label}: countdown rendered`);
+        await until(() => page.evaluate("!document.getElementById('resume').disabled&&document.activeElement?.id==='resume'"), `${label}: Back to work enabled and focused after the input guard`);
+        if (shot) {
+          await page.send('Performance.enable');
+          const measure = (result: cdp.Metrics, name: string) => result.metrics.find(m => m.name === name)?.value || 0;
+          const before = await page.send('Performance.getMetrics'); await delay(2000);
+          const after = await page.send('Performance.getMetrics');
+          const busy = measure(after, 'TaskDuration') - measure(before, 'TaskDuration'), heap = measure(after, 'JSHeapUsedSize');
+          assert(busy < .4 && heap < 32 * 1024 * 1024, `${label}: break screen over budget: ${busy}s / 2s, ${heap} B heap`);
+          const native = await nativeBrowser.evaluate<{cpu:{percentCPUUsage:number}} | undefined>(`(()=>{const w=${breakWindows}[0];return w&&smokeElectron.app.getAppMetrics().find(m=>m.pid===w.webContents.getOSProcessId())})()`);
+          assert(native && native.cpu.percentCPUUsage < 5, `${label}: break screen CPU budget exceeded`);
+          console.log(`Break screen renderer: ${(busy / 2 * 100).toFixed(2)}% task time; ${(heap / 1024 / 1024).toFixed(2)} MiB JS heap; ${native.cpu.percentCPUUsage.toFixed(2)}% CPU; ${expected} window(s)`);
+          const image = await page.send('Page.captureScreenshot', { format: 'png' });
+          writeFileSync(join(dist, shot), Buffer.from(image.data, 'base64'));
+        }
+        // The window closes as the break ends, so the event that ends it may lose its own reply.
+        if (end === 'click') {
+          const point = await page.evaluate<{x:number;y:number}>("(()=>{const b=document.getElementById('resume').getBoundingClientRect();return {x:b.x+b.width/2,y:b.y+b.height/2}})()");
+          await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
+          await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
+          await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 }).catch(() => undefined);
+        } else await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => undefined);
+        await until(async () => !(await nativeBrowser.evaluate<number>(`${breakWindows}.length`)) && !(await breakTargets()).length, `${label}: break screen closed`);
+        await until(() => mainPage.evaluate("window.lumilan.breaksState().then(v=>v.phase==='work')"), `${label}: back to work`);
+      } finally { page.close(); }
+    };
+    // Every interface language, Indonesian last so the steps after it read the source strings.
+    const eachLanguage = async (check: (language: string) => Promise<void>) => {
+      for (const language of ['en', 'ms', 'es', 'ja', 'ko', 'zh-Hans', 'zh-Hant', 'id']) {
+        await mainPage.evaluate(`window.lumilan.setLanguage(${JSON.stringify(language)})`);
+        await until(() => companionPage.evaluate(`document.documentElement.lang===${JSON.stringify(language)}`), `notch ${language} labels`);
+        await check(language);
+      }
+    };
+    // The Breaks page in one language: each row of lengths on one line, the side buttons on one line, no text cut off.
+    const breakPageFits = async (label: string) => {
+      await tightPanel(label);
+      const page = await companionPage.evaluate<{rows:number[];tall:string[];overflow:string[]}>(`(()=>{const p=document.getElementById('page-break');
+        const rows=[...p.querySelectorAll('.choices')].filter(r=>!r.hidden).map(r=>new Set([...r.querySelectorAll('button')].map(b=>Math.round(b.getBoundingClientRect().top))).size);
+        const tall=[...p.querySelectorAll('.page-side button')].filter(b=>!b.hidden&&b.getBoundingClientRect().height>40).map(b=>b.textContent);
+        const overflow=[...p.querySelectorAll('button,.page-note,.label,.figure,.choices span')].filter(e=>e.getClientRects().length&&e.scrollWidth>e.clientWidth+1).map(e=>e.id||e.textContent);
+        return {rows,tall,overflow}})()`);
+      assert(page.rows.every(count => count === 1) && !page.tall.length && !page.overflow.length, `${label}: lengths wrap, buttons wrap or text is cut off: ${JSON.stringify(page)}`);
+    };
+    // The idle pill while a break is due: eyes, badge, cup and countdown in order, apart, and inside the island.
+    const pillFits = async (label: string) => {
+      await until(() => companionPage.evaluate(`document.body.dataset.mode==='hidden'&&document.body.dataset.rest==='true'&&document.body.dataset.pointer!=='true'&&${settled}`), `${label}: pill counts down`);
+      const pill = await companionPage.evaluate<{inside:boolean;gaps:number[];ids:string[];text:string}>(`(()=>{const i=${island};
+        const parts=[...document.querySelectorAll('#pill-eyes,#pill-badge,#rest-icon,#timer,#pill-clock')].filter(e=>getComputedStyle(e).display!=='none'&&e.getClientRects().length)
+          .map(e=>{const b=e.getBoundingClientRect();return {id:e.id,left:b.left,right:b.right}}).sort((a,b)=>a.left-b.left);
+        return {inside:parts.every(p=>p.left>=i.left+4&&p.right<=i.right-4),gaps:parts.slice(1).map((p,k)=>p.left-parts[k].right),ids:parts.map(p=>p.id),text:document.getElementById('timer').textContent}})()`);
+      assert(pill.inside && pill.gaps.every(gap => gap >= 3) && pill.ids.join() === 'pill-eyes,pill-badge,rest-icon,timer' && /^\d+:\d\d$/.test(pill.text),
+        `${label}: the countdown crowds the badge or leaves the pill: ${JSON.stringify(pill)}`);
+    };
     if (process.platform === 'linux' && process.env.XDG_SESSION_TYPE === 'wayland') {
       assert.equal((await mainPage.evaluate<{notchSupported:boolean}>('window.lumilan.notificationSettings()')).notchSupported, false);
       assert.equal(await nativeBrowser.evaluate('smokeElectron.Notification.isSupported()'), true,
@@ -795,6 +868,10 @@ async function main() {
       await nativeBrowser.evaluate('smokeMain.restore();smokeMain.show();smokeMain.focus()');
       await assertMainMotionVisible();
       console.log('Wayland: native renderer, real D-Bus notification fallback, no overlay, lock/suspend, reminder recovery and privacy passed');
+      await mainPage.evaluate("window.lumilan.breaks({action:'start'})");
+      await breakScreen('Wayland break', 'click', 'ui-break-overlay-wayland.png');
+      assert.deepEqual(failures.filter(text => text !== 'Permissions policy violation: microphone is not allowed in this document.'), []);
+      console.log('Wayland: one fullscreen break screen from Settings, countdown, input guard, Back to work and budget passed');
       await quitPendingClipboard(); return;
     }
     const background = async () => {
@@ -882,8 +959,12 @@ async function main() {
     // the OS animation preference is pinned to "no preference" only for it.
     await companionPage.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
     await companionPage.evaluate("globalThis.smokeBlink=false;document.getElementById('pill-eyes').addEventListener('animationstart',e=>{if(e.animationName==='blink')smokeBlink=true});true");
+    // First appearance: Lumi introduces itself once with a queued card, so the badge invites a look until the panel opens.
+    await until(() => companionPage.evaluate("window.lumi.state().then(s=>s.items.some(i=>i.key==='lumi:intro'))"), 'one-time Lumi intro queued');
+    await companionPage.evaluate("window.lumi.action({type:'select',key:'lumi:intro'})");
     await companionPage.evaluate("window.lumi.action({type:'peek'})");
-    await until(() => companionPage.evaluate("document.body.dataset.mode==='compact'"), 'manual empty peek');
+    await until(() => companionPage.evaluate(`document.body.dataset.mode==='compact'&&${settled}&&getComputedStyle(document.getElementById('summary-open')).display==='block'&&window.lumi.state().then(s=>s.selected?.key==='lumi:intro')`), 'intro card with its open chevron');
+    await islandShot('ui-notch-intro.png');
     // Idle: a black 120x30 pill attached to the top edge, or the notch-sized pill under a macOS menu bar inset,
     // flanked by two concave black shoulders.
     // Exact 4/7-second deadlines are tested with mock timers. Allow real pointer activity to renew them on an active desktop.
@@ -896,6 +977,8 @@ async function main() {
     assert(pill.display === 'flex' && pill.eyes === 2 && /^\d\d[.:]\d\d$/.test(pill.clock) && expectedClock.includes(pill.clock), `Idle pill content: ${JSON.stringify({ pill, expectedClock })}`);
     await companionPage.evaluate("window.lumi.action({type:'peek'})");
     await click('mascot');
+    await until(() => mainPage.evaluate('window.lumilan.notificationSettings().then(s=>s.notchOpened===true)'), 'first opening ends the intro');
+    assert.equal(await companionPage.evaluate("window.lumi.state().then(s=>s.items.some(i=>i.key==='lumi:intro'))"), false, 'The intro stayed after the panel opened');
     await tightPanel('Empty manual panel');
     if (process.platform !== 'linux') assert.equal(await nativeBrowser.evaluate('notchShapes.length'), 0, 'A window shape was applied outside Linux');
     await islandShot('ui-notch-empty.png');
@@ -909,6 +992,29 @@ async function main() {
     await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 200 });
     await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'manual panel closes after the pointer leaves', 3000);
     await until(() => nativeBrowser.evaluate("!smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').isFocused()"), 'manual close releases native keyboard focus');
+    // Hovering the empty pill: it grows and trades its clock for an Open hint, and opens nothing by itself.
+    assert.equal(await companionPage.evaluate('window.lumi.state().then(s=>s.items.length)'), 0, 'Queue not empty before the pill hover check');
+    const pillPoint = await companionPage.evaluate<{x:number;y:number}>(`(()=>{const b=${island};return {x:b.left+b.width/2,y:b.top+Math.min(15,b.height/2)}})()`);
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...pillPoint });
+    await until(() => companionPage.evaluate(`${settled}&&getComputedStyle(document.getElementById('pill-hint')).display!=='none'&&getComputedStyle(document.getElementById('pill-clock')).display==='none'&&(()=>{const e=document.getElementById('island');return Math.round(e.getBoundingClientRect().width)===(parseFloat(getComputedStyle(e).paddingTop)?346:136)})()`), 'pill hover shows the Open hint');
+    await islandShot('ui-notch-pill-hover.png');
+    await delay(800);
+    assert.equal(await companionPage.evaluate('document.body.dataset.mode'), 'hidden', 'Hovering the empty pill opened a card');
+    // Opening on hover is opt-in. It must not take keyboard focus from the app under the pointer; a press inside keeps it open.
+    const hoverSetting = (open: string) => mainPage.evaluate(`window.lumilan.notificationSettings().then(s=>window.lumilan.setNotificationSettings({enabled:s.enabled,preview:s.preview,silent:s.silent,background:s.background,notch:s.notch,notchOpen:${JSON.stringify(open)}}))`);
+    await hoverSetting('hover');
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 200 });
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...pillPoint });
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='expanded'"), 'hover opens the panel');
+    assert.equal(await nativeBrowser.evaluate("smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').isFocused()"), false, 'Opening on hover took keyboard focus');
+    await click('tab-activity');
+    await delay(300);
+    assert.equal(await companionPage.evaluate('document.body.dataset.mode'), 'expanded', 'A press inside the hover panel closed it');
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 200 });
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'hover panel closes after the pointer leaves', 3000);
+    await hoverSetting('click');
+    assert.equal(await mainPage.evaluate('window.lumilan.notificationSettings().then(s=>s.notchOpen)'), 'click');
+    console.log('Notch: one-time intro, empty pill hover hint without a card, opt-in hover opening without focus theft passed');
     const automaticNotificationContext = async () => {
       const [native, renderer] = await Promise.all([
         nativeBrowser.evaluate<{mainVisible:boolean;mainFocused:boolean;mainMinimized:boolean;notchVisible:boolean;notchFocused:boolean;events:unknown[]}>("(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return{mainVisible:smokeMain.isVisible(),mainFocused:smokeMain.isFocused(),mainMinimized:smokeMain.isMinimized(),notchVisible:w.isVisible(),notchFocused:w.isFocused(),events:notchTrace.slice(-12)}})()"),
@@ -1209,8 +1315,10 @@ async function main() {
       assert.equal(await mainPage.evaluate("document.getElementById('reminder-title').value"),'Keep this draft','Language change erased reminder draft');
       await mainPage.evaluate("document.getElementById('reminder-new').click()");
       const layout=await mainPage.evaluate<{overflow:boolean;selectOverflow:boolean;appearance:string;padding:number;filterBorder:number;tabs:Array<{left:number;right:number;top:number;bottom:number;textLeft:number;textRight:number;height:number}>}>("(()=>{const d=document.getElementById('reminders-dialog'),s=document.getElementById('reminder-recipient'),c=getComputedStyle(s),f=document.getElementById('reminder-filters');return {overflow:d.scrollWidth>d.clientWidth,selectOverflow:s.getBoundingClientRect().right>d.getBoundingClientRect().right,appearance:c.appearance,padding:parseFloat(c.paddingRight),filterBorder:parseFloat(getComputedStyle(f).borderBottomWidth),tabs:[...f.children].map(b=>{const r=b.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(b);const text=range.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,textLeft:text.left,textRight:text.right,height:r.height}})}})()");
-      assert(!layout.overflow&&!layout.selectOverflow&&layout.appearance==='none'&&layout.padding>=40,`Reminder form layout ${theme}/${language}: ${JSON.stringify(layout)}`);
-      assert.equal(layout.filterBorder,0,'Reminder filters inherited sidebar separator');
+      assert(!layout.overflow&&!layout.selectOverflow&&['none','base-select'].includes(layout.appearance)&&layout.padding>=40,`Reminder form layout ${theme}/${language}: ${JSON.stringify(layout)}`);
+      // The reminder views are underline tabs on the same 1px rule as the sidebar's.
+      // One device pixel: at 125% display scaling Chromium snaps the 1px rule to 0.8 CSS px.
+      assert(layout.filterBorder>0&&layout.filterBorder<=1,`Reminder tabs lost the rule they sit on: ${layout.filterBorder}px`);
       for(const tab of layout.tabs) assert(tab.height>=36&&tab.textLeft>=tab.left+6&&tab.textRight<=tab.right-6,`Reminder label does not fit ${theme}/${language}: ${JSON.stringify(tab)}`);
       for(let i=0;i<layout.tabs.length;i++)for(let j=i+1;j<layout.tabs.length;j++){const a=layout.tabs[i]!,b=layout.tabs[j]!;assert(!(a.left<b.right&&b.left<a.right&&a.top<b.bottom&&b.top<a.bottom),'Reminder filter buttons overlap');}
       const image=await mainPage.send('Page.captureScreenshot',{format:'png'});writeFileSync(join(dist,`ui-reminders-${theme}-${language}.png`),Buffer.from(image.data,'base64'));
@@ -1295,12 +1403,19 @@ async function main() {
     // its single summary waits for unlock without marking anything read.
     const statusBefore = await mainPage.evaluate<string>('window.lumilan.state().then(s=>s.me.status)');
     assert.notEqual(statusBefore, 'dnd', 'Focus fixture must start outside Do not disturb');
-    await mainPage.evaluate('window.lumilan.setFocus(25)');
+    assert.equal(await mainPage.evaluate<number>('window.lumilan.notificationSettings().then(s=>s.focus)'), 0, 'Focus fixture must start turned off');
     await background();
     await companionPage.evaluate("window.lumi.action({type:'expand'})");
-    await until(() => companionPage.evaluate("document.body.dataset.mode==='expanded'&&!document.getElementById('dots').hidden&&[...document.querySelectorAll('#dots button')].map(b=>b.dataset.page).join()==='activity,focus,routine,tasks,shelf'"), 'deck offers Activity, Focus, Routine, Tasks and Shelf');
+    // Focus is offered while off, so it can be found without opening Settings.
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='expanded'&&!document.getElementById('dots').hidden&&[...document.querySelectorAll('#dots button')].map(b=>b.dataset.page).join()==='activity,focus,break,routine,tasks,shelf'"), 'deck offers Activity, Focus, Breaks, Routine, Tasks and Shelf');
     await click('tab-focus');
-    await until(() => companionPage.evaluate("document.getElementById('page-focus').dataset.current==='true'&&!document.getElementById('focus').hidden&&document.getElementById('tab-focus').getAttribute('aria-selected')==='true'"), 'focus page with its buttons');
+    await until(() => companionPage.evaluate("document.getElementById('page-focus').dataset.current==='true'&&document.getElementById('focus').hidden&&!document.getElementById('focus-enable').hidden"), 'focus page offers Turn on while off');
+    await tightPanel('Focus page while off');
+    await islandShot('ui-notch-deck-focus-off.png');
+    await click('focus-enable');
+    await until(() => mainPage.evaluate('window.lumilan.notificationSettings().then(s=>s.focus===25)'), 'Turn on saved the focus setting');
+    await until(() => companionPage.evaluate("document.getElementById('page-focus').dataset.current==='true'&&!document.getElementById('focus').hidden&&document.getElementById('focus-enable').hidden&&document.getElementById('tab-focus').getAttribute('aria-selected')==='true'"), 'focus page with its buttons');
+    assert.equal(await mainPage.evaluate<string>('window.lumilan.state().then(s=>s.me.status)'), statusBefore, 'Turn on changed the status before a session started');
     await tightPanel('Focus page');
     await islandShot('ui-notch-deck-focus.png');
     // Keyboard and a horizontal swipe turn pages too.
@@ -1418,6 +1533,62 @@ async function main() {
     await mainPage.evaluate("window.lumilan.routine({action:'settings',value:{enabled:false,servingMl:250,goalMl:2000,startHour:8,endHour:22,intervalMinutes:60}})");
     console.log('Routine and Tasks: water reminder after a resume, Drink from Lumi with chart, add/done/delete while typing holds the panel, refused page actions passed');
 
+    // Breaks: the page is in the deck while off; Break now on the real clock is measured and ended with Back to work; a
+    // reminder due after a resume previews in Lumi and opens the Breaks page; Snooze answers it; the next reminder starts
+    // the break by itself over every display and Escape ends it; a lock ends a running break without it returning.
+    assert(await mainPage.evaluate("window.lumilan.breaksState().then(v=>!v.settings.enabled&&v.phase==='work')"), 'Break fixture must start turned off');
+    await mainPage.evaluate("window.lumilan.breaks({action:'settings',value:{enabled:true,workMinutes:25,breakMinutes:30}})");
+    await background();
+    await companionPage.evaluate("window.lumi.action({type:'expand'})");
+    await click('tab-break');
+    await until(() => companionPage.evaluate("document.getElementById('page-break').dataset.current==='true'&&!document.getElementById('break-clock').hidden&&!document.getElementById('break-work').hidden&&document.querySelector('#break-work [aria-pressed=true]')?.dataset.minutes==='25'"), 'Breaks page counts down to the next break');
+    await eachLanguage(language => breakPageFits(`Breaks page (${language})`));
+    await islandShot('ui-notch-deck-break.png');
+    // Break now from Lumi, on the real clock: the screen is measured and ended with Back to work. The overlay takes focus,
+    // which closes Lumi's panel.
+    await click('break-start');
+    await breakScreen('Break now', 'click', 'ui-break-overlay.png');
+    await companionPage.evaluate('window.lumi.action({type:"collapse"})');
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'panel closed before the break is due');
+    await nativeBrowser.evaluate('globalThis.smokeRealNow=Date.now;true');
+    try {
+      const at = async (minutes: number) => nativeBrowser.evaluate(`Date.now=()=>smokeRealNow()+${minutes}*60000;smokeElectron.powerMonitor.emit('resume');true`);
+      await at(26);
+      const due = await until(async () => { const item = await selected(); return item?.key === 'break:due' && item; }, 'break reminder in Lumi');
+      assert(due.kind === 'break' && due.title === 'Waktunya rehat' && due.body === 'Istirahat 30 menit', `Unexpected break card: ${JSON.stringify(due)}`);
+      await until(() => companionPage.evaluate("document.body.dataset.mode==='compact'"), 'break reminder previewed');
+      await click('mascot');
+      await until(() => companionPage.evaluate("document.getElementById('page-break').dataset.current==='true'&&!document.getElementById('break-snooze').hidden&&document.getElementById('break-work').hidden"), 'break preview opens the Breaks page with Snooze');
+      await eachLanguage(language => breakPageFits(`Breaks page while due (${language})`));
+      // Closed, the pill counts the last minute down beside the badge in every language.
+      await companionPage.evaluate('window.lumi.action({type:"collapse"})');
+      await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 200 });
+      await eachLanguage(language => pillFits(`Break pill (${language})`));
+      await islandShot('ui-notch-break-pill.png');
+      await companionPage.evaluate("window.lumi.action({type:'expand'})");
+      await until(() => companionPage.evaluate("document.body.dataset.mode==='expanded'&&document.getElementById('page-break').dataset.current==='true'&&!document.getElementById('break-snooze').hidden"), 'Breaks page again while due');
+      await click('break-snooze');
+      await until(() => companionPage.evaluate("window.lumi.state().then(s=>!s.items.some(i=>i.key==='break:due')&&s.pages.break?.phase==='work')"), 'snooze answered the break card');
+      await companionPage.evaluate('window.lumi.action({type:"collapse"})');
+      await at(32);
+      await until(async () => (await selected())?.key === 'break:due', 'break reminder again after the snooze');
+      // The minute passes without an answer: the break starts by itself. The shifted clock stays until it ends, so the
+      // input guard measures real time.
+      await at(33.2);
+      await breakScreen('Automatic break', 'escape');
+      assert.equal(await companionPage.evaluate("window.lumi.state().then(s=>s.items.some(i=>i.key==='break:due'))"), false, 'A started break kept its reminder card');
+    } finally { await nativeBrowser.evaluate('if(globalThis.smokeRealNow){Date.now=smokeRealNow;delete globalThis.smokeRealNow}true'); }
+    await mainPage.evaluate("window.lumilan.breaks({action:'start'})");
+    await until(async () => (await breakTargets()).length > 0, 'break screen before the lock');
+    await setLocked(nativeBrowser, true);
+    await until(async () => !(await nativeBrowser.evaluate<number>(`${breakWindows}.length`)), 'lock closed the break screen');
+    await setLocked(nativeBrowser, false);
+    await until(() => mainPage.evaluate("window.lumilan.breaksState().then(v=>v.phase==='work')"), 'a break running at lock ends as taken on unlock');
+    await delay(300);
+    assert.equal(await nativeBrowser.evaluate<number>(`${breakWindows}.length`), 0, 'The break screen returned after unlock');
+    await mainPage.evaluate("window.lumilan.breaks({action:'settings',value:{enabled:false,workMinutes:45,breakMinutes:10}})");
+    console.log('Breaks: page while off, reminder after resume, snooze, automatic start over every display, Escape, Break now with budget and Back to work, lock ends a break passed');
+
     // Shelf: real files dropped on the island (paths read by the Lumi preload, never by the page), open and drag-out
     // through the stored path, a consented send to the loopback peer, cancel while waiting, save to notes, and remove.
     const shelfDir = join(profile, 'shelf-files'); mkdirSync(shelfDir);
@@ -1449,6 +1620,9 @@ async function main() {
     await until(() => companionPage.evaluate(settled), 'shelf settled');
     await dragFiles('drop');
     await until(() => companionPage.evaluate("document.querySelectorAll('#shelf-list li').length===2&&/2.*0.*1/.test(document.getElementById('shelf-status').textContent)"), 'two files shelved, the empty one skipped');
+    // Everything clickable says so, in Lumi and in a main window with real contacts, rooms and messages.
+    assert.deepEqual(await cdp.arrowCursors(companionPage), [], 'Clickable Lumi controls keep the arrow cursor');
+    assert.deepEqual(await cdp.arrowCursors(mainPage), [], 'Clickable controls keep the arrow cursor in the main window');
     assert.deepEqual(await companionPage.evaluate<string[]>("[...document.querySelectorAll('#shelf-list li > svg use')].map(u=>u.getAttribute('href'))"), ['#g-image', '#g-document']);
     assert(!(await companionPage.evaluate<string>('window.lumi.state().then(s=>JSON.stringify(s))')).includes('shelf-files'), 'A shelf path reached the Lumi renderer');
     const savedShelf = JSON.parse(readFileSync(join(profile, 'lumilan', 'shelf.json'), 'utf8')) as Array<Record<string, unknown>>;
@@ -1670,6 +1844,7 @@ async function main() {
     }
     const unexpected = failures.filter(text => text !== 'Permissions policy violation: microphone is not allowed in this document.');
     assert.deepEqual(unexpected, [], `Renderer errors: ${unexpected.join('; ')}`);
+    assert.deepEqual(cdp.swallowedRejections(handlerErrors), [], 'The main process rejected requests Lumi or the main window hid');
     console.log('Notch: idle resource budget, reduced motion, keyboard position, reset, pause, lazy renderer and disable cleanup passed');
     await quitPendingClipboard();
     console.log('Packaged notch smoke passed');

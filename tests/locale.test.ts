@@ -31,6 +31,12 @@ test('bahasa otomatis mengikuti wilayah, sedangkan pilihan manual tetap berlaku'
       assert.notEqual(translate(language, key), key, `${language}: ${key}`);
     const consent = translate(language, 'Ambil judul dan gambar dari {host} untuk membuat pratinjau?', { host: 'youtube.com' });
     assert(consent.includes('youtube.com') && !consent.includes('{host}'), `${language}: ${consent}`);
+    // Work breaks: Lumi, the overlay and Settings. Malay shares some words with Indonesian, so only keys that differ in every language.
+    for (const key of ['Waktunya rehat', 'Rehat selesai', 'Mulai rehat', 'Lanjut kerja', 'Lewati', 'Saatnya rehat sejenak', 'Pengingat rehat', 'Pengaturan rehat tidak valid.',
+      'Waktunya rehat. Dimulai otomatis dalam satu menit.', 'Berdiri, regangkan badan, dan lihat jauh dari layar.'])
+      assert.notEqual(translate(language, key), key, `${language}: ${key}`);
+    assert.match(translate(language, 'Istirahat {minutes} menit', { minutes: 10 }), /10/);
+    assert.match(translate(language, 'Rehat berikutnya pukul {time}', { time: '10:30' }), /10:30/);
     assert.match(translate(language, 'File maks. 2 GB'), /2 GB/);
     assert.match(translate(language, 'File harus berukuran 1 B–2 GB.'), /2 GB/);
     assert.match(translate(language, 'Perbarui Lumilan Chat pada perangkat penerima untuk mengirim file di atas 100 MB.'), /100 MB/);

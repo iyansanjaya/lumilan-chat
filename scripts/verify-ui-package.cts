@@ -29,9 +29,9 @@ for (const file of files) {
 const packed = (entry: string) => extractFile(asar, join(...entry.split('/')));
 // Pages and assets loaded by path or protocol rather than by import. JavaScript modules are derived below, so a new
 // runtime module only needs its build.files entry and can never be packaged without a byte check.
-const pages = ['out/src/renderer/index.html', 'out/src/renderer/notch.html'];
-for (const entry of [...pages, 'out/src/renderer/app.css', 'out/src/renderer/notch.css', 'out/src/renderer/fonts/PublicSans.ttf',
-  'out/src/preload/preload.cjs', 'out/src/preload/notch-preload.cjs',
+const pages = ['out/src/renderer/index.html', 'out/src/renderer/notch.html', 'out/src/renderer/break.html'];
+for (const entry of [...pages, 'out/src/renderer/app.css', 'out/src/renderer/notch.css', 'out/src/renderer/break.css', 'out/src/renderer/fonts/PublicSans.ttf',
+  'out/src/preload/preload.cjs', 'out/src/preload/notch-preload.cjs', 'out/src/preload/break-preload.cjs',
   'out/build/icon.png', 'out/build/icon.ico', 'out/build/trayTemplate.png', 'out/build/trayTemplate@2x.png'])
   if (!files.has(entry)) throw new Error(`Missing ${entry} in ${asar}`);
 // Every packaged compiled file, including those matched by the renderer glob, must be the current build output.

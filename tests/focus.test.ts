@@ -45,7 +45,7 @@ function presented() {
     markRead: thread => { reads.push(thread); }, reminders: { tick: () => {} } };
   const handled = { focus: false };
   const notch: NotifierNotch = { ready: true, eligible: () => false, sync: () => true, dismiss: () => {}, message: () => false, reminder: () => false, file: () => false,
-    focusDone: (summary, body) => { lumi.push({ ...summary, body }); return handled.focus; }, water: () => false };
+    focusDone: (summary, body) => { lumi.push({ ...summary, body }); return handled.focus; }, water: () => false, breakDue: () => false };
   const settings = parseSettings({ preview: true, focus: 25 }, 'ID');
   const notifier = new Notifier({ Notification: Banner, powerMonitor: { getSystemIdleTime: () => 0 }, getWindow: () => window, getPeer: () => peer,
     getSettings: () => settings, getNotch: () => notch, isQuitting: () => false, reveal: thread => { opened.push(thread); },

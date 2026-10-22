@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import { LumiNotch, notchBounds } from '../src/main/notch.js';
 import type { NotchIpcEvent, NotchPeer, NotchReminder } from '../src/main/notch.js';
 import type { BrowserWindowConstructorOptions, Rectangle } from 'electron';
-import type { NotchSettings, NotchSnapshot, RoutineView, ShelfDropResult, ShelfView, TasksView } from '../src/shared/notch.js';
+import type { BreakView, NotchSettings, NotchSnapshot, RoutineView, ShelfDropResult, ShelfView, TasksView } from '../src/shared/notch.js';
 import { FocusTimer, type FocusEnd } from '../src/main/focus.js';
 import type { Status } from '../src/shared/model.js';
 
@@ -80,9 +82,9 @@ function fixture(pages: ConstructorParameters<typeof LumiNotch>[0]['pages'] = un
   // The person watches the main window only while it is visible, focused and recently used.
   const watch = (value: boolean) => { main.visible = main.focused = value; };
   const clock = { idle: 0, getSystemIdleTime: () => clock.idle };
-  const settings: NotchSettings = { notch: true, enabled: true, preview: false, silent: true, language: 'id', focus: 0, notchIdle: 'always' };
+  const settings: NotchSettings = { notch: true, enabled: true, preview: false, silent: true, language: 'id', focus: 0, notchIdle: 'always', notchOpen: 'click', notchOpened: true };
   const peer: NotchPeer & { state: { status: Status; mutedThreads: string[]; reminders: NotchReminder[] } } = { state: { status: 'active', mutedThreads: [], reminders: [] }, trusted: new Map([['alice', { name: 'Alice' }]]), sendCall: async () => { peer.activeCall = null; } };
-  const decisions: Array<[string, boolean]> = [], opens: Array<string | undefined> = [], accepts: string[] = [], pending = new Set(['f1']), ends: FocusEnd[] = [];
+  const decisions: Array<[string, boolean]> = [], opens: Array<string | undefined> = [], accepts: string[] = [], pending = new Set(['f1']), ends: FocusEnd[] = [], firstOpens: number[] = [];
   // Wired like main: a status change reaches Lumi through the peer change event.
   const focus = new FocusTimer({ read: () => undefined, write: () => {}, getStatus: () => peer.state.status,
     setStatus: status => { peer.state.status = status; notch.prune(); }, onChange: () => notch.sync(), onEnd: end => ends.push(end) });
@@ -90,9 +92,10 @@ function fixture(pages: ConstructorParameters<typeof LumiNotch>[0]['pages'] = un
     getSettings: () => settings, getPeer: () => peer, reveal: thread => opens.push(thread), acceptCall: id => accepts.push(id),
     decideFile: async (id, value) => { if (!pending.delete(id)) throw new Error('expired'); decisions.push([id, value]); },
     savePosition: value => { settings.notchPosition = value; }, getFocus: () => focus.view(),
-    focusAction: (type, minutes) => type === 'start' ? focus.start(minutes) : type === 'pause' ? focus.pause() : type === 'resume' ? focus.resume() : focus.end(), ...(pages ? { pages } : {}), ...(addToShelf ? { addToShelf } : {}) });
+    focusAction: (type, minutes) => type === 'enable' ? settings.focus ||= 25 : type === 'start' ? focus.start(minutes) : type === 'pause' ? focus.pause() : type === 'resume' ? focus.resume() : focus.end(), ...(pages ? { pages } : {}), ...(addToShelf ? { addToShelf } : {}),
+    onOpened: () => { settings.notchOpened = true; firstOpens.push(Date.now()); } });
   notch.sync(); notch.ready = true;
-  return { notch, settings, peer, main, watch, clock, ipcMain, decisions, opens, accepts, pending, focus, ends };
+  return { notch, settings, peer, main, watch, clock, ipcMain, decisions, opens, accepts, pending, focus, ends, firstOpens };
 }
 
 test('Lumi bounds remain inside small, negative-coordinate and scaled display work areas', () => {
@@ -423,6 +426,11 @@ test('Lumi automatically hides manual and automatic previews without deleting pe
   const { notch, settings, decisions } = fixture();
   try {
     notch.sync(); // The idle pill is on screen before the pointer reaches it.
+    // Hovering an empty pill opens nothing: a glance would only repeat its clock. Its CSS shows the Open hint instead.
+    pointer(notch, true); await notch.action({ type: 'peek' });
+    assert.equal(notch.mode, 'hidden', 'Hovering an empty pill opened a card');
+    pointer(notch, false);
+    notch.message({}, 'carol', 'Carol', 'Queued'); t.mock.timers.tick(4000); assert.equal(notch.mode, 'hidden');
     pointer(notch, true); await notch.action({ type: 'peek' });
     t.mock.timers.tick(10_000); assert.equal(notch.mode, 'compact', 'A hover peek closed under the pointer');
     pointer(notch, false);
@@ -451,6 +459,65 @@ test('Lumi automatically hides manual and automatic previews without deleting pe
     assert(notch.items.has('file:f1'));
     t.mock.timers.tick(4000); assert.equal(notch.mode, 'hidden');
     assert.equal(notch.timers.size, 0, 'Hidden preview still has an idle timer');
+  } finally { notch.dispose(); }
+});
+
+test('Lumi opens on hover only when chosen, without taking focus until the first press inside', async t => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  const sessionType = process.env.XDG_SESSION_TYPE;
+  for (const platform of ['win32', 'darwin', 'linux'] as const) {
+    await t.test(platform, async () => {
+      let notch: LumiNotch<Window> | undefined;
+      try {
+        Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+        process.env.XDG_SESSION_TYPE = 'x11';
+        const context = fixture(); notch = context.notch;
+        const win = windowOf(notch);
+        context.settings.notchOpen = 'hover';
+        notch.sync(); // The idle pill is on screen before the pointer reaches it.
+        await notch.action({ type: 'peek' }); assert.equal(notch.mode, 'hidden', 'A peek without the pointer on the pill opened the panel');
+        pointer(notch, true); await notch.action({ type: 'peek' });
+        // Windows hands the foreground away on any focusability change, so hover leaves focus where it is.
+        assert.deepEqual([notch.mode, win.isFocused(), win.focusable, win.deactivations, win.ignored], ['expanded', false, platform === 'linux', 0, false],
+          'Opening on hover took focus, moved the foreground or ignored the pointer');
+        // The renderer sends the first press inside as 'expand': keyboard focus as with a click on the pill.
+        await notch.action({ type: 'expand' });
+        assert.deepEqual([notch.mode, win.isFocused(), win.focusable], ['expanded', true, true]);
+        notch.collapse();
+        // Click is the default: hovering then only glances at queued activity.
+        context.settings.notchOpen = 'click';
+        pointer(notch, true); await notch.action({ type: 'peek' });
+        assert.equal(notch.mode, 'hidden');
+      } finally {
+        notch?.dispose();
+        Object.defineProperty(process, 'platform', platformDescriptor!);
+        if (sessionType === undefined) delete process.env.XDG_SESSION_TYPE;
+        else process.env.XDG_SESSION_TYPE = sessionType;
+      }
+    });
+  }
+});
+
+test('Lumi introduces itself once until the panel is first opened, as a quiet card without private content', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { notch, settings, watch, firstOpens } = fixture();
+  try {
+    settings.notchOpened = false;
+    // Over a watched main window the intro only raises the badge, like any arrival there.
+    watch(true);
+    windowOf(notch).webContents.emit('did-finish-load');
+    assert.deepEqual([notch.mode, notch.snapshot().count], ['hidden', 1]);
+    assert.equal(notch.intro(), false, 'The intro was queued twice');
+    watch(false);
+    pointer(notch, true); await notch.action({ type: 'peek' });
+    const card = selectedSnapshot(notch);
+    // Lumi's own text survives previews being off; it names no person or message.
+    assert.deepEqual([notch.mode, card.key, card.title, card.body], ['compact', 'lumi:intro', 'Halo, saya Lumi', 'Klik untuk membuka Fokus, Rehat, Rutinitas, Tugas, dan Rak.']);
+    await notch.action({ type: 'expand' });
+    assert.deepEqual([notch.items.has('lumi:intro'), settings.notchOpened, firstOpens.length, notch.snapshot().count], [false, true, 1, 0]);
+    notch.collapse(); await notch.action({ type: 'expand' });
+    assert.equal(firstOpens.length, 1, 'A later opening saved the setting again');
+    assert.equal(notch.intro(), false, 'The intro returned after the panel was opened');
   } finally { notch.dispose(); }
 });
 
@@ -599,7 +666,13 @@ test('Lumi focus actions are opt-in and validated, and the session keeps the idl
   const { notch, settings, peer, focus, ends } = fixture();
   try {
     await assert.rejects(notch.action({ type: 'focus', minutes: 25 }), /ditolak/, 'Focus started before the person opted in');
-    settings.focus = 25;
+    assert.equal(notch.snapshot().focus, false);
+    // Turn on carries nothing: a length or extra field is refused, and opting in starts no session.
+    for (const action of [{ type: 'focus-enable', minutes: 60 }, { type: 'focus-enable', value: 60 }, { type: 'focus-enable', path: 'C:/secret' }])
+      await assert.rejects(notch.action(action), JSON.stringify(action));
+    assert.equal(settings.focus, 0, 'A refused Turn on changed the setting');
+    await notch.action({ type: 'focus-enable' });
+    assert.deepEqual([settings.focus, notch.snapshot().focus, peer.state.status, focus.session], [25, true, 'active', undefined], 'Turn on did not only opt in');
     for (const action of [{ type: 'focus' }, { type: 'focus', minutes: 4 }, { type: 'focus', minutes: 181 }, { type: 'focus', minutes: 25.5 }, { type: 'focus', minutes: '25' },
       { type: 'focus', minutes: 25, path: 'C:/secret' }, { type: 'peek', minutes: 25 }, { type: 'focus-pause', minutes: 25 }, { type: 'focus-pause' }, { type: 'focus-stop' }])
       await assert.rejects(notch.action(action), JSON.stringify(action));
@@ -786,6 +859,34 @@ test('Lumi water card is not private, goes once the goal is reached, and is answ
   } finally { notch.dispose(); }
 });
 
+test('Lumi break page stays in the deck while off, its card is not private and goes once answered, and its end notice is passing', async () => {
+  const view: BreakView = { settings: { enabled: false, workMinutes: 45, breakMinutes: 10 }, phase: 'work', nextAt: undefined, until: undefined };
+  const calls: string[] = [];
+  const { notch, peer } = fixture({ break: { view: () => view, act: action => { if (!['snooze', 'start'].includes(action)) throw new Error('unknown'); calls.push(action); view.phase = 'work'; } } });
+  try {
+    assert.equal(notch.snapshot().pages.break, view, 'The break page left the deck while reminders were off');
+    Object.assign(view, { settings: { ...view.settings, enabled: true }, phase: 'due', until: Date.now() + 60_000 });
+    assert.equal(notch.breakDue('Istirahat 10 menit'), true);
+    const card = selectedSnapshot(notch);
+    assert.deepEqual([card.kind, card.title, card.body, notch.mode], ['break', 'Waktunya rehat', 'Istirahat 10 menit', 'compact'], 'The break card was redacted or not previewed');
+    for (const action of [{ type: 'break' }, { type: 'break', action: 'Snooze!' }, { type: 'break', action: 'skip' }])
+      await assert.rejects(notch.action(action), JSON.stringify(action));
+    assert.equal(notch.items.has('break:due'), true, 'A refused action removed the card');
+    await notch.action({ type: 'break', action: 'snooze' });
+    assert.deepEqual([calls, notch.items.has('break:due')], [['snooze'], false], 'Snoozing left the break card');
+    view.phase = 'due'; notch.breakDue('Istirahat 10 menit'); view.phase = 'break'; notch.sync();
+    assert.equal(notch.items.has('break:due'), false, 'A break that started kept its reminder card');
+    notch.collapse();
+    assert.equal(notch.breakDone(), true);
+    assert.deepEqual([selectedSnapshot(notch).key, selectedSnapshot(notch).title, selectedSnapshot(notch).body, notch.snapshot().count], ['device:break', 'Rehat kerja', 'Rehat selesai', 0],
+      'The end notice was not a passing card');
+    notch.collapse();
+    assert.equal(notch.items.has('device:break'), false, 'The end notice outlived its preview');
+    peer.state.status = 'dnd';
+    assert.equal(notch.breakDone(), false, 'The end notice appeared during Do not disturb');
+  } finally { notch.dispose(); }
+});
+
 test('Lumi shelf drops reach main only as validated paths from the Lumi window, and a drag opens the shelf without focus', async () => {
   const drops: string[][] = [], view: ShelfView = { items: [], picker: undefined };
   const { notch, ipcMain } = fixture({ shelf: { view: () => view, act: action => { if (action !== 'open') throw new Error('unknown'); } } },
@@ -796,10 +897,14 @@ test('Lumi shelf drops reach main only as validated paths from the Lumi window, 
     const event = { sender: windowOf(notch).webContents, senderFrame: windowOf(notch).webContents.mainFrame };
     assert.deepEqual(await drop(event, ['C:/Users/a/report.pdf']), { added: 1, replaced: 0, skipped: 0 });
     assert.deepEqual(drops, [['C:/Users/a/report.pdf']]);
+    // A whole drop arrives as one batch of up to ten paths: one call into the shelf.
+    const batch = Array.from({ length: 10 }, (_, i) => `C:/Users/a/${i}.txt`);
+    assert.deepEqual(await drop(event, batch), { added: 10, replaced: 0, skipped: 0 });
+    assert.deepEqual(drops.at(-1), batch);
     for (const bad of ['C:/x', Array(11).fill('C:/a'), [''], [5], ['x'.repeat(4097)], null])
       assert.throws(() => drop(event, bad), /ditolak/, JSON.stringify(bad)?.slice(0, 40));
     assert.throws(() => drop({ ...event, sender: {} }, ['C:/a']), /ditolak/, 'Another window reached the shelf');
-    assert.equal(drops.length, 1);
+    assert.equal(drops.length, 2);
     await notch.action({ type: 'shelf', action: 'reveal' });
     assert.deepEqual([notch.mode, windowOf(notch).isFocused(), windowOf(notch).ignored, notch.held], ['expanded', false, false, true],
       'Opening the shelf for a drag took focus or kept the window click-through');
@@ -811,6 +916,24 @@ test('Lumi shelf drops reach main only as validated paths from the Lumi window, 
     assert.equal(notch.snapshot().count, 0, 'A shelf notice raised the activity badge');
   } finally { notch.dispose(); }
   assert.equal(ipcMain.handlers.has('lumi:drop'), false, 'The drop handler outlived Lumi');
+});
+
+test('the Lumi preload sends a whole drop to main as one batch of at most ten paths', async () => {
+  interface ShelveBridge { shelve(files: unknown): Promise<unknown> }
+  const calls: unknown[][] = [];
+  let bridge: ShelveBridge | undefined;
+  const context = vm.createContext({ require: () => ({
+    // The preload builds its arrays in the vm realm; clone them so deepEqual compares values, not prototypes.
+    ipcRenderer: Object.assign(new EventEmitter(), { invoke: async (...args: unknown[]) => { calls.push(structuredClone(args)); return { added: 0, replaced: 0, skipped: 0 }; } }),
+    // Like Electron's: a File without a disk path (pasted data) has an empty path, anything else is refused.
+    webUtils: { getPathForFile: (file: unknown) => { if (!file || typeof file !== 'object') throw new TypeError('Not a File'); return 'path' in file ? String(file.path) : ''; } },
+    contextBridge: { exposeInMainWorld: (_name: string, api: ShelveBridge) => { bridge = api; } } }) });
+  vm.runInContext(readFileSync(new URL('../src/preload/notch-preload.cjs', import.meta.url), 'utf8'), context);
+  assert(bridge);
+  await bridge.shelve(Array.from({ length: 12 }, (_, i) => ({ path: i === 1 ? '' : `C:/a/${i}.txt` })));
+  assert.deepEqual(calls, [['lumi:drop', ['C:/a/0.txt', ...Array.from({ length: 8 }, (_, i) => `C:/a/${i + 2}.txt`)]]]);
+  await assert.rejects(async () => bridge!.shelve('C:/secret.txt'));
+  assert.equal(calls.length, 1, 'A path string reached main');
 });
 
 test('Lumi refuses shelf drops when the shelf is not wired', () => {
