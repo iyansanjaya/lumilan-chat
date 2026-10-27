@@ -20,6 +20,7 @@ Lumilan connects devices directly on the same LAN or Wi-Fi. No accounts, central
 | **Link previews** — static cards for YouTube, Shorts, and Instagram links (Instagram when available without login); Facebook, Threads, and X get a link card. | **Opt-in fetching** — only your device contacts YouTube or Instagram, and only after you turn it on. |
 | **Focus sessions** — start 25, 45, or 60 minutes from Lumi or Settings; contacts see Do not disturb, and your previous status returns afterward. | **One quiet summary** — messages wait during the session; at the end you see how many arrived, without names, text, or marking them read. |
 | **Water routine & tasks** — log a drink, get reminders during your active hours, and tick off tasks from Lumi or Settings. | **File shelf** — drop files on Lumi to keep them close, drag them out, send them to a contact, or save them to Personal notes. |
+| **Stickers** — import your own image packs and send them from the composer picker; packs stay on your device. | **Shows up at once** — small stickers need no accept step; the receiving device checks and re-encodes every image. |
 | **Work breaks** — choose how long to work and rest; Lumi reminds you, then every screen dims with a countdown. | **Back to work anytime** — snooze, skip, or end a break early; breaks wait during Do not disturb, calls, lock, and sleep. |
 
 <details>
@@ -47,7 +48,7 @@ Get the latest package from the [official Releases page](https://github.com/iyan
 | macOS 13+ Apple Silicon | Apple Silicon / arm64 DMG |
 | Linux 64-bit | `*.AppImage` |
 
-Platform-specific features depend on the installed package and desktop environment. Lumi is implemented for Windows, macOS Intel/Apple Silicon, and Linux X11; on Macs with a camera notch it covers the notch above the menu bar, and Linux Wayland uses system notifications. Build success alone does not establish native compatibility for every feature.
+Platform-specific features depend on the installed package and desktop environment. Lumi is implemented for Windows, macOS Intel/Apple Silicon, and Linux X11; on macOS it hangs from the top edge of the screen over the menu bar and covers the camera notch where there is one, and Linux Wayland uses system notifications. Build success alone does not establish native compatibility for every feature.
 
 ## Start in three steps
 

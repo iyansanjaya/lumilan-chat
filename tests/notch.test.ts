@@ -109,16 +109,17 @@ test('Lumi bounds remain inside small, negative-coordinate and scaled display wo
   }
 });
 
-test('Lumi covers a macOS camera notch only beside a notch-height menu bar', () => {
+test('Lumi hangs from every macOS screen edge and fills the menu bar only beside a camera notch', () => {
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
   try {
-    // 37 pt: MacBook menu bar beside a camera notch. 25 pt: an ordinary Mac or external display menu bar.
-    for (const [platform, top, inset] of [['darwin', 37, 37], ['darwin', 25, 0], ['win32', 37, 0], ['linux', 37, 0]] as const) {
+    // Menu bar height: 37 pt beside a camera notch, 25 pt on an ordinary display, 0 when auto-hidden.
+    for (const [platform, top, inset] of [['darwin', 37, 37], ['darwin', 25, 0], ['darwin', 0, 0], ['win32', 37, 0], ['linux', 37, 0]] as const) {
       Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
       const screen = { x: 1512, y: -200, width: 1512, height: 982 };
       const b = notchBounds({ workArea: { ...screen, y: screen.y + top, height: screen.height - top }, bounds: screen });
       assert.equal(b.inset, inset, `${platform} ${top}`);
-      assert.equal(b.y, inset ? screen.y : screen.y + top, 'The island must start at the screen edge only over a notch');
+      assert.equal(b.bar, platform === 'darwin' ? top : 0, 'The idle pill matches only a macOS menu bar');
+      assert.equal(b.y, platform === 'darwin' ? screen.y : screen.y + top, 'A Mac island starts at the screen edge; taskbars and panels keep theirs');
       assert.deepEqual([b.x, b.width, b.height], [screen.x + 416, 680, 280]);
       assert(b.y + b.height <= screen.y + screen.height);
     }
@@ -584,6 +585,7 @@ test('Lumi keeps one fixed window and shapes it to the island only where X11 can
         notch.collapse(); assert.equal(notch.mode, 'hidden');
         assert.deepEqual(win.bounds, fixed, 'A mode change resized the native window instead of morphing the island');
         assert.equal(notch.snapshot().inset, 0);
+        assert.equal(notch.snapshot().bar, 0);
       } finally {
         notch?.dispose();
         Object.defineProperty(process, 'platform', platformDescriptor!);

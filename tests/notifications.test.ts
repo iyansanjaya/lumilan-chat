@@ -141,6 +141,15 @@ test('hidden previews are redacted; mute, Do not disturb, disabled notifications
   }
 });
 
+test('a sticker shows as Sticker, never as a file name, and stays redacted when previews are hidden', () => {
+  const sticker = (q: ReturnType<typeof fixture>): Message => ({ id: 'm-sticker', kind: 'file', name: 'sticker.webp', size: 1200, sticker: { width: 120, height: 120, animated: false }, from: 'alice', to: 'me', at: Date.now() });
+  const shown = fixture(); shown.view.focused = false;
+  shown.notifier.message(sticker(shown));
+  assert.deepEqual([shown.banners[0]?.options.title, shown.banners[0]?.options.body], ['Alice', 'Stiker']);
+  const hidden = fixture(); hidden.view.focused = false; hidden.settings.preview = false;
+  hidden.notifier.message(sticker(hidden));
+  assert.deepEqual([hidden.banners[0]?.options.title, hidden.banners[0]?.options.body], ['Lumilan Chat', 'Pesan baru diterima']);
+});
 test('an arrival in the open, watched conversation is read instead of shown, unless it is still opening or loading', () => {
   const f = fixture(); f.notifier.currentThread = 'alice';
   f.notifier.message(f.message());

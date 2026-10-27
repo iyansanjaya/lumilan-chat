@@ -1,9 +1,9 @@
 import cdp = require('./cdp.cjs');
-import type { Message } from '../src/shared/model.js';
+import type { Message, Snapshot } from '../src/shared/model.js';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const { createHash }: typeof import('node:crypto') = require('node:crypto');
 const { spawn }: typeof import('node:child_process') = require('node:child_process');
-const { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync }: typeof import('node:fs') = require('node:fs');
+const { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync }: typeof import('node:fs') = require('node:fs');
 const { rm }: typeof import('node:fs/promises') = require('node:fs/promises');
 const { createServer }: typeof import('node:net') = require('node:net');
 const { tmpdir }: typeof import('node:os') = require('node:os');
@@ -52,6 +52,7 @@ async function main() {
   for (const stream of [child.stdout, child.stderr]) stream?.on('data', chunk => { logs = (logs + chunk).slice(-8000); });
   const handlerErrors = cdp.handlerErrors(child.stderr);
   let socket: WebSocket | undefined, quit: (() => Promise<unknown>) | undefined;
+  let stickerPeer: import('../src/main/peer.js').LumilanPeer | undefined;
   let passed = false;
   try {
     let page: cdp.DebugPage | undefined;
@@ -663,6 +664,28 @@ async function main() {
     }
     await setViewport(1100, 800);
     console.log('Message line breaks: native Shift+Enter, stored draft and five-line bubble passed in light/dark desktop/narrow layouts');
+    // Escape leaves the open conversation like WhatsApp or Telegram, after what sits on top of it: a dialog, then a reply.
+    // The draft stays, focus lands on the conversation's row, and a narrow window shows the list.
+    const pressEscape = async () => {
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    };
+    const notesOpen = "document.querySelector('#notes-button').classList.contains('active')";
+    await evaluate("document.querySelector('#message-input').value='Esc draft';document.querySelector('#message-input').focus();document.querySelector('#settings-dialog').showModal()");
+    await pressEscape();
+    assert(await evaluate(`!document.querySelector('#settings-dialog').open&&${notesOpen}`), 'Escape in a dialog also closed the conversation');
+    await evaluate(`document.querySelector('#message-${multilineNote.id} .message-select-button').click();document.querySelector('#selection-reply').click()`);
+    assert(await evaluate("!document.querySelector('#reply-preview').hidden"), 'The reply did not start');
+    await pressEscape();
+    assert(await evaluate(`document.querySelector('#reply-preview').hidden&&${notesOpen}`), 'Escape closed the conversation before canceling the reply');
+    await pressEscape();
+    const home = await evaluate<{open:boolean;composer:boolean;focus:boolean;list:boolean}>(`({open:${notesOpen},composer:!document.querySelector('#message-form').hidden,
+      focus:document.activeElement===document.querySelector('#notes-button'),list:document.body.classList.contains('show-list')})`);
+    assert(!home.open && !home.composer && home.focus && home.list, `Escape did not return to the home view: ${JSON.stringify(home)}`);
+    await evaluate("document.querySelector('#notes-button').click()");
+    assert.equal(await evaluate("document.querySelector('#message-input').value"), 'Esc draft', 'Escape lost the conversation draft');
+    await evaluate("document.querySelector('#message-input').value=''");
+    console.log('Escape: dialog and reply first, then the home view with the draft kept, focus on the row and the list on narrow windows');
     const droppedBytes = Buffer.alloc(21 * 1024 * 1024, 0x5a);
     const droppedPaths: [string, string] = [join(profile, 'drop-large.bin'), join(profile, 'laporan_日本語.txt')];
     writeFileSync(droppedPaths[0], droppedBytes);
@@ -953,6 +976,137 @@ async function main() {
     assert(Number.isFinite(idleHeap) && Number.isFinite(idleTasks) && idleHeap <= 96 && idleTasks <= .25,
       `Renderer idle budget exceeded: ${JSON.stringify({ jsHeapMiB: idleHeap, taskSeconds: idleTasks })}`);
     console.log(`UI polish: scrollable accessible emoji, symmetric Settings, focus/selection contrast and reduced motion passed; idle renderer JS heap ${idleHeap.toFixed(2)} MiB, task time ${idleTasks.toFixed(3)} s/1 s`);
+    // Stickers: import a pack in Settings, send from the picker in Personal notes, receive an animated sticker from a
+    // loopback peer without a consent step, send one back, save the received one, then delete every pack. The page only
+    // ever gets WebP data URLs; the peer runs in this process on a random loopback port with discovery off.
+    const stickerDir = join(profile, 'smoke-stickers');
+    mkdirSync(stickerDir);
+    const stickerFiles = [join(stickerDir, 'merah.png'), join(stickerDir, 'biru.png'), join(stickerDir, 'gerak.gif')];
+    writeFileSync(stickerFiles[0]!, await sharp({ create: { width: 640, height: 480, channels: 4, background: { r: 220, g: 40, b: 60, alpha: 1 } } }).png().toBuffer());
+    writeFileSync(stickerFiles[1]!, await sharp({ create: { width: 300, height: 300, channels: 4, background: { r: 30, g: 90, b: 220, alpha: 0.7 } } }).png().toBuffer());
+    const stickerFrames = Buffer.alloc(96 * 96 * 2 * 3);
+    stickerFrames.fill(255, 0, 96 * 96 * 3);
+    const animatedSticker = await sharp(stickerFrames, { raw: { width: 96, height: 192, pageHeight: 96, channels: 3 } }).gif({ delay: [150, 150], loop: 0 }).toBuffer();
+    writeFileSync(stickerFiles[2]!, animatedSticker);
+    await setViewport(1100, 800);
+    await evaluate("document.documentElement.dataset.theme = 'light'; document.querySelector('#settings-button').click(); true");
+    await waitFor("document.querySelector('#settings-dialog').open && document.querySelectorAll('#sticker-packs li.empty').length === 1", 'empty sticker library in Settings');
+    await evaluate("document.querySelector('#stickers-section').scrollIntoView({ block: 'start' }); document.querySelector('#sticker-pack-name').value = 'Smoke'; true");
+    const stickerDom = await send('DOM.getDocument');
+    const stickerInput = await send('DOM.querySelector', { nodeId: stickerDom.root.nodeId, selector: '#sticker-files' });
+    await send('DOM.setFileInputFiles', { nodeId: stickerInput.nodeId, files: stickerFiles });
+    await evaluate("document.querySelector('#sticker-files').dispatchEvent(new Event('change', { bubbles: true })); true");
+    await waitFor("window.lumilan.stickers({ op: 'list' }).then(v => v.packs.length === 1 && v.packs[0].count === 3 && !v.job && document.querySelectorAll('#sticker-packs li:not(.empty)').length === 1)", 'sticker pack imported', 30_000);
+    assert(!(await evaluate<string>("window.lumilan.stickers({ op: 'list' }).then(v => JSON.stringify(v))", true)).includes('lumilan-ui-smoke-'), 'A path reached the sticker view');
+    const stickerData = join(profile, 'lumilan', 'stickers');
+    assert.equal(readdirSync(stickerData).length, 1, 'One pack folder after the import');
+    for (const theme of ['light', 'dark']) {
+      await setViewport(320, 700);
+      const layout = await evaluate<{ inside: boolean; overflow: boolean }>(`(() => { document.documentElement.dataset.theme = '${theme}';
+        const dialog = document.querySelector('#settings-dialog'), box = dialog.getBoundingClientRect(); document.querySelector('#stickers-section').scrollIntoView({ block: 'center' });
+        const parts = [...document.querySelectorAll('#stickers-section input:not([type=file]), #sticker-drop-zone, #sticker-choose, #sticker-packs li, #sticker-packs button')].map(e => e.getBoundingClientRect());
+        return { inside: parts.every(r => r.left >= box.left && r.right <= box.right), overflow: dialog.scrollWidth > dialog.clientWidth }; })()`);
+      assert(layout.inside && !layout.overflow, `Settings stickers overflow at 320 px in ${theme}: ${JSON.stringify(layout)}`);
+      await delay(400);
+      const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
+      writeFileSync(join(dist, `ui-stickers-settings-${theme}-320.png`), Buffer.from(shot.data, 'base64'));
+    }
+    await setViewport(1100, 800);
+    await evaluate("document.documentElement.dataset.theme = 'light'; document.querySelector('#settings-dialog').close(); document.querySelector('#notes-button').click(); true");
+    await waitFor("!document.querySelector('#sticker-button').hidden", 'sticker button in Personal notes');
+    await evaluate("document.querySelector('#sticker-button').click(); true");
+    const pickerReady = "!document.querySelector('#sticker-picker').hidden && document.querySelectorAll('#sticker-grid img').length === 3 && [...document.querySelectorAll('#sticker-grid img')].every(i => i.complete && i.naturalWidth > 0)";
+    await waitFor(pickerReady, 'sticker picker thumbnails');
+    for (const [theme, width, height] of [['light', 1100, 800], ['dark', 1100, 800], ['light', 375, 760], ['dark', 375, 760]] as const) {
+      await setViewport(width, height);
+      const layout = await evaluate<{ inside: boolean; above: boolean; columns: number }>(`(() => { document.documentElement.dataset.theme = '${theme}';
+        const picker = document.querySelector('#sticker-picker').getBoundingClientRect(), main = document.querySelector('.conversation').getBoundingClientRect();
+        const composer = document.querySelector('#message-form').getBoundingClientRect(), cells = [...document.querySelectorAll('#sticker-grid button')].map(e => e.getBoundingClientRect());
+        return { inside: picker.left >= main.left && picker.right <= main.right && picker.top >= 0, above: picker.bottom <= composer.bottom,
+          columns: new Set(cells.map(r => Math.round(r.left))).size }; })()`);
+      assert(layout.inside && layout.above && layout.columns === 3, `Sticker picker misplaced at ${width} px in ${theme}: ${JSON.stringify(layout)}`);
+      await settleAnimations();
+      const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
+      writeFileSync(join(dist, `ui-stickers-picker-${theme}-${width}.png`), Buffer.from(shot.data, 'base64'));
+    }
+    await setViewport(1100, 800);
+    await evaluate("document.documentElement.dataset.theme = 'light'; document.querySelector('#sticker-grid button').click(); true");
+    await waitFor("window.lumilan.state().then(s => s.messages.some(m => m.note && m.sticker)) && [...document.querySelectorAll('#messages .sticker-image')].some(i => i.complete && i.naturalWidth > 0)", 'sticker sent to Personal notes');
+    await waitFor("document.querySelectorAll('#sticker-tabs button').length === 2 && document.querySelector('#sticker-tabs button').getAttribute('aria-label') !== null", 'recent tab after sending');
+    await evaluate("document.querySelector('#sticker-grid button').focus(); true");
+    await pressKey('Escape', 'Escape', 27);
+    await waitFor("document.querySelector('#sticker-picker').hidden && document.activeElement === document.querySelector('#sticker-button') && document.querySelector('#notes-button').classList.contains('active')", 'Escape closes the picker and keeps the conversation');
+    // Saving a sticker that is already in the library changes nothing.
+    await evaluate("[...document.querySelectorAll('#messages .message')].reverse().find(row => row.querySelector('.sticker-image')).querySelector('.message-select-button').click(); true");
+    await waitFor("!document.querySelector('#selection-save-sticker').hidden", 'save sticker action for a selected sticker');
+    await evaluate("document.querySelector('#selection-save-sticker').click(); true");
+    await waitFor("document.querySelector('#toast').classList.contains('visible') && document.querySelector('#message-selection').hidden", 'saving a duplicate sticker answers');
+    assert.equal(await evaluate<number>("window.lumilan.stickers({ op: 'list' }).then(v => v.packs.length)", true), 1, 'A duplicate sticker created a Saved pack');
+
+    const stickerState = await evaluate<Snapshot>('window.lumilan.state()', true);
+    const { LumilanPeer } = await import('../src/main/peer.js');
+    const { encodeSticker } = await import('../src/main/sticker-image.js');
+    const peerSide = new LumilanPeer({ dataDir: join(profile, 'sticker-peer'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0', acceptFile: async () => false });
+    stickerPeer = peerSide;
+    await peerSide.start(); peerSide.rename('Stiker LAN'); await peerSide.connectAddress(stickerState.addresses[0]!);
+    const peerId = JSON.stringify(peerSide.id);
+    await waitFor(`window.lumilan.state().then(s => s.peers.some(p => p.id === ${peerId} && p.stickers === true))`, 'sticker peer online with the sticker capability');
+    // A different animation than the imported one: re-encoding the same image gives the same bytes, a duplicate.
+    const peerFrames = Buffer.alloc(80 * 80 * 2 * 3);
+    peerFrames.fill(90, 0, 80 * 80 * 3);
+    peerFrames.fill(200, 80 * 80 * 3);
+    const fromPeer = await encodeSticker(await sharp(peerFrames, { raw: { width: 80, height: 160, pageHeight: 80, channels: 3 } }).gif({ delay: [120, 120], loop: 0 }).toBuffer(), 'import');
+    const received = await peerSide.sendSticker(fromPeer.bytes, fromPeer, stickerState.me.id);
+    assert.equal(received.delivered, 1, 'The app did not acknowledge a sticker');
+    await waitFor(`window.lumilan.fileOffers().then(offers => offers.length === 0)`, 'no consent request for a sticker');
+    await evaluate(`document.querySelector('.person[data-peer=${JSON.stringify(peerSide.id)}]').click(); true`);
+    const receivedImage = `document.querySelector('#message-${received.message.id} .sticker-image')`;
+    await waitFor(`(() => { const image = ${receivedImage}; return Boolean(image && image.dataset.animated === 'true' && image.complete && image.naturalWidth > 0 && !document.querySelector('#message-${received.message.id} .file-bubble')); })()`, 'received animated sticker shown without a file bubble');
+    await waitFor("!document.querySelector('#sticker-button').hidden", 'sticker button for a capable contact');
+    // Reduced motion shows the first frame of an animated sticker instead of the animation.
+    const animatedSource = await evaluate<string>(`${receivedImage}.src`);
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+    await waitFor(`(() => { const image = ${receivedImage}; return image.complete && image.naturalWidth > 0 && image.src && image.src !== ${JSON.stringify(animatedSource)}; })()`, 'still sticker under reduced motion');
+    await send('Emulation.setEmulatedMedia', { features: [] });
+    await waitFor(`${receivedImage}.src === ${JSON.stringify(animatedSource)}`, 'animation back after reduced motion ends');
+    // Save the received sticker, then send one back from the picker.
+    await evaluate(`document.querySelector('#message-${received.message.id} .message-select-button').click(); document.querySelector('#selection-save-sticker').click(); true`);
+    await waitFor("window.lumilan.stickers({ op: 'list' }).then(v => v.packs.length === 2 && v.packs.some(p => p.saved && p.count === 1))", 'received sticker saved to the Saved pack');
+    await evaluate("document.querySelector('#sticker-button').click(); true");
+    await waitFor("!document.querySelector('#sticker-picker').hidden && document.querySelectorAll('#sticker-grid img').length > 0", 'picker for the contact');
+    await evaluate("document.querySelector('#sticker-grid button').click(); true");
+    for (const end = Date.now() + 15_000; !peerSide.state.messages.some(m => m.sticker && m.from === stickerState.me.id); await delay(100))
+      assert(Date.now() < end, 'The peer did not receive the sticker sent from the picker');
+    await pressKey('Escape', 'Escape', 27);
+    for (const [theme, width, height] of [['light', 1100, 800], ['dark', 1100, 800], ['light', 320, 700], ['dark', 320, 700]] as const) {
+      await setViewport(width, height);
+      const layout = await evaluate<{ overflow: boolean; widths: number[] }>(`(() => { document.documentElement.dataset.theme = '${theme}';
+        const images = [...document.querySelectorAll('#messages .sticker-image')]; images.at(-1)?.scrollIntoView({ block: 'center' });
+        return { overflow: document.documentElement.scrollWidth > innerWidth, widths: images.map(i => Math.round(i.getBoundingClientRect().width)) }; })()`);
+      assert(!layout.overflow && layout.widths.length >= 2 && layout.widths.every(w => w > 0 && w <= 160), `Sticker bubbles overflow at ${width} px in ${theme}: ${JSON.stringify(layout)}`);
+      await settleAnimations();
+      const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
+      writeFileSync(join(dist, `ui-stickers-chat-${theme}-${width}.png`), Buffer.from(shot.data, 'base64'));
+    }
+    await setViewport(1100, 800);
+    // Deleting every pack empties the library folder; sent and received stickers keep their own copies.
+    await evaluate("document.documentElement.dataset.theme = 'light'; document.querySelector('#settings-button').click(); true");
+    for (let remaining = 2; remaining > 0; remaining--) {
+      await waitFor(`document.querySelector('#settings-dialog').open && document.querySelectorAll('#sticker-packs li:not(.empty)').length === ${remaining}`, 'pack rows in Settings');
+      await evaluate("document.querySelector('#sticker-packs .task-actions button').click(); true");
+      await waitFor("document.querySelector('#confirm-dialog').open", 'delete pack confirmation');
+      await evaluate("document.querySelector('#confirm-action').click(); true");
+    }
+    await waitFor("window.lumilan.stickers({ op: 'list' }).then(v => v.packs.length === 0 && document.querySelectorAll('#sticker-packs li.empty').length === 1)", 'every sticker pack deleted');
+    // The list empties as soon as the index is saved; the folders go right after.
+    for (const end = Date.now() + 10_000; readdirSync(stickerData).length; await delay(100)) assert(Date.now() < end, `Deleted packs left files behind: ${readdirSync(stickerData).join(', ')}`);
+    await evaluate("document.querySelector('#settings-dialog').close(); true");
+    assert(existsSync(join(profile, 'lumilan', 'files', received.message.id)), 'A received sticker lost its file with the library');
+    assert.match(await evaluate<string>(`window.lumilan.stickerImage(${JSON.stringify(received.message.id)})`, true), /^data:image\/webp;base64,/);
+    await peerSide.stop();
+    stickerPeer = undefined;
+    assert.equal(failures.length, 0, `Renderer errors after stickers: ${failures.join('; ')}`);
+    console.log('Stickers: Settings import (PNG, GIF), picker in notes and for a contact, Escape, duplicate save, consent-free animated sticker from a loopback peer, reduced-motion still, saving, sending back, deleting packs, light/dark 1100/375/320 px passed');
     // Everything a person can click says so: no arrow over a button, a select, a switch or a clickable row.
     assert.deepEqual(await cdp.arrowCursors(remote), [], 'Clickable controls keep the arrow cursor in the main window');
     assert.deepEqual(cdp.swallowedRejections(handlerErrors), [], 'The main process rejected requests the renderer hid');
@@ -963,6 +1117,7 @@ async function main() {
     console.error('UI smoke failure:', error);
     throw error;
   } finally {
+    await stickerPeer?.stop().catch(() => {});
     if (!passed) console.error(logs);
     if (child.exitCode === null && child.signalCode === null && quit) {
       await quit().catch(() => {});

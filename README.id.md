@@ -20,6 +20,7 @@ Lumilan menghubungkan perangkat secara langsung melalui LAN atau Wi-Fi yang sama
 | **Pratinjau tautan** — kartu statis untuk tautan YouTube, Shorts, dan Instagram (Instagram jika tersedia tanpa login); Facebook, Threads, dan X mendapat kartu tautan. | **Pengambilan opt-in** — hanya perangkat Anda yang menghubungi YouTube atau Instagram, dan hanya setelah Anda mengaktifkannya. |
 | **Sesi fokus** — mulai 25, 45, atau 60 menit dari Lumi atau Pengaturan; kontak melihat Jangan ganggu, dan status sebelumnya kembali setelahnya. | **Satu ringkasan tenang** — pesan menunggu selama sesi; di akhir Anda melihat jumlah pesan yang masuk, tanpa nama, isi, atau menandainya dibaca. |
 | **Rutinitas minum & tugas** — catat minum, dapatkan pengingat pada jam aktif, dan centang tugas dari Lumi atau Pengaturan. | **Rak file** — jatuhkan file ke Lumi agar tetap dekat, seret keluar, kirim ke kontak, atau simpan ke Catatan pribadi. |
+| **Stiker** — impor paket gambar sendiri dan kirim dari pemilih di komposer; paket tersimpan hanya di perangkat Anda. | **Langsung tampil** — stiker kecil tidak perlu diterima; perangkat penerima memeriksa dan meng-encode ulang setiap gambar. |
 | **Rehat kerja** — pilih lama kerja dan istirahat; Lumi mengingatkan, lalu setiap layar diredupkan dengan hitung mundur. | **Lanjut kerja kapan saja** — tunda, lewati, atau akhiri rehat lebih awal; rehat menunggu saat Jangan ganggu, panggilan, layar terkunci, dan tidur. |
 
 <details>
@@ -47,7 +48,7 @@ Ambil paket terbaru dari [halaman Releases resmi](https://github.com/iyansanjaya
 | macOS 13+ Apple Silicon | DMG Apple Silicon / arm64 |
 | Linux 64-bit | `*.AppImage` |
 
-Fitur khusus platform bergantung pada paket terpasang dan desktop environment. Lumi diimplementasikan untuk Windows, macOS Intel/Apple Silicon, dan Linux X11; pada Mac dengan notch kamera, Lumi menutupi notch di atas menu bar, dan Linux Wayland memakai notifikasi sistem. Build yang sukses saja belum membuktikan kompatibilitas native seluruh fitur.
+Fitur khusus platform bergantung pada paket terpasang dan desktop environment. Lumi diimplementasikan untuk Windows, macOS Intel/Apple Silicon, dan Linux X11; di macOS, Lumi menggantung dari tepi atas layar di atas menu bar dan menutupi notch kamera bila ada, dan Linux Wayland memakai notifikasi sistem. Build yang sukses saja belum membuktikan kompatibilitas native seluruh fitur.
 
 ## Mulai dalam tiga langkah
 

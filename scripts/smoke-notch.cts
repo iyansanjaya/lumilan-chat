@@ -883,9 +883,13 @@ async function main() {
     const settled = "!document.getAnimations().some(a=>a instanceof CSSTransition&&a.playState==='running')";
     const island = "document.getElementById('island').getBoundingClientRect()";
     const fixedWindow = async (label: string) => {
-      const native = await nativeBrowser.evaluate<{bounds:{width:number;height:number};area:{width:number;height:number}}>("(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return {bounds:w.getBounds(),area:smokeElectron.screen.getDisplayMatching(w.getBounds()).workArea}})()");
+      const native = await nativeBrowser.evaluate<{bounds:{y:number;width:number;height:number};area:{y:number;width:number;height:number};edge:number}>("(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html'),d=smokeElectron.screen.getDisplayMatching(w.getBounds());return {bounds:w.getBounds(),area:d.workArea,edge:d.bounds.y}})()");
       assert(Math.abs(native.bounds.width - Math.min(680, native.area.width)) <= 1 && Math.abs(native.bounds.height - Math.min(280, native.area.height)) <= 1,
         `${label} resized the native window instead of morphing the island: ${JSON.stringify(native)}`);
+      if (process.platform === 'darwin') {
+        assert.equal(native.bounds.y, native.edge, `${label}: Lumi sat below the macOS menu bar: ${JSON.stringify(native)}`);
+        assert.equal(await companionPage.evaluate<number>('window.lumi.state().then(s=>s.bar)'), native.area.y - native.edge, `${label}: the idle pill does not follow the menu bar height`);
+      }
     };
     // The rest of the fixed window is transparent; keep review screenshots to the island itself.
     const islandShot = async (name: string) => {
@@ -965,10 +969,10 @@ async function main() {
     await companionPage.evaluate("window.lumi.action({type:'peek'})");
     await until(() => companionPage.evaluate(`document.body.dataset.mode==='compact'&&${settled}&&getComputedStyle(document.getElementById('summary-open')).display==='block'&&window.lumi.state().then(s=>s.selected?.key==='lumi:intro')`), 'intro card with its open chevron');
     await islandShot('ui-notch-intro.png');
-    // Idle: a black 120x30 pill attached to the top edge, or the notch-sized pill under a macOS menu bar inset,
-    // flanked by two concave black shoulders.
+    // Idle: a black 120 px pill with 10 px bottom corners attached to the top edge, as tall as the macOS menu bar it sits in (30 px without one),
+    // or the notch-sized pill filling a camera-notch menu bar, flanked by two concave black shoulders.
     // Exact 4/7-second deadlines are tested with mock timers. Allow real pointer activity to renew them on an active desktop.
-    await until(() => companionPage.evaluate(`document.body.dataset.mode==='hidden'&&${settled}&&(()=>{const e=document.getElementById('island'),b=e.getBoundingClientRect(),inset=parseFloat(getComputedStyle(e).paddingTop);return Math.round(b.width)===(inset?330:120)&&Math.round(b.height)===Math.max(30,inset)&&getComputedStyle(e).backgroundColor==='rgb(0, 0, 0)'&&['::before','::after'].every(p=>{const c=getComputedStyle(document.body,p);return c.width==='10px'&&c.height==='10px'&&c.backgroundImage.startsWith('radial-gradient')})})()`), 'manual peek auto hides to the idle pill', 20000);
+    await until(() => companionPage.evaluate(`document.body.dataset.mode==='hidden'&&${settled}&&window.lumi.state().then(s=>{const e=document.getElementById('island'),b=e.getBoundingClientRect();return Math.round(b.width)===(s.inset?330:120)&&Math.round(b.height)===(s.bar||30)&&getComputedStyle(e).borderBottomLeftRadius==='10px'&&getComputedStyle(e).backgroundColor==='rgb(0, 0, 0)'&&['::before','::after'].every(p=>{const c=getComputedStyle(document.body,p);return c.width==='10px'&&c.height==='10px'&&c.backgroundImage.startsWith('radial-gradient')})})`), 'manual peek auto hides to the idle pill', 20000);
     await until(() => companionPage.evaluate('globalThis.smokeBlink'), 'pill blink when the pill returns', 2000);
     await companionPage.send('Emulation.setEmulatedMedia', { features: [] });
     await fixedWindow('Idle pill');
@@ -1443,7 +1447,7 @@ async function main() {
       ? nativeBrowser.evaluate(on
         ? "(()=>{const s=smokeElectron.screen,o=globalThis.smokeScreen=[s.getPrimaryDisplay,s.getAllDisplays],notched=d=>({...d,workArea:{...d.workArea,y:d.bounds.y+37,height:d.bounds.height-37}});s.getPrimaryDisplay=()=>notched(o[0].call(s));s.getAllDisplays=()=>o[1].call(s).map(notched);s.emit('display-metrics-changed');return true})()"
         : "(()=>{const s=smokeElectron.screen;[s.getPrimaryDisplay,s.getAllDisplays]=smokeScreen;delete globalThis.smokeScreen;s.emit('display-metrics-changed');return true})()")
-      : companionPage.evaluate(`document.body.dataset.notch='${on}';document.body.style.setProperty('--inset','${on ? 37 : 0}px')`);
+      : companionPage.evaluate(`document.body.dataset.notch='${on}';document.body.style.setProperty('--inset','${on ? 37 : 0}px');document.body.style.setProperty('--pill','${on ? 37 : 30}px')`);
     await simulateNotch(true);
     let camera: {clear:number;height:number};
     try {
