@@ -58,7 +58,7 @@ Fitur khusus platform bergantung pada paket terpasang dan desktop environment. L
 
 Ruang Pengumuman menyiarkan ke perangkat aktif yang mengizinkannya. Pesan pribadi, pesan Ruang, dan transfer file memerlukan penerima yang dapat dijangkau; pengiriman tidak diantrekan untuk penerima offline. Kontak Pengingat hanya tampil saat aktif dan mendukung fitur tersebut. Pengingat pribadi berjalan lokal; permintaan yang sudah dibuat mempertahankan status pengiriman atau keputusan jika koneksi terputus.
 
-Pada pembukaan pertama, paket terpasang yang mendukung fitur ini mengaktifkan buka saat masuk ke komputer. Ubah di **Pengaturan → Saat komputer dinyalakan**. Agar tetap menerima pesan setelah jendela ditutup, aktifkan **Tetap berjalan di tray**; tray harus tersedia.
+Pada pembukaan pertama, paket terpasang yang mendukung fitur ini mengaktifkan buka saat masuk ke komputer. Ubah di **Pengaturan → Aplikasi → Saat komputer dinyalakan**. Agar tetap menerima pesan setelah jendela ditutup, aktifkan **Tetap berjalan di tray**; tray harus tersedia.
 
 ## Privasi dan batasan jaringan
 

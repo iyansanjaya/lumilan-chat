@@ -187,6 +187,34 @@ test('the global navigation guard preserves native file inputs used by other for
   assert.equal(f.uploads.length, 0);
 });
 
+// A node inside a Settings section: closest() walks up and matches a selector list by id, as the DOM does.
+function inside(id: string): DropTarget {
+  const section: DropTarget = { matches: selector => selector.split(',').some(part => part.trim() === `#${id}`) };
+  const target: DropTarget = { parent: section, matches: () => false };
+  const closest = (node: DropTarget | undefined, selector: string): DropTarget | null => !node ? null : node.matches?.(selector) ? node : closest(node.parent, selector);
+  target.closest = selector => closest(target, selector);
+  return target;
+}
+
+test('Settings Shelf and Sticker packs take their own file drops while navigation stays blocked', () => {
+  // Setting dropEffect to 'none' on dragover would stop the browser from delivering the drop to the section's own zone.
+  for (const id of ['shelf-section', 'stickers-section']) {
+    const f = fixture();
+    f.document.dialogOpen = true;
+    const over = f.fire('dragover', [file('sticker.png')], { target: inside(id) });
+    assert(over.prevented, `A drop over ${id} can navigate away from the app`);
+    assert.equal(over.dataTransfer.dropEffect, undefined, `The guard refused drops over ${id}`);
+    const drop = f.fire('drop', [file('sticker.png')], { target: inside(id) });
+    assert(drop.prevented);
+    assert.deepEqual([f.uploads.length, f.toasts.length], [0, 0], `A drop over ${id} was sent to the chat or told to go there`);
+  }
+  const f = fixture();
+  f.document.dialogOpen = true;
+  assert.equal(f.fire('dragover', [file('photo.png')], { target: inside('profile-section') }).dataTransfer.dropEffect, 'none', 'Another Settings section accepted a file drop');
+  f.fire('drop', [file('photo.png')], { target: inside('profile-section') });
+  assert.deepEqual([f.uploads.length, f.toasts.length], [0, 1]);
+});
+
 test('folders, invalid sizes, and over-capacity batches are rejected before sending any file', () => {
   for (const invalid of [file('empty.txt', 0), file('oversize.bin', 5 * 1024 ** 3 + 1)]) {
     const f = fixture();

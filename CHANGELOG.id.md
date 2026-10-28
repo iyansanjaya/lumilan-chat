@@ -2,6 +2,74 @@
 
 [English](CHANGELOG.md)
 
+## 1.4.1
+
+Perubahan dari versi 1.4.0.
+
+### Fitur baru
+
+- **Paket stiker.** Impor stiker sendiri di **Pengaturan → Paket stiker**: isi nama paket, lalu pilih atau jatuhkan hingga 100 gambar PNG, JPEG, WebP, atau GIF bergerak (masing-masing hingga 20 MB). Lumilan mengubahnya menjadi stiker WebP maksimal 512 px dan menyimpannya hanya di perangkat ini; file asli tidak diubah. Mengimpor dengan nama paket yang sudah ada menambah paket tersebut, gambar yang sama tidak disimpan dua kali, dan gambar yang tidak didukung dilewati.
+- **Pemilih stiker.** Tombol stiker di samping tombol emoji membuka pemilih dengan tab **Terkini** dan satu tab per paket. Klik stiker untuk langsung mengirimnya, termasuk sebagai balasan. Tombol panah, Home/End, Enter, dan Escape bekerja seperti pada pemilih emoji; klik kanan stiker atau tekan Delete untuk menghapusnya dari perangkat ini.
+- **Stiker tampil tanpa Terima.** Stiker tersedia di pesan pribadi, Ruang Percakapan, dan Catatan pribadi. Penerima tidak perlu memilih **Terima** seperti pada file: perangkat penerima hanya menerima gambar WebP hingga 500 KB dan 512 px, men-decode lalu meng-encode ulang setiap gambar sebelum menyimpannya, dan menerima paling banyak 30 stiker per pengirim per menit.
+- **Simpan stiker yang diterima.** Pilih stiker di percakapan lalu **Simpan stiker** untuk menambahkannya ke paket **Tersimpan**.
+- **Esc menutup percakapan yang terbuka.** Seperti di WhatsApp atau Telegram, Esc kembali ke beranda dan menyimpan draf untuk nanti. Esc lebih dulu menutup yang ada di atasnya: dialog, pemilih emoji, menu, pilihan pesan, atau balasan yang sedang ditulis. Pada jendela sempit, Esc kembali ke daftar percakapan.
+
+### Perubahan
+
+- **Lumi rata dengan menu bar macOS.** Di setiap layar Mac, bukan hanya Mac dengan notch kamera, Lumi kini menggantung dari tepi atas layar di atas bagian tengah menu bar, dan pill idle setinggi menu bar. Tanpa menu bar yang terlihat, serta di Windows dan Linux, pill tetap setinggi 30 pt. Sudut bawahnya kini sama dengan bahu lengkungnya.
+- Notifikasi dan Lumi menampilkan **Stiker** untuk stiker yang diterima, atau **Pesan baru diterima** saat pratinjau isi pesan mati. Balasan, pesan yang disalin, pengingat, dan kotak pesan belum dibaca juga menampilkan **Stiker**, bukan nama file.
+- Stiker tidak dihitung atau didaftarkan sebagai file bersama di panel detail percakapan.
+
+### Build dan validasi
+
+- Pustaka stiker dan gambar stiker punya modul tersendiri tanpa Electron, dengan tes untuk batas impor, duplikat, data tersimpan yang rusak, pemulihan setelah impor terputus, penghapusan paket dan stiker, serta penyimpanan dari percakapan.
+- Tes jaringan dengan perangkat loopback mencakup stiker di pesan pribadi dan Ruang, anggota Ruang dengan versi lama, Catatan pribadi, Ruang Pengumuman, gambar tidak valid dan terlalu besar, paket berulang, batas per pengirim, versi Ruang yang usang, serta penghapusan file stiker bersama pesannya.
+- Smoke UI paket mengimpor paket, mengirim dari pemilih di Catatan pribadi dan ke kontak loopback, menerima stiker bergerak tanpa langkah persetujuan, memeriksa frame diam saat pengurangan gerak aktif, menyimpan stiker yang diterima, dan menghapus paket, pada tema terang dan gelap di lebar 1100, 375, dan 320 px. Smoke ini juga memeriksa perilaku Esc yang baru.
+- Area jatuhkan file di **Pengaturan → Rak** dan **Pengaturan → Paket stiker** kini memakai satu implementasi yang sama.
+
+### Catatan platform
+
+- Stiker memakai pustaka gambar yang sudah dibundel untuk Windows, macOS, dan Linux; tidak ada dependensi native baru.
+- Stiker lulus smoke paket di Windows. Saat catatan ini ditulis, paket macOS (Intel dan Apple Silicon) serta Linux (X11 dan Wayland) belum diuji dengan stiker.
+- Posisi Lumi di Mac bergantung pada tinggi menu bar karena Electron tidak melaporkan notch kamera. Dengan menu bar yang disembunyikan otomatis, pill idle 120 pt dapat berada di dalam notch.
+- Lumilan Chat versi lama tidak menampilkan tombol stiker dan tidak menerima stiker. Jika versi lama membuka riwayat yang berisi stiker, setiap stiker tampil sebagai file `sticker.webp`.
+- Paket saat ini belum ditandatangani. Windows atau macOS mungkin menampilkan peringatan penerbit; notifikasi sistem macOS memerlukan aplikasi bertanda tangan. Unduh paket dari [halaman Releases resmi](https://github.com/iyansanjaya/lumilan-chat/releases).
+
+## 1.4.0
+
+Perubahan dari versi 1.3.0.
+
+### Fitur baru
+
+- **Rehat kerja.** Pilih lama kerja dan istirahat di halaman **Rehat** Lumi atau **Pengaturan → Rehat kerja** (nonaktif secara bawaan). Saat waktunya tiba, Lumi mengingatkan, lalu setiap layar diredupkan dengan hitung mundur dan **Lanjut kerja**. Tunda, lewati, atau akhiri rehat lebih awal; rehat menunggu saat Jangan ganggu, sesi fokus, panggilan, layar terkunci, dan tidur.
+- **Buka Lumi saat kursor diarahkan.** Pilih **Pengaturan → Lumi → Buka panel Lumi → Saat kursor diarahkan** agar panel terbuka saat kursor berhenti di atas pill.
+
+### Perubahan
+
+- **Lumi punya bagian sendiri di Pengaturan.** Menampilkan Lumi, membuatnya tetap tampil saat Anda memakai jendela, dan cara panel dibuka kini ada di **Pengaturan → Lumi**.
+- **Lumi lebih lembut.** Badan lebih bulat, mata besar berkilau, pipi merah muda, dan kaki keemasan. Animasi dan pose tidak berubah.
+- **Lumi lebih mudah ditemukan.** Mengarahkan kursor ke pill menampilkan petunjuk **Buka** dan kartu terbaru, perkenalan muncul sekali saat pertama kali, dan halaman **Fokus** punya tombol **Aktifkan**.
+- **Warna emas Lumi di seluruh aplikasi.** Tombol, percakapan terpilih, mention, bilah progres, sakelar, dan tab memakai emas Lumi, dan semua dropdown memakai satu gaya yang sama.
+- **Satu status jaringan.** Bagian bawah sidebar menampilkan **Jaringan lokal terenkripsi** setelah perangkat lain online dan **Mencari perangkat…** sebelum itu.
+
+### Perbaikan
+
+- Klik ganda pada tab atau tombol tidak lagi menyorot teks labelnya.
+- Pilihan panjang di dropdown tidak lagi menabrak panah.
+- Panel Lumi tidak lagi terpotong di sisi jendela saat memantul terbuka.
+
+### Build dan validasi
+
+- Penerimaan file dipindahkan ke modul tersendiri yang teruji; tes transfer penuh 5 GB tetap lulus. Perilaku tidak berubah.
+- Aturan rehat dan layar rehat punya modul tersendiri yang teruji, dan panggilan dari jendela ke inti aplikasi kini diperiksa tipenya.
+
+### Catatan platform
+
+- Di Linux Wayland, layar rehat berupa satu jendela gelap pekat di satu layar dan Lumi memakai notifikasi sistem; Rehat kerja ada di **Pengaturan**. Game dalam mode layar penuh eksklusif dapat tetap berada di atas layar rehat.
+- Belum dicek di perangkat fisik: rehat saat lock dan tidur sungguhan, Space layar penuh macOS, dan layar Windows dengan skala berbeda.
+- Di macOS, unduh dan pasang pembaruan dari halaman Releases; aplikasi memberi tahu saat versi baru tersedia.
+- Paket belum ditandatangani; Windows atau macOS mungkin menampilkan peringatan penerbit. Notifikasi sistem macOS memerlukan aplikasi bertanda tangan.
+
 ## 1.3.0
 
 Perubahan dari versi 1.2.2.

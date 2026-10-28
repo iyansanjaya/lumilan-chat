@@ -2,6 +2,74 @@
 
 [Bahasa Indonesia](CHANGELOG.id.md)
 
+## 1.4.1
+
+Changes from version 1.4.0.
+
+### Added
+
+- **Sticker packs.** Import your own stickers in **Settings → Sticker packs**: enter a pack name, then choose or drop up to 100 PNG, JPEG, WebP, or animated GIF images (each up to 20 MB). Lumilan turns them into WebP stickers of at most 512 px and keeps them only on this device; your original files are not changed. Importing with an existing pack name adds to that pack, the same image is not stored twice, and unsupported images are skipped.
+- **Sticker picker.** The sticker button next to the emoji button opens a picker with a **Recent** tab and one tab per pack. Click a sticker to send it right away, also as a reply. Arrow keys, Home/End, Enter, and Escape work as in the emoji picker; right-click a sticker or press Delete to remove it from this device.
+- **Stickers arrive without Accept.** Stickers work in direct messages, Conversation Rooms, and Personal notes. The recipient does not need to choose **Accept** as for files: the receiving device takes only WebP images up to 500 KB and 512 px, decodes and re-encodes each one before storing it, and accepts at most 30 stickers per sender per minute.
+- **Save a received sticker.** Select a sticker in a conversation and choose **Save sticker** to add it to the **Saved** pack.
+- **Esc closes the open conversation.** As in WhatsApp or Telegram, Esc returns to the home view and keeps the draft for next time. Esc first closes whatever is on top: a dialog, the emoji picker, a menu, a message selection, or a reply in progress. On a narrow window it returns to the conversation list.
+
+### Changed
+
+- **Lumi sits flush with the macOS menu bar.** On every Mac display, not only Macs with a camera notch, Lumi now hangs from the top edge of the screen over the middle of the menu bar, and the idle pill is as tall as the menu bar. Without a visible menu bar, and on Windows and Linux, the pill stays 30 pt tall. Its bottom corners now match the curved shoulders.
+- Notifications and Lumi show **Sticker** for a received sticker, or **New message received** when message previews are off. Replies, copied messages, reminders, and the unread inbox also show **Sticker** instead of a file name.
+- Stickers are not counted or listed as shared files in the conversation details.
+
+### Build and validation
+
+- The sticker library and sticker images have their own Electron-free modules, with tests for import limits, duplicates, damaged saved data, recovery after an interrupted import, deleting packs and stickers, and saving from a conversation.
+- Network tests with loopback devices cover stickers in direct messages and Rooms, Room members on older versions, Personal notes, the Announcement Room, invalid and oversized images, repeated packets, the per-sender limit, outdated Room versions, and removing a sticker's file with its message.
+- The packaged UI smoke test imports a pack, sends from the picker in Personal notes and to a loopback contact, receives an animated sticker without a consent step, checks the still frame under reduced motion, saves a received sticker, and deletes packs, in light and dark themes at 1100, 375, and 320 px. It also checks the new Esc behavior.
+- The drop zones in **Settings → Shelf** and **Settings → Sticker packs** share one implementation.
+
+### Platform notes
+
+- Stickers use the image library already bundled for Windows, macOS, and Linux; no new native dependency was added.
+- Stickers pass the packaged smoke tests on Windows. When these notes were written, the macOS (Intel and Apple Silicon) and Linux (X11 and Wayland) packages had not yet been tested with stickers.
+- Lumi's position on a Mac relies on the menu bar height, because Electron does not report the camera notch. With an auto-hiding menu bar, the 120 pt idle pill can sit inside the notch.
+- Older Lumilan Chat versions show no sticker button and do not receive stickers. If they open history that contains stickers, each one appears as a `sticker.webp` file.
+- Current packages are unsigned. Windows or macOS may display a publisher warning; macOS system notifications require a signed application. Download packages from the [official Releases page](https://github.com/iyansanjaya/lumilan-chat/releases).
+
+## 1.4.0
+
+Changes from version 1.3.0.
+
+### Added
+
+- **Work breaks.** Choose how long to work and rest on Lumi's **Breaks** page or in **Settings → Work breaks** (off by default). When time is up, Lumi reminds you, then every display dims with a countdown and **Back to work**. Snooze, skip, or end a break early; breaks wait during Do not disturb, focus sessions, calls, screen lock, and sleep.
+- **Open Lumi on hover.** Choose **Settings → Lumi → Open Lumi panel → On hover** to open the panel by resting the pointer on the pill.
+
+### Changed
+
+- **Lumi has its own Settings section.** Showing Lumi, keeping it visible while you use the window, and how the panel opens are now in **Settings → Lumi**.
+- **A softer Lumi.** A rounder body, bigger eyes with highlights, pink cheeks, and golden feet. Animations and poses are unchanged.
+- **Lumi is easier to discover.** Hovering the pill shows an **Open** hint and previews the newest card, a one-time introduction appears the first time, and the **Focus** page has a **Turn on** button.
+- **Lumi's gold across the app.** Buttons, the selected conversation, mentions, progress bars, switches, and tabs use Lumi's gold, and dropdowns share one style everywhere.
+- **One network status.** The bottom of the sidebar shows **Encrypted local network** once another device is online and **Looking for devices…** until then.
+
+### Fixed
+
+- Double-clicking a tab or button no longer selects its label.
+- Long dropdown options no longer run under the arrow.
+- Lumi's panel no longer gets cut off at the sides while it springs open.
+
+### Build and validation
+
+- Receiving files moved into its own tested module; the full 5 GB transfer test still passes. Behavior is unchanged.
+- Break rules and the break screen have their own tested modules, and calls from the window to the app's core are now type-checked.
+
+### Platform notes
+
+- On Linux Wayland, the break screen is one solid dark window on one display and Lumi uses system notifications; Work breaks are in **Settings**. Games in exclusive fullscreen can stay above the break screen.
+- Not checked on physical devices: breaks across real lock and sleep, macOS fullscreen Spaces, and Windows displays with different scaling.
+- On macOS, download and install updates from the Releases page; the app tells you when a new version is available.
+- Packages are unsigned; Windows or macOS may display a publisher warning. macOS system notifications require a signed app.
+
 ## 1.3.0
 
 Changes from version 1.2.2.

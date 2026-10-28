@@ -180,13 +180,20 @@ async function main() {
     }
     assert(settingsOpen, `Settings did not open: ${failures.join('; ')}; ${logs}`);
     await setViewport(375, 812);
-    const narrow = await evaluate<{ viewport:number; left:number; right:number; dialogOverflow:boolean; pageOverflow:boolean }>(`(() => { const dialog = document.querySelector('#settings-dialog');
+    // Settings shows one category at a time: a check of a section first opens its category, as a person would.
+    const showPane = (selector: string) => `document.querySelector('#settings-nav [aria-controls="' + document.querySelector('${selector}').closest('[role=tabpanel]').id + '"]').click();`;
+    // A category scrolls on its own, so its overflow never reaches the dialog's scroll size.
+    const settingsOverflow = "[dialog, document.querySelector('#settings-panes')].some(e => e.scrollWidth > e.clientWidth)";
+    const narrow = await evaluate<{ viewport:number; left:number; right:number; dialogOverflow:boolean; pageOverflow:boolean; orientation:string|null; tabsAbove:boolean }>(`(() => { const dialog = document.querySelector('#settings-dialog');
+      ${showPane('#notifications-form')}
       document.querySelector('#test-notification-button').textContent = 'Uji notifikasi sistem sekarang';
       document.querySelector('#notifications-form button[type="submit"]').textContent = 'Simpan semua pengaturan notifikasi';
-      const rect = dialog.getBoundingClientRect();
-      return { viewport: innerWidth, left: rect.left, right: rect.right, dialogOverflow: dialog.scrollWidth > dialog.clientWidth,
-        pageOverflow: document.documentElement.scrollWidth > innerWidth }; })()`);
-    assert(narrow.left >= 0 && narrow.right <= narrow.viewport && !narrow.dialogOverflow && !narrow.pageOverflow,
+      const rect = dialog.getBoundingClientRect(), nav = document.querySelector('#settings-nav'), tabs = nav.getBoundingClientRect();
+      return { viewport: innerWidth, left: rect.left, right: rect.right, dialogOverflow: ${settingsOverflow},
+        pageOverflow: document.documentElement.scrollWidth > innerWidth, orientation: nav.getAttribute('aria-orientation'),
+        tabsAbove: tabs.right <= rect.right && tabs.bottom <= document.querySelector('#settings-panes').getBoundingClientRect().top + 1 }; })()`);
+    // On a narrow window the categories become a row of tabs above the open one.
+    assert(narrow.left >= 0 && narrow.right <= narrow.viewport && !narrow.dialogOverflow && !narrow.pageOverflow && narrow.orientation === 'horizontal' && narrow.tabsAbove,
       `Settings overflow in a narrow window: ${JSON.stringify(narrow)}`);
     await evaluate("document.querySelector('#notifications-form').scrollIntoView({ block: 'center' })");
     const narrowScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
@@ -223,11 +230,11 @@ async function main() {
         document.querySelector('#focus-status').textContent = 'Focus session paused · 180 min left. Your previous status returns when the session ends.';
         document.querySelector('#focus-toggle').textContent = 'Resume focus session'; document.querySelector('#focus-end').textContent = 'Finish focus session now';
         const dialog = document.querySelector('#settings-dialog'), select = document.querySelector('#focus-select'), style = getComputedStyle(select);
-        select.closest('section').scrollIntoView({ block: 'center' });
+        ${showPane('#focus-select')} select.closest('section').scrollIntoView({ block: 'center' });
         const box = dialog.getBoundingClientRect(), field = select.getBoundingClientRect();
         const buttons = [...select.closest('section').querySelectorAll('.dialog-actions button')].filter(button => !button.hidden).map(button => button.getBoundingClientRect());
         return { appearance: style.appearance, arrow: style.backgroundImage, paddingRight: parseFloat(style.paddingRight),
-          inside: field.left >= box.left && field.right <= box.right, overflow: dialog.scrollWidth > dialog.clientWidth,
+          inside: field.left >= box.left && field.right <= box.right, overflow: ${settingsOverflow},
           buttons: buttons.every(button => button.left >= box.left && button.right <= box.right),
           textOverlap: buttons.some((a, i) => buttons.some((b, j) => i < j && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)) }; })()`);
       assert(['none', 'base-select'].includes(focusLayout.appearance) && focusLayout.arrow !== 'none' && focusLayout.paddingRight >= 32 && focusLayout.inside && !focusLayout.overflow && focusLayout.buttons && !focusLayout.textOverlap,
@@ -259,11 +266,11 @@ async function main() {
         document.documentElement.dataset.theme = '${theme}';
         document.querySelector('#break-status').textContent = 'Next break at 16:00 · a long translated line that must wrap inside the dialog without overlapping';
         const dialog = document.querySelector('#settings-dialog'), select = document.querySelector('#break-length'), style = getComputedStyle(select);
-        select.closest('section').scrollIntoView({ block: 'center' });
+        ${showPane('#break-length')} select.closest('section').scrollIntoView({ block: 'center' });
         const box = dialog.getBoundingClientRect(), fields = [...select.closest('section').querySelectorAll('select')].map(field => field.getBoundingClientRect());
         const buttons = [...select.closest('section').querySelectorAll('.dialog-actions button')].map(button => button.getBoundingClientRect());
         return { appearance: style.appearance, arrow: style.backgroundImage, paddingRight: parseFloat(style.paddingRight),
-          inside: fields.every(field => field.left >= box.left && field.right <= box.right), overflow: dialog.scrollWidth > dialog.clientWidth,
+          inside: fields.every(field => field.left >= box.left && field.right <= box.right), overflow: ${settingsOverflow},
           buttons: buttons.every(button => button.left >= box.left && button.right <= box.right) }; })()`);
       assert(['none', 'base-select'].includes(breakLayout.appearance) && breakLayout.arrow !== 'none' && breakLayout.paddingRight >= 32 && breakLayout.inside && !breakLayout.overflow && breakLayout.buttons,
         `Break settings are inconsistent at ${width} px in ${theme}: ${JSON.stringify(breakLayout)}`);
@@ -286,9 +293,9 @@ async function main() {
       for (const id of ['#break-section', '#lumi-section']) {
         const fits = await evaluate<{ inside: boolean; overflow: boolean; clipped: string[] }>(`(() => {
           const dialog = document.querySelector('#settings-dialog'), section = document.querySelector('${id}');
-          section.scrollIntoView({ block: 'center' });
+          ${showPane(id)} section.scrollIntoView({ block: 'center' });
           const box = dialog.getBoundingClientRect(), parts = [...section.querySelectorAll('select, label, button, h3, small, .setting-note')].filter(e => e.getClientRects().length);
-          return { inside: parts.every(e => { const b = e.getBoundingClientRect(); return b.left >= box.left && b.right <= box.right; }), overflow: dialog.scrollWidth > dialog.clientWidth,
+          return { inside: parts.every(e => { const b = e.getBoundingClientRect(); return b.left >= box.left && b.right <= box.right; }), overflow: ${settingsOverflow},
             clipped: [...section.querySelectorAll('select, button')].filter(e => e.scrollWidth > e.clientWidth + 1).map(e => e.id) }; })()`);
         assert(fits.inside && !fits.overflow && !fits.clipped.length, `${id} does not fit at 320 px in ${language}: ${JSON.stringify(fits)}`);
       }
@@ -308,6 +315,9 @@ async function main() {
           document.body.classList.toggle('show-list', listed);
           return result; })()`);
         assert(!sidebar.scrolls && !sidebar.cut.length, `Sidebar tabs cut off at ${width} px in ${language}: ${JSON.stringify(sidebar)}`);
+        // The Settings categories are a fixed-width column on wide windows: every translated label fits whole.
+        if (width > 700) assert.deepEqual(await evaluate<string[]>("[...document.querySelectorAll('#settings-nav [role=tab] > span:last-child')].filter(e => e.scrollWidth > e.clientWidth + 1).map(e => e.textContent)"), [],
+          `Settings categories cut off at ${width} px in ${language}`);
         if (language === 'en') englishFooter = sidebar.footer;
         else assert.notEqual(sidebar.footer, englishFooter, `Footer stayed in English after switching to ${language}`);
       }
@@ -357,12 +367,12 @@ async function main() {
         document.documentElement.dataset.theme = '${theme}';
         document.querySelector('#routine-status').textContent = 'Today 0.3 of 1.5 L · Next at 16:00 · a long translated line that must wrap inside the dialog';
         const dialog = document.querySelector('#settings-dialog'), select = document.querySelector('#routine-interval'), style = getComputedStyle(select);
-        document.querySelector('#tasks-section').scrollIntoView({ block: 'center' });
+        ${showPane('#tasks-section')} document.querySelector('#tasks-section').scrollIntoView({ block: 'center' });
         const box = dialog.getBoundingClientRect(), field = select.getBoundingClientRect();
         const rows = [...document.querySelectorAll('#tasks-list li')].map(row => row.getBoundingClientRect());
         const buttons = [...document.querySelectorAll('#tasks-list button, #routine-section .dialog-actions button, #tasks-form button')].filter(button => !button.hidden).map(button => button.getBoundingClientRect());
         return { appearance: style.appearance, arrow: style.backgroundImage, paddingRight: parseFloat(style.paddingRight),
-          inside: field.left >= box.left && field.right <= box.right, overflow: dialog.scrollWidth > dialog.clientWidth,
+          inside: field.left >= box.left && field.right <= box.right, overflow: ${settingsOverflow},
           rows: rows.every(row => row.left >= box.left && row.right <= box.right),
           buttons: buttons.every(button => button.left >= box.left && button.right <= box.right) && !buttons.some((a, i) => buttons.some((b, j) => i < j && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)) }; })()`);
       assert(['none', 'base-select'].includes(pageLayout.appearance) && pageLayout.arrow !== 'none' && pageLayout.paddingRight >= 32 && pageLayout.inside && !pageLayout.overflow && pageLayout.rows && pageLayout.buttons,
@@ -395,9 +405,9 @@ async function main() {
     for (const theme of ['light', 'dark']) {
       await setViewport(320, 700);
       const shelfLayout = await evaluate<{ inside: boolean; overflow: boolean }>(`(() => { document.documentElement.dataset.theme = '${theme}';
-        const dialog = document.querySelector('#settings-dialog'), box = dialog.getBoundingClientRect(); document.querySelector('#shelf-section').scrollIntoView({ block: 'center' });
+        const dialog = document.querySelector('#settings-dialog'), box = dialog.getBoundingClientRect(); ${showPane('#shelf-section')} document.querySelector('#shelf-section').scrollIntoView({ block: 'center' });
         const parts = [document.querySelector('#shelf-drop-zone'), ...document.querySelectorAll('#shelf-items li, #shelf-items button')].map(e => e.getBoundingClientRect());
-        return { inside: parts.every(r => r.left >= box.left && r.right <= box.right), overflow: dialog.scrollWidth > dialog.clientWidth }; })()`);
+        return { inside: parts.every(r => r.left >= box.left && r.right <= box.right), overflow: ${settingsOverflow} }; })()`);
       assert(shelfLayout.inside && !shelfLayout.overflow, `Settings shelf overflows at 320 px in ${theme}: ${JSON.stringify(shelfLayout)}`);
       await delay(400);
       const shelfShot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
@@ -883,6 +893,19 @@ async function main() {
     await pressKey('Escape', 'Escape', 27);
     await evaluate("document.querySelector('#message-input').value = ''; document.querySelector('#message-input').dispatchEvent(new Event('input', { bubbles: true }))");
 
+    // The categories follow the tabs pattern: arrows move and select (wrapping at the ends), Home and End jump, only the
+    // selected tab is in the Tab order, and exactly its panel shows.
+    await setViewport(1100, 800);
+    await evaluate("document.querySelector('#settings-dialog').showModal(); document.querySelector('#settings-tab-profile').click(); document.querySelector('#settings-tab-profile').focus(); true");
+    const selectedPane = `(() => { const tabs = [...document.querySelectorAll('#settings-nav [role=tab]')], selected = tabs.filter(tab => tab.getAttribute('aria-selected') === 'true');
+      const shown = [...document.querySelectorAll('#settings-panes [role=tabpanel]')].filter(panel => !panel.hidden);
+      return selected.length === 1 && document.activeElement === selected[0] && tabs.filter(tab => tab.tabIndex === 0).length === 1 && selected[0].tabIndex === 0 &&
+        shown.length === 1 && shown[0].id === selected[0].getAttribute('aria-controls') ? selected[0].dataset.pane : 'invalid'; })()`;
+    for (const [key, keyCode, pane] of [['ArrowDown', 40, 'display'], ['End', 35, 'app'], ['ArrowDown', 40, 'profile'], ['ArrowUp', 38, 'app'], ['Home', 36, 'profile']] as const) {
+      await pressKey(key, key, keyCode);
+      assert.equal(await evaluate<string>(selectedPane), pane, `Settings categories: ${key} did not select ${pane}`);
+    }
+    await evaluate("document.querySelector('#settings-dialog').close()");
     // Exercise the runner's accessibility setting and both explicit motion modes.
     for (const [theme, motion] of ['native', 'no-preference', 'reduce'].flatMap(motion => ['light', 'dark'].map(theme => [theme, motion]))) {
       await send('Emulation.setEmulatedMedia', { features: motion === 'native' ? [] : [{ name: 'prefers-reduced-motion', value: motion }] });
@@ -890,15 +913,19 @@ async function main() {
       for (const [width, height] of [[1100, 800], [375, 812], [320, 700]] as const) {
         await setViewport(width, height);
         await evaluate("document.querySelector('#settings-dialog').showModal()");
-        const settingsSpacing = await evaluate<{left:number;right:number;gutter:number;scrollable:boolean;overflow:boolean;inside:boolean}>(`(() => { const dialog = document.querySelector('#settings-dialog'), form = document.querySelector('#profile-form');
-          const a = dialog.getBoundingClientRect(), b = form.getBoundingClientRect(), s = getComputedStyle(dialog);
-          return { left: b.left - a.left, right: a.right - b.right, gutter: dialog.offsetWidth - dialog.clientWidth - parseFloat(s.borderLeftWidth) - parseFloat(s.borderRightWidth),
-            scrollable: dialog.scrollHeight > dialog.clientHeight, overflow: dialog.scrollWidth > dialog.clientWidth,
-            inside: a.left >= 0 && a.right <= innerWidth }; })()`);
-        assert(settingsSpacing.inside && !settingsSpacing.overflow && settingsSpacing.scrollable &&
-          Math.abs(settingsSpacing.left - settingsSpacing.right) <= 1 && Math.abs(settingsSpacing.left - 29) <= 1 &&
-          Math.abs(settingsSpacing.right - 29) <= 1 && Math.abs(settingsSpacing.gutter - 9) <= 1,
-        `Settings padding/scrollbar is asymmetric (${theme}, ${width}px): ${JSON.stringify(settingsSpacing)}`);
+        const settingsSpacing = await evaluate<{left:number;right:number;gutter:number;overflow:boolean;inside:boolean;placed:boolean;heights:number[]}>(`(() => {
+          const dialog = document.querySelector('#settings-dialog'), panes = document.querySelector('#settings-panes'), nav = document.querySelector('#settings-nav');
+          // The dialog keeps its size whichever category is open, so switching never makes it jump.
+          const heights = ['app', 'stickers', 'profile'].map(pane => { document.querySelector('#settings-tab-' + pane).click(); return Math.round(dialog.getBoundingClientRect().height); });
+          const d = dialog.getBoundingClientRect(), a = panes.getBoundingClientRect(), n = nav.getBoundingClientRect(), b = document.querySelector('#profile-form').getBoundingClientRect();
+          const gutter = panes.offsetWidth - panes.clientWidth;
+          return { left: b.left - a.left, right: a.right - gutter - b.right, gutter, overflow: ${settingsOverflow}, heights,
+            inside: d.left >= 0 && d.right <= innerWidth && d.top >= 0 && d.bottom <= innerHeight,
+            placed: ${width} > 700 ? n.right <= a.left + 1 && n.top >= d.top && n.bottom <= d.bottom + 1 : n.bottom <= a.top + 1 }; })()`);
+        // Categories sit beside the open one on wide windows and above it on narrow ones; its content keeps equal side margins.
+        assert(settingsSpacing.inside && !settingsSpacing.overflow && settingsSpacing.placed && new Set(settingsSpacing.heights).size === 1 &&
+          Math.abs(settingsSpacing.left - settingsSpacing.right) <= 1 && Math.abs(settingsSpacing.left - (width > 700 ? 28 : 16)) <= 1,
+        `Settings layout is off (${theme}, ${width}px): ${JSON.stringify(settingsSpacing)}`);
         if (width !== 375) await capturePolish(`settings-${theme}-${width}-${motion}`);
         await evaluate("document.querySelector('#settings-dialog').close()");
       }
@@ -975,7 +1002,7 @@ async function main() {
     const idleHeap = (idleAfter.JSHeapUsedSize ?? NaN) / 1024 / 1024, idleTasks = (idleAfter.TaskDuration ?? NaN) - (idleBefore.TaskDuration ?? NaN);
     assert(Number.isFinite(idleHeap) && Number.isFinite(idleTasks) && idleHeap <= 96 && idleTasks <= .25,
       `Renderer idle budget exceeded: ${JSON.stringify({ jsHeapMiB: idleHeap, taskSeconds: idleTasks })}`);
-    console.log(`UI polish: scrollable accessible emoji, symmetric Settings, focus/selection contrast and reduced motion passed; idle renderer JS heap ${idleHeap.toFixed(2)} MiB, task time ${idleTasks.toFixed(3)} s/1 s`);
+    console.log(`UI polish: scrollable accessible emoji, Settings categories (keyboard, fixed size, equal margins), focus/selection contrast and reduced motion passed; idle renderer JS heap ${idleHeap.toFixed(2)} MiB, task time ${idleTasks.toFixed(3)} s/1 s`);
     // Stickers: import a pack in Settings, send from the picker in Personal notes, receive an animated sticker from a
     // loopback peer without a consent step, send one back, save the received one, then delete every pack. The page only
     // ever gets WebP data URLs; the peer runs in this process on a random loopback port with discovery off.
@@ -988,24 +1015,29 @@ async function main() {
     stickerFrames.fill(255, 0, 96 * 96 * 3);
     const animatedSticker = await sharp(stickerFrames, { raw: { width: 96, height: 192, pageHeight: 96, channels: 3 } }).gif({ delay: [150, 150], loop: 0 }).toBuffer();
     writeFileSync(stickerFiles[2]!, animatedSticker);
+    const notAnImage = join(stickerDir, 'bukan-gambar.png');
+    writeFileSync(notAnImage, 'not an image');
     await setViewport(1100, 800);
     await evaluate("document.documentElement.dataset.theme = 'light'; document.querySelector('#settings-button').click(); true");
     await waitFor("document.querySelector('#settings-dialog').open && document.querySelectorAll('#sticker-packs li.empty').length === 1", 'empty sticker library in Settings');
-    await evaluate("document.querySelector('#stickers-section').scrollIntoView({ block: 'start' }); document.querySelector('#sticker-pack-name').value = 'Smoke'; true");
+    await evaluate(`${showPane('#stickers-section')} document.querySelector('#stickers-section').scrollIntoView({ block: 'start' }); document.querySelector('#sticker-pack-name').value = 'Smoke'; true`);
     const stickerDom = await send('DOM.getDocument');
     const stickerInput = await send('DOM.querySelector', { nodeId: stickerDom.root.nodeId, selector: '#sticker-files' });
-    await send('DOM.setFileInputFiles', { nodeId: stickerInput.nodeId, files: stickerFiles });
+    await send('DOM.setFileInputFiles', { nodeId: stickerInput.nodeId, files: [...stickerFiles, notAnImage] });
     await evaluate("document.querySelector('#sticker-files').dispatchEvent(new Event('change', { bubbles: true })); true");
     await waitFor("window.lumilan.stickers({ op: 'list' }).then(v => v.packs.length === 1 && v.packs[0].count === 3 && !v.job && document.querySelectorAll('#sticker-packs li:not(.empty)').length === 1)", 'sticker pack imported', 30_000);
     assert(!(await evaluate<string>("window.lumilan.stickers({ op: 'list' }).then(v => JSON.stringify(v))", true)).includes('lumilan-ui-smoke-'), 'A path reached the sticker view');
+    await waitFor(`(() => { const rows = document.querySelectorAll('#sticker-skipped li'); return !document.querySelector('#sticker-import-result').hidden && rows.length === 1 &&
+      rows[0].querySelector('strong').textContent === 'bukan-gambar.png' && rows[0].querySelector('small').textContent.includes('PNG') && !rows[0].textContent.includes('lumilan-ui-smoke-'); })()`,
+      'the skipped file is named with its reason');
     const stickerData = join(profile, 'lumilan', 'stickers');
     assert.equal(readdirSync(stickerData).length, 1, 'One pack folder after the import');
     for (const theme of ['light', 'dark']) {
       await setViewport(320, 700);
       const layout = await evaluate<{ inside: boolean; overflow: boolean }>(`(() => { document.documentElement.dataset.theme = '${theme}';
-        const dialog = document.querySelector('#settings-dialog'), box = dialog.getBoundingClientRect(); document.querySelector('#stickers-section').scrollIntoView({ block: 'center' });
-        const parts = [...document.querySelectorAll('#stickers-section input:not([type=file]), #sticker-drop-zone, #sticker-choose, #sticker-packs li, #sticker-packs button')].map(e => e.getBoundingClientRect());
-        return { inside: parts.every(r => r.left >= box.left && r.right <= box.right), overflow: dialog.scrollWidth > dialog.clientWidth }; })()`);
+        const dialog = document.querySelector('#settings-dialog'), box = dialog.getBoundingClientRect(); ${showPane('#stickers-section')} document.querySelector('#stickers-section').scrollIntoView({ block: 'center' });
+        const parts = [...document.querySelectorAll('#stickers-section input:not([type=file]), #sticker-drop-zone, #sticker-choose, #sticker-packs li, #sticker-packs button, #sticker-import-result, #sticker-skipped li')].map(e => e.getBoundingClientRect());
+        return { inside: parts.every(r => r.left >= box.left && r.right <= box.right), overflow: ${settingsOverflow} }; })()`);
       assert(layout.inside && !layout.overflow, `Settings stickers overflow at 320 px in ${theme}: ${JSON.stringify(layout)}`);
       await delay(400);
       const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
@@ -1033,9 +1065,23 @@ async function main() {
     await evaluate("document.documentElement.dataset.theme = 'light'; document.querySelector('#sticker-grid button').click(); true");
     await waitFor("window.lumilan.state().then(s => s.messages.some(m => m.note && m.sticker)) && [...document.querySelectorAll('#messages .sticker-image')].some(i => i.complete && i.naturalWidth > 0)", 'sticker sent to Personal notes');
     await waitFor("document.querySelectorAll('#sticker-tabs button').length === 2 && document.querySelector('#sticker-tabs button').getAttribute('aria-label') !== null", 'recent tab after sending');
+    for (const index of [1, 0]) {
+      const center = await evaluate<{ x: number; y: number }>(`(() => { const r = document.querySelectorAll('#sticker-tabs button')[${index}].getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...center });
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...center, button: 'left', clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...center, button: 'left', clickCount: 1 });
+      await waitFor(`(() => { const tab = document.querySelectorAll('#sticker-tabs button')[${index}]; return !document.querySelector('#sticker-picker').hidden && tab.getAttribute('aria-pressed') === 'true' &&
+        document.activeElement === tab && document.querySelectorAll('#sticker-grid img').length > 0; })()`, `picker stays open on tab ${index}`);
+    }
     await evaluate("document.querySelector('#sticker-grid button').focus(); true");
     await pressKey('Escape', 'Escape', 27);
     await waitFor("document.querySelector('#sticker-picker').hidden && document.activeElement === document.querySelector('#sticker-button') && document.querySelector('#notes-button').classList.contains('active')", 'Escape closes the picker and keeps the conversation');
+    await evaluate("document.querySelector('#settings-tab-profile').click(); document.querySelector('#sticker-button').click(); true");
+    await waitFor("!document.querySelector('#sticker-picker').hidden", 'picker open again');
+    await evaluate("document.querySelector('#sticker-manage').click(); true");
+    await waitFor("document.querySelector('#settings-dialog').open && document.querySelector('#sticker-picker').hidden && document.querySelector('#settings-tab-stickers').getAttribute('aria-selected') === 'true' && !document.querySelector('#settings-pane-stickers').hidden && document.activeElement === document.querySelector('#sticker-pack-name')",
+      'Manage stickers opens the sticker category');
+    await evaluate("document.querySelector('#settings-dialog').close(); true");
     // Saving a sticker that is already in the library changes nothing.
     await evaluate("[...document.querySelectorAll('#messages .message')].reverse().find(row => row.querySelector('.sticker-image')).querySelector('.message-select-button').click(); true");
     await waitFor("!document.querySelector('#selection-save-sticker').hidden", 'save sticker action for a selected sticker');
@@ -1106,7 +1152,7 @@ async function main() {
     await peerSide.stop();
     stickerPeer = undefined;
     assert.equal(failures.length, 0, `Renderer errors after stickers: ${failures.join('; ')}`);
-    console.log('Stickers: Settings import (PNG, GIF), picker in notes and for a contact, Escape, duplicate save, consent-free animated sticker from a loopback peer, reduced-motion still, saving, sending back, deleting packs, light/dark 1100/375/320 px passed');
+    console.log('Stickers: Settings import (PNG, GIF) with a named skip reason, picker tabs stay open, Manage stickers opens its category, picker in notes and for a contact, Escape, duplicate save, consent-free animated sticker from a loopback peer, reduced-motion still, saving, sending back, deleting packs, light/dark 1100/375/320 px passed');
     // Everything a person can click says so: no arrow over a button, a select, a switch or a clickable row.
     assert.deepEqual(await cdp.arrowCursors(remote), [], 'Clickable controls keep the arrow cursor in the main window');
     assert.deepEqual(cdp.swallowedRejections(handlerErrors), [], 'The main process rejected requests the renderer hid');

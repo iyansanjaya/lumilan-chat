@@ -18,6 +18,7 @@ function fixture(t: TestContext, options: { failWrite?: (index: StickerIndex) =>
     write: index => { if (options.failWrite?.(index)) throw new Error('disk full'); writes.push(index); saved = JSON.parse(JSON.stringify(index)); },
     encode: async bytes => {
       if (bytes.toString().startsWith('bad')) throw new Error('unsupported');
+      if (bytes.toString().startsWith('heavy')) throw Object.assign(new Error('heavy'), { reason: 'heavy' });
       return { bytes: Buffer.from(`webp:${bytes}`), width: 100, height: 80, animated: bytes.toString().startsWith('gif') };
     },
     thumbnail: async bytes => Buffer.from(`thumb:${bytes}`),
@@ -52,8 +53,11 @@ test('impor menambah paket, melewati gambar buruk dan duplikat, serta menulis in
   await assert.rejects(library.importFiles([], 'Lucu'), /1–100 gambar/);
   await assert.rejects(library.importFiles([source('a.png')], '  '), /Nama paket/);
   await assert.rejects(library.importFiles(Array.from({ length: 101 }, () => source('a.png')), 'Lucu'), /1–100 gambar/);
-  const result = await library.importFiles([source('a.png'), source('b.png', 'bad image'), source('c.png', 'a.png'), 'relative.png', join(dir, 'missing.png'), source('gif.gif')], 'Lucu');
-  assert.deepEqual(result, { added: 2, skipped: 3, duplicates: 1 });
+  const result = await library.importFiles([source('a.png'), source('b.png', 'bad image'), source('h.gif', 'heavy'), source('c.png', 'a.png'), 'relative.png',
+    join(dir, 'missing.png'), source('gif.gif')], 'Lucu');
+  // Each skipped file is named, never with its folder, next to why it was skipped; unknown encoder errors are damage.
+  assert.deepEqual(result, { added: 2, skipped: 4, duplicates: 1, skips: [
+    { name: 'b.png', reason: 'damaged' }, { name: 'h.gif', reason: 'heavy' }, { name: 'relative.png', reason: 'unreadable' }, { name: 'missing.png', reason: 'unreadable' }] });
   assert.equal(writes.length, 3, 'the index is written after every stored sticker');
   const view = library.view();
   assert.equal(view.job, undefined);
@@ -67,6 +71,8 @@ test('impor menambah paket, melewati gambar buruk dan duplikat, serta menulis in
   assert.deepEqual(library.view().packs.map(item => item.count), [3]);
   await library.importFiles([source('e.png')], 'Lain');
   assert.deepEqual(library.view().packs.map(item => item.name), ['Lucu', 'Lain']);
+  const full = await library.importFiles(Array.from({ length: 100 }, (_, index) => source(`f${index}.png`)), 'Lain');
+  assert.deepEqual([full.added, full.skipped, full.skips[0]], [99, 1, { name: 'f99.png', reason: 'pack-full' }], 'a pack holds 100 stickers');
 
   const thumbs = await library.thumbs(pack.id);
   assert.equal(thumbs.length, 3);

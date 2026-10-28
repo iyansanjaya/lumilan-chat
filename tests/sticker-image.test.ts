@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { crc32 } from 'node:zlib';
 import sharp from 'sharp';
-import { STICKER_MAX_BYTES, encodeSticker, sniffImage, stickerThumbnail } from '../src/main/sticker-image.js';
+import { STICKER_MAX_BYTES, StickerImageError, encodeSticker, sniffImage, stickerThumbnail } from '../src/main/sticker-image.js';
 
 const solid = (width: number, height: number) => sharp({ create: { width, height, channels: 3, background: { r: 200, g: 40, b: 90 } } });
-// Two differently coloured frames, so encoders cannot fold them into one.
+// Every frame a different grey, so encoders cannot fold neighbours into one.
 function frames(width: number, pageHeight: number, pages: number) {
   const pixels = Buffer.alloc(width * pageHeight * pages * 3);
-  for (let page = 0; page < pages; page++) pixels.fill(page % 2 ? 255 : 30, page * width * pageHeight * 3, (page + 1) * width * pageHeight * 3);
+  for (let page = 0; page < pages; page++) pixels.fill(page * 37 % 256, page * width * pageHeight * 3, (page + 1) * width * pageHeight * 3);
   return sharp(pixels, { raw: { width, height: pageHeight * pages, pageHeight, channels: 3 } });
 }
 
@@ -28,13 +29,28 @@ test('impor stiker menormalkan PNG, JPEG, WebP, dan GIF menjadi WebP maksimal 51
   assert(animated.bytes.length <= STICKER_MAX_BYTES);
 });
 
-test('impor stiker menolak format lain, terlalu banyak frame, dan data rusak', async () => {
-  await assert.rejects(encodeSticker(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'), 'import'), /tidak didukung/);
-  await assert.rejects(encodeSticker(await solid(8, 8).tiff().toBuffer(), 'import'), /tidak didukung/);
-  await assert.rejects(encodeSticker(Buffer.concat([Buffer.from('BM'), Buffer.alloc(64)]), 'import'), /tidak didukung/);
-  await assert.rejects(encodeSticker(await frames(2, 2, 121).gif({ delay: 100, keepDuplicateFrames: true }).toBuffer(), 'import'), /120 frame/);
+const refused = (reason: string) => (error: unknown) => error instanceof StickerImageError && error.reason === reason;
+
+test('impor stiker menyebut alasan setiap gambar yang ditolak', async () => {
+  for (const image of [Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'), await solid(8, 8).tiff().toBuffer(), Buffer.concat([Buffer.from('BM'), Buffer.alloc(64)])])
+    await assert.rejects(encodeSticker(image, 'import'), refused('format'));
   const png = await solid(64, 64).png().toBuffer();
-  await assert.rejects(encodeSticker(png.subarray(0, png.length - 40), 'import'), /tidak didukung/);
+  await assert.rejects(encodeSticker(Buffer.concat([png, Buffer.alloc(20 * 1024 * 1024)]), 'import'), refused('too-big'));
+  await assert.rejects(encodeSticker(png.subarray(0, png.length - 40), 'import'), refused('damaged'));
+  // A header claiming 20 000 × 20 000 px is refused as too large from the header alone, before any pixel is decoded.
+  const huge = Buffer.from(png);
+  huge.writeUInt32BE(20_000, 16);
+  huge.writeUInt32BE(20_000, 20);
+  huge.writeUInt32BE(crc32(huge.subarray(12, 29)), 29);
+  await assert.rejects(encodeSticker(huge, 'import'), refused('pixels'));
+});
+
+test('animasi lebih dari 120 frame dipangkas tanpa mengubah durasinya', async () => {
+  const sticker = await encodeSticker(await frames(16, 16, 200).gif({ delay: Array(200).fill(40), keepDuplicateFrames: true }).toBuffer(), 'import');
+  const metadata = await sharp(sticker.bytes, { animated: true }).metadata();
+  assert.deepEqual([sticker.width, sticker.height, sticker.animated], [16, 16, true]);
+  assert.deepEqual([metadata.pages, metadata.pageHeight], [100, 16], 'every second frame is kept');
+  assert.equal(metadata.delay!.reduce((sum, ms) => sum + ms, 0), 200 * 40, 'each kept frame lasts as long as the frames it replaces');
 });
 
 test('stiker dari peer hanya menerima WebP kecil dan di-encode ulang', async () => {

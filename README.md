@@ -58,7 +58,7 @@ Platform-specific features depend on the installed package and desktop environme
 
 Announcement Rooms broadcast to active devices that allow announcements. Direct messages, Room messages, and file transfers require reachable recipients; they are not queued for offline delivery. Reminder contacts are shown only while online and supporting the feature. Personal reminders work locally; requests already created retain their delivery or decision state if a connection drops.
 
-On first launch, supported installed builds enable opening at computer sign-in. Change this in **Settings → When the computer starts**. To keep receiving messages after closing the window, enable **Keep running in tray**; a tray must be available.
+On first launch, supported installed builds enable opening at computer sign-in. Change this in **Settings → App → When the computer starts**. To keep receiving messages after closing the window, enable **Keep running in tray**; a tray must be available.
 
 ## Privacy and network limits
 
