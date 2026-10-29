@@ -55,8 +55,9 @@ function fixture(users: Contact[], unread: Record<string, number> = {}, language
     thread: null, filter: 'all',
   };
   const selected: string[] = [];
+  const incomingTransfers = new Map<string, {thread: string; status: string}>();
   const context = vm.createContext({
-    $, state, document, locales, language,
+    $, state, document, locales, language, incomingTransfers,
     dismissedPresencePeer: null, presenceTooltipRow: null, presenceTooltipMode: null, presencePointer: null,
     restoringPeopleFocus: false, hidePresenceTooltip() {},
     statusLabels: {active: 'Aktif', busy: 'Sibuk', away: 'Pergi', dnd: 'Jangan ganggu'},
@@ -68,8 +69,32 @@ function fixture(users: Contact[], unread: Record<string, number> = {}, language
   vm.runInContext(`${badgeSource}\n${renderSource}`, context);
   const render = () => vm.runInContext('renderPeople()', context);
   const rows = () => $('#people-list').children.filter(row => row.dataset.peer);
-  return {state, $, document, selected, render, rows, ids: () => rows().map(row => row.dataset.peer)};
+  return {state, $, document, selected, render, rows, incomingTransfers, ids: () => rows().map(row => row.dataset.peer),
+    badge: (id: string) => rows().find(row => row.dataset.peer === id)!.children.find(child => child.className === 'unread-badge')?.textContent};
 }
+
+test('a file or image waiting for Accept moves its sender up like an unread message until it is answered', () => {
+  const f = fixture([{id: 'a', name: 'Andre'}, {id: 'b', name: 'Budi'}, {id: 'z', name: 'Zara'}], {b: 1});
+  f.render();
+  assert.deepEqual(f.ids(), ['b', 'a', 'z']);
+  // The window is not being watched: no message exists until the image is accepted, only the offer.
+  f.incomingTransfers.set('photo', {thread: 'z', status: 'offered'});
+  f.render();
+  assert.deepEqual(f.ids(), ['b', 'z', 'a'], 'An image offer left its sender below contacts without news');
+  assert.equal(f.badge('z'), '1');
+  f.incomingTransfers.set('second', {thread: 'z', status: 'offered'});
+  f.state.unread = {b: 1, z: 1};
+  f.render();
+  assert.equal(f.badge('z'), '3', 'Offers and unread messages from one sender are counted together');
+  // Answered, accepted in Lumi, or a room's offer: none of them holds a private contact at the top.
+  f.incomingTransfers.set('photo', {thread: 'z', status: 'receiving'});
+  f.incomingTransfers.set('second', {thread: 'z', status: 'declining'});
+  f.incomingTransfers.set('room', {thread: 'room:a', status: 'offered'});
+  f.state.unread = {b: 1};
+  f.render();
+  assert.deepEqual(f.ids(), ['b', 'a', 'z']);
+  assert.equal(f.badge('z'), undefined);
+});
 
 test('private sidebar groups positive unread counts first, retaining alphabetical order and source identity', () => {
   const users = Object.freeze([

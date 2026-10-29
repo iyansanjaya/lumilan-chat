@@ -2,6 +2,48 @@
 
 [Bahasa Indonesia](CHANGELOG.id.md)
 
+## 1.4.2
+
+Changes from version 1.4.1.
+
+### Added
+
+- **Why a sticker was skipped.** After an import, **Settings → Sticker packs** lists each skipped file by name with the reason: an unsupported format, a file over 20 MB, too many pixels, still over 500 KB after shrinking to 256 px, a damaged file, a file that cannot be opened, or a full pack. The first 20 are listed and the rest are counted. Only file names are shown, never their folders.
+
+### Changed
+
+- **Settings is organized by category.** Profile, Appearance, Notifications, Lumi, Focus and breaks, Routine and tasks, Shelf, Sticker packs, Conversations, and App are listed on the left, and only the chosen category is shown, so you no longer scroll through one long page. The window keeps its size when you switch categories, and on a narrow window the categories become a row of tabs above the content. Arrow keys, Home, and End move between categories. **Manage stickers…**, **Turn off Lumi…**, and the other shortcuts into Settings open the right category directly.
+- **Search sits on the conversation list.** The search box moved from the top bar to the sidebar, just above the **All / Direct / Rooms / Archive** tabs it works with. The top bar now holds only the app name and your account; it stays one row on a narrow window, and your name stays visible on medium-width windows too. Press **/** to jump to search from anywhere.
+- **Fewer stickers are skipped:**
+  - Animations longer than 120 frames are shortened instead of skipped: Lumilan keeps every second frame (or every third, and so on), and each kept frame lasts as long as the frames it replaces, so the animation plays at the same speed.
+  - A busy animation is shrunk down to 256 px before it is skipped as too large, instead of stopping at 384 px.
+  - Still images may be up to 100 million pixels (previously 40 million). Animations keep the 40 million pixel limit across all frames.
+  - Images with minor format warnings that still open correctly are accepted; truncated or damaged files are still refused.
+
+### Fixed
+
+- **Incoming images and files are no longer easy to miss.** A file or image waiting for **Accept file** now moves its sender to the top of the contact list with a badge, as a new message does. Before, the sender moved up only after the file was accepted, and not at all if the request expired unanswered. The sender returns to the usual order once the request is answered here, in Lumi, or in a notification, or once it expires.
+- Clicking a pack tab in the sticker picker no longer closes the picker, and keyboard focus stays on the tab you clicked.
+
+### Build and validation
+
+- New unit tests cover the reason given for each kind of skipped image, a 200-frame GIF shortened to 100 frames with the same total duration, and a full pack.
+- New unit tests cover the contact list with waiting files: a waiting request raises its sender and counts in the badge, answering it from any surface or letting it expire lowers the sender again, and progress updates do not redraw the list.
+- A new unit test checks that files dropped on **Settings → Shelf** and **Settings → Sticker packs** reach their own drop zones, while every other drop outside an open conversation is still refused. The sticker drop zone had no test before.
+- The packaged UI smoke test now also checks, in light and dark themes at 1100, 375, and 320 px:
+  - The Settings categories: keyboard navigation, a fixed window size, equal margins, the narrow tab row, and category labels that fit in all 8 languages.
+  - The search box in the sidebar above the filter tabs, with a one-row top bar.
+  - An image sent from a loopback device raising its sender with a badge until it is answered.
+  - The sticker picker staying open on a real pointer click on a pack tab, the skip reason for a file that is not an image, and **Manage stickers…** opening its category.
+- On Windows: 330 unit tests, packaging, package verification, the UI smoke test (3 runs), and the Lumi smoke test (3 runs) passed.
+
+### Platform notes
+
+- No new native dependency. Sticker images use the same image library bundled for Windows, macOS, and Linux, and the Settings, search, and contact list changes use no platform-specific code.
+- When these notes were written, version 1.4.2 had been tested on Windows only. The macOS (Intel and Apple Silicon) and Linux (X11 and Wayland) packages had not yet been tested.
+- The sticker network format is unchanged, so stickers sent from 1.4.2 still reach 1.4.1, and shortened animations arrive as ordinary stickers.
+- Current packages are unsigned. Windows or macOS may display a publisher warning; macOS system notifications require a signed application. Download packages from the [official Releases page](https://github.com/iyansanjaya/lumilan-chat/releases).
+
 ## 1.4.1
 
 Changes from version 1.4.0.

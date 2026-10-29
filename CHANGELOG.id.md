@@ -2,6 +2,48 @@
 
 [English](CHANGELOG.md)
 
+## 1.4.2
+
+Perubahan dari versi 1.4.1.
+
+### Fitur baru
+
+- **Alasan stiker dilewati.** Setelah impor, **Pengaturan → Paket stiker** menampilkan setiap file yang dilewati beserta nama dan alasannya: format tidak didukung, file lebih dari 20 MB, piksel terlalu banyak, masih lebih dari 500 KB setelah diperkecil ke 256 px, file rusak, file tidak dapat dibuka, atau paket sudah penuh. 20 file pertama ditampilkan dan sisanya dihitung. Yang ditampilkan hanya nama file, tidak pernah foldernya.
+
+### Perubahan
+
+- **Pengaturan dikelompokkan per kategori.** Profil, Tampilan, Notifikasi, Lumi, Fokus dan rehat, Rutinitas dan tugas, Rak, Paket stiker, Percakapan, dan Aplikasi tercantum di kiri, dan hanya kategori yang dipilih yang tampil, sehingga Anda tidak perlu lagi menggulir satu halaman panjang. Ukuran jendela tetap saat berpindah kategori, dan pada jendela sempit kategori menjadi deretan tab di atas isinya. Tombol panah, Home, dan End berpindah antarkategori. **Kelola stiker…**, **Matikan Lumi…**, dan pintasan lain ke Pengaturan langsung membuka kategori yang tepat.
+- **Pencarian berada di daftar percakapan.** Kotak pencarian pindah dari bilah atas ke sidebar, tepat di atas tab **Semua / Pribadi / Ruang / Arsip** yang bekerja bersamanya. Bilah atas kini hanya berisi nama aplikasi dan akun Anda; tetap satu baris pada jendela sempit, dan nama Anda juga tetap tampil pada jendela berukuran sedang. Tekan **/** untuk langsung ke pencarian dari mana pun.
+- **Lebih sedikit stiker yang dilewati:**
+  - Animasi yang lebih dari 120 frame kini dipersingkat, bukan dilewati: Lumilan menyimpan setiap frame kedua (atau ketiga, dan seterusnya), dan setiap frame yang disimpan tampil selama frame yang digantikannya, sehingga kecepatan animasi tetap sama.
+  - Animasi yang padat diperkecil hingga 256 px sebelum dilewati karena terlalu besar, tidak lagi berhenti di 384 px.
+  - Gambar diam boleh hingga 100 juta piksel (sebelumnya 40 juta). Animasi tetap dibatasi 40 juta piksel untuk seluruh frame.
+  - Gambar dengan peringatan format ringan yang tetap bisa dibuka dengan benar kini diterima; file yang terpotong atau rusak tetap ditolak.
+
+### Perbaikan
+
+- **Gambar dan file masuk tidak lagi mudah terlewat.** File atau gambar yang menunggu **Terima file** kini menaikkan pengirimnya ke atas daftar kontak lengkap dengan badge, seperti pesan baru. Sebelumnya pengirim baru naik setelah file diterima, dan tidak naik sama sekali jika permintaan kedaluwarsa tanpa jawaban. Pengirim kembali ke urutan biasa setelah permintaan dijawab di jendela ini, di Lumi, atau di notifikasi, atau setelah kedaluwarsa.
+- Mengeklik tab paket di pemilih stiker tidak lagi menutup pemilih, dan fokus keyboard tetap di tab yang diklik.
+
+### Build dan validasi
+
+- Tes unit baru mencakup alasan untuk setiap jenis gambar yang dilewati, GIF 200 frame yang dipersingkat menjadi 100 frame dengan durasi total yang sama, dan paket yang penuh.
+- Tes unit baru mencakup daftar kontak dengan file yang menunggu: permintaan yang menunggu menaikkan pengirimnya dan ikut dihitung di badge, menjawabnya dari mana pun atau membiarkannya kedaluwarsa menurunkannya kembali, dan pembaruan progres tidak menggambar ulang daftar.
+- Tes unit baru memastikan file yang dijatuhkan ke **Pengaturan → Rak** dan **Pengaturan → Paket stiker** sampai ke area jatuhkan masing-masing, sementara drop lain di luar percakapan yang terbuka tetap ditolak. Area jatuhkan stiker sebelumnya belum punya tes.
+- Smoke UI paket kini juga memeriksa, pada tema terang dan gelap di lebar 1100, 375, dan 320 px:
+  - Kategori Pengaturan: navigasi keyboard, ukuran jendela tetap, margin yang sama, deretan tab di jendela sempit, dan label kategori yang muat dalam 8 bahasa.
+  - Kotak pencarian di sidebar di atas tab filter, dengan bilah atas satu baris.
+  - Gambar dari perangkat loopback yang menaikkan pengirimnya dengan badge sampai dijawab.
+  - Pemilih stiker yang tetap terbuka saat tab paket diklik dengan pointer sungguhan, alasan untuk file yang bukan gambar, dan **Kelola stiker…** yang membuka kategorinya.
+- Di Windows: 330 tes unit, packaging, verifikasi paket, smoke UI (3 kali), dan smoke Lumi (3 kali) lulus.
+
+### Catatan platform
+
+- Tidak ada dependensi native baru. Gambar stiker memakai pustaka gambar yang sama yang dibundel untuk Windows, macOS, dan Linux, dan perubahan Pengaturan, pencarian, serta daftar kontak tidak memakai kode khusus platform.
+- Saat catatan ini ditulis, versi 1.4.2 baru diuji di Windows. Paket macOS (Intel dan Apple Silicon) serta Linux (X11 dan Wayland) belum diuji.
+- Format jaringan stiker tidak berubah, sehingga stiker dari 1.4.2 tetap sampai ke 1.4.1, dan animasi yang dipersingkat diterima sebagai stiker biasa.
+- Paket saat ini belum ditandatangani. Windows atau macOS mungkin menampilkan peringatan penerbit; notifikasi sistem macOS memerlukan aplikasi bertanda tangan. Unduh paket dari [halaman Releases resmi](https://github.com/iyansanjaya/lumilan-chat/releases).
+
 ## 1.4.1
 
 Perubahan dari versi 1.4.0.

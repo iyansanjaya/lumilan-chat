@@ -197,6 +197,15 @@ components:
   tab-filter-active:
     backgroundColor: "transparent"
     textColor: "{colors.ink}"
+  settings-tab:
+    backgroundColor: "transparent"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.lg}"
+    padding: "0 10px"
+    height: "40px"
+  settings-tab-active:
+    backgroundColor: "{colors.accent-soft}"
+    textColor: "{colors.ink}"
   row-list:
     backgroundColor: "transparent"
     textColor: "{colors.ink}"
@@ -254,6 +263,12 @@ components:
     textColor: "{colors.ink}"
     rounded: "{rounded.lg}"
     padding: "5px"
+  sticker-picker:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.xl}"
+    padding: "8px"
+    width: "360px"
   toast:
     backgroundColor: "{colors.outgoing}"
     textColor: "{colors.outgoing-ink}"
@@ -333,7 +348,8 @@ components:
      Nilai token diambil langsung dari src/renderer/app.css, notch.css, dan break.css (tema terang sebagai nilai utama;
      pasangan tema gelapnya dicatat di prosa dan di .impeccable/design.json). Bahasa "rasa" (metafora, nama warna,
      aturan bernama) diturunkan dari komentar kode dan README, dengan satu pilihan pengguna pada 2026-10-23:
-     suasana "meja kerja yang rapi". -->
+     suasana "meja kerja yang rapi". Disegarkan 2026-10-29 untuk Pengaturan per kategori, pencarian di sidebar,
+     dan stiker. -->
 
 # Design System: Lumilan Chat
 
@@ -428,16 +444,16 @@ Palet ini adalah abu-abu hangat yang tenang dengan satu tinta, satu emas, dan sa
 
 ## Layout
 
-**Kerangka.** Jendela utama adalah satu kolom: bilah atas 52 px di atas ruang kerja. Bilah atas adalah kisi tiga kolom `sidebar-width (268px) | 1fr | auto`: merek di kiri, kotak pencarian di tengah (lebar maksimum 460 px, tinggi 34 px), akun dan empat tombol ikon di kanan. Ruang kerja adalah kisi `268px | minmax(340px, 1fr) | 300px`: sidebar di atas bingkai batu, lalu lembar putih yang memuat percakapan dan detail, menjorok 8 px dari kanan dan bawah. Percakapan dan detail berbagi satu lembar; batas di antaranya adalah Garis Halus, bukan celah.
+**Kerangka.** Jendela utama adalah satu kolom: bilah atas 52 px di atas ruang kerja. Bilah atas adalah kisi tiga kolom `sidebar-width (268px) | 1fr | auto`: merek di kiri selebar sidebar, tengah kosong, akun dan empat tombol ikon di kanan. Kotak pencarian menyaring daftar percakapan, jadi ia berada di sidebar tepat di atas tab filter (tinggi 34 px, margin 14 px seperti tab), bukan di bilah atas. Ruang kerja adalah kisi `268px | minmax(340px, 1fr) | 300px`: sidebar di atas bingkai batu, lalu lembar putih yang memuat percakapan dan detail, menjorok 8 px dari kanan dan bawah. Percakapan dan detail berbagi satu lembar; batas di antaranya adalah Garis Halus, bukan celah.
 
-**Kepadatan.** Header percakapan 64 px; baris daftar 56 px (orang 58 px, tujuan sidebar 40 px); kontrol 38 px; input dan select 40 px; tombol ikon 36 px; baris pengaturan minimal 64 px. Pesan berjarak 14 px dengan padding 24 px 28 px; gelembung maksimum `min(78%, 560px)`. Panel detail berpadding 22 px dengan bagian 20 px yang dipisah Garis Halus. Dialog berpadding 28 px (pengaturan menyisakan 19 px di kanan untuk scrollbar 9 px), lebar 400–640 px menurut isinya, tinggi maksimum 85–90 dvh.
+**Kepadatan.** Header percakapan 64 px; baris daftar 56 px (orang 58 px, tujuan sidebar 40 px); kontrol 38 px; input dan select 40 px; tombol ikon 36 px; baris pengaturan minimal 64 px. Pesan berjarak 14 px dengan padding 24 px 28 px; gelembung maksimum `min(78%, 560px)`. Panel detail berpadding 22 px dengan bagian 20 px yang dipisah Garis Halus. Dialog berpadding 28 px, lebar 400–640 px menurut isinya, tinggi maksimum 85–90 dvh. Pengaturan adalah pengecualian: ukurannya tetap `min(100% − 32px, 860px)` × `min(100dvh − 48px, 680px)` agar tidak melompat saat berpindah kategori; judulnya dipisah Garis Halus, kolom kategori 220 px duduk di atas Batu Bingkai, dan isi kategori bergulir sendiri dengan padding 4px 28px 28px serta parit scrollbar yang tetap sehingga margin kiri dan kanan selalu sama.
 
 **Irama jarak.** 2 px antar baris daftar; 4 px antar tombol ikon; 6–8 px antar tombol dalam satu kelompok; 10–12 px antar elemen dalam kartu; 16 px antar field formulir; 20 px antar bagian; 24–32 px padding konten besar. Tidak ada token jarak di kode; skala 4/8/12/16/20/24/28/32 pada frontmatter adalah ringkasan nilai yang terpakai.
 
 **Responsif.** Lima ambang, semuanya `max-width`:
 - 1160 px: sidebar 248 px, detail 260 px, pintasan kbd pencarian disembunyikan.
-- 980 px: panel detail hilang; lembar percakapan mendapat empat sudut 16 px; nama akun di bilah atas disembunyikan agar pencarian tetap lega.
-- 700 px (ponsel): bingkai mundur, lembar menjadi layar; satu wilayah tampil sekaligus (`body.show-list` memilih daftar atau percakapan); pencarian turun ke baris kedua bilah atas; tombol Kembali muncul; pesan 90 %.
+- 980 px: panel detail hilang; lembar percakapan mendapat empat sudut 16 px.
+- 700 px (ponsel): bingkai mundur, lembar menjadi layar; satu wilayah tampil sekaligus (`body.show-list` memilih daftar atau percakapan); bilah atas tetap satu baris, nama akun disembunyikan, dan pencarian ikut tampil bersama daftar dengan tinggi 38 px untuk sentuhan; tombol Kembali muncul; pesan 90 %. Pengaturan menjadi hampir selayar (8 px dari tepi) dan kategorinya menjadi deretan tab 36 px yang bergulir ke samping di bawah judul.
 - 390 px: "Chat" pada merek hilang, tombol ikon 32 px, pesan 94 %.
 - 320 px adalah lebar minimum `body`; dialog pengingat merapat di 480 px.
 
@@ -498,7 +514,7 @@ Lumi memakai bahasa yang berbeda dan sengaja: pulau bersudut bawah 10 px saat pi
 
 ### Inputs / Fields
 - **Input teks** (`input`): 40 px, sudut 8 px, tepi Tepi Kontrol, latar Lembar Putih, 14px; placeholder Tinta Redup; label 13px/600 di atasnya dengan jarak 8 px; 16 px antar field. Input sambutan 44 px; input label perangkat 40 px dengan padding 7px 11px. Textarea pengingat 64 px, resize vertikal.
-- **Kotak pencarian** (`search`): 34 px, ikon 16 px, kbd "/" bertepi; fokus mengubah tepi menjadi Biru Teduh dan cincin fokus masuk 1 px ke dalam.
+- **Kotak pencarian** (`search`): di sidebar di atas tab filter; 34 px (38 px di jendela sempit), ikon 16 px, kbd "/" bertepi; fokus mengubah tepi menjadi Biru Teduh dan cincin fokus masuk 1 px ke dalam. "/" memfokuskannya dari mana pun dan membuka daftar di jendela sempit.
 - **Komposer** (`composer`): kotak 14 px bertepi Tepi Kontrol, padding 6 px, tombol lampir dan Kirim 38 px bersudut 10 px di dalamnya; textarea 38–130 px tanpa tepi; fokus mengubah tepi menjadi Biru Teduh. Kirim selalu emas. Petunjuk 11px di bawahnya.
 - **Select** (`select`): satu gaya di mana pun: 40 px, `appearance: base-select`, panah 16 px dari tepi kanan, padding kanan 44 px agar teks tidak menabrak panah, satu baris yang dipotong di tepi konten. Picker: 12 px, Lembar Putih, bayangan Melayang; opsi 36 px bersudut 8 px, hover Sentuh, terpilih Emas Pucat dengan teks dan centang Emas Teks. Panah bawaan browser tidak dipakai.
 - **Sakelar** (`switch`): 34×20 px, rel Tepi Kontrol, knop putih 16 px dengan cincin rambut; aktif rel Emas Lumi dan knop bergeser 14 px dalam 140 ms; hover baris membuat rel yang mati menjadi Goresan Seleksi.
@@ -511,6 +527,7 @@ Lumi memakai bahasa yang berbeda dan sengaja: pulau bersudut bawah 10 px saat pi
 - **Bilah atas:** 52 px di atas Batu Bingkai tanpa garis bawah; merek (ikon 26 px, "Lumilan" 16px/700, "Chat" Tinta Redup 500); empat tombol ikon; avatar Anda 32 px berlatar Emas Lumi dengan tepi 2 px warna status.
 - **Tab filter** (`tab-filter`): tab garis bawah pada satu garis Garis Tepi; 38 px, 13px/600, Tinta Redup; hover Tinta dengan garis Garis Tepi; aktif Tinta dengan garis 2 px Emas Pekat selebar label (`box-shadow: inset 0 -2px 0`). Di sidebar tab berbagi lebar secara merata; saat sempit mengecil ke 12px, dan bila masih meluap barisnya bergulir dengan tepi memudar 24 px.
 - **Baris daftar** (`row-list`): 56 px, sudut 10 px, avatar 38 px, nama 14px/600, baris kedua 12px Tinta Redup, waktu 11px, badge di kanan; hover Sentuh; terbuka Emas Pucat bertepi Emas Garis. Pengingat dan Catatan pribadi adalah baris 40 px dengan ikon abu 22 px tanpa tile. Keterangan grup 12px/600.
+- **Kategori Pengaturan** (`settings-tab`): daftar tab vertikal (pola tab ARIA) di kolom 220 px berlatar Batu Bingkai, dibatasi Garis Halus di kanan. Setiap kategori adalah baris 40 px bersudut 10 px, ikon 20 px Tinta Redup, label 14px/500 yang dipotong elipsis; hover Sentuh; terpilih Emas Pucat bertepi Emas Garis dengan label 600 dan ikon Emas Teks, sama seperti baris percakapan yang dibuka. Panah, Home, dan End berpindah kategori; hanya tab terpilih yang masuk urutan Tab.
 - **Menu:** 10 px, padding 5 px, bayangan Melayang, item 36 px bersudut 6 px dengan ikon Tinta Redup; item hapus Merah Teks; muncul 160 ms dari 4 px di bawah.
 - **Mobile:** di bawah 700 px satu wilayah sekaligus dengan tombol Kembali di header dan aksi akun pindah ke kaki sidebar.
 
@@ -529,6 +546,11 @@ Lumi memakai bahasa yang berbeda dan sengaja: pulau bersudut bawah 10 px saat pi
 ### Layar rehat
 - Tirai `break-scrim` di atas jendela transparan, kolom tengah: judul 24px/600 Putih Kapur, petunjuk 15px Abu Kedua, jam clamp(72px, 14vw, 160px)/600 tabular, tombol pil 44 px Emas Lumi Murni (`break-button`) dengan hover #ffdf8f; cincin fokus `island-focus`. Masuk memudar 320 ms.
 
+### Stiker
+- **Pemilih** (`sticker-picker`): lapisan sementara di posisi pemilih emoji, Lembar Putih bersudut 12 px, padding 8 px, bayangan Melayang, lebar `min(360px, 100% − 40px)`. Strip tab 36 px (Terkini, lalu sampul tiap paket 26 px) di atas Garis Halus; tab terpilih dan hover berlatar Sentuh. Kisi lima kolom sel persegi bersudut 8 px, hover dan fokus Sentuh. Kaki "Kelola stiker…" 34 px Tinta Redup di atas Garis Halus.
+- **Pesan stiker:** gambar tanpa gelembung, lebar `min(160px, 45vw)` (128 px di bawah 480 px), menempel ke sisi pengirim; ukurannya dipesan sebelum gambar dimuat.
+- **Impor di Pengaturan:** zona lepas yang sama dengan Rak (garis putus-putus Tepi Kontrol); setelah impor, ringkasan Tinta Redup dan daftar file yang dilewati di bawah tombol Pilih gambar, memakai baris daftar tugas: nama 13px tebal satu baris, alasan 12px Tinta Redup di bawahnya.
+
 ### Toast
 - Pil 10 px berlatar Pulau Hitam, teks putih 13px, bayangan Melayang, di tengah bawah 24 px, muncul dengan geser 16 px dan opacity 200 ms. Di tema gelap latar #f1f2f3 dengan teks Tinta.
 
@@ -540,6 +562,7 @@ Pagar visual yang diambil dari implementasi saat ini.
 - **Lakukan** satu tombol emas per tampilan; tombol lain Lembar Putih bertepi Tepi Kontrol, 38 px, sudut 8 px.
 - **Lakukan** fokus keyboard yang sama di mana pun: `outline: 2px solid var(--focus)` dengan offset 2 px (−1 px di dalam kotak pencarian dan komposer; `island-focus` di Lumi dan layar rehat).
 - **Lakukan** satu gaya select di seluruh dialog dan pengaturan: tinggi 40 px, panah khusus 16 px dari tepi kanan, padding kanan 44 px, picker bersudut 12 px.
+- **Lakukan** Pengaturan sebagai satu kategori sekaligus dalam dialog berukuran tetap; section baru masuk ke panel kategori yang ada, dan kategori baru memakai baris 40 px bersudut 10 px dengan ikon 20 px.
 - **Lakukan** pemeriksaan tema terang dan gelap, lebar 320 px, dan teks terjemahan Indonesia yang panjang untuk setiap kontrol baru; panah, teks, fokus, dan tepi tidak boleh saling menabrak.
 - **Lakukan** `tabular-nums` pada setiap angka yang berubah dan elipsis satu baris pada nama dan judul.
 - **Lakukan** kedalaman dengan tingkat warna (`frame` → `surface` → `raised`) dan tepi 1 px; simpan `--shadow` untuk lapisan sementara saja.

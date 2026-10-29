@@ -40,12 +40,12 @@ function fixture() {
   }
   const list = new Element('list');
   const descendants = (element: Element): Element[] => [element, ...element.children.flatMap(descendants)];
-  let renders = 0;
+  let renders = 0, peopleRenders = 0;
   const renderMessages = () => { renders++; list.replaceChildren(); (vm.runInContext('renderIncomingTransfers', context) as (list: Element) => void)(list); };
   context = vm.createContext({
     state: { thread: 'sender', me: { id: 'receiver' } }, document: { createElement: (tag: string) => new Element(tag) },
     t: (text: string, values: Record<string, unknown> = {}) => text.replace(/\{(\w+)\}/g, (_match: string, key: string) => String(values[key] ?? `{${key}}`)),
-    formatSize: (value: number) => `${value} B`, avatar: () => new Element('avatar'), renderMessages,
+    formatSize: (value: number) => `${value} B`, avatar: () => new Element('avatar'), renderMessages, renderPeople: () => { peopleRenders++; },
     toast: (text: string) => toasts.push(text), errorText: (error: Error) => error.message,
     window: { lumilan: {
       onFileOffer: (callback: (value: IncomingTransfer) => void) => { onOffer = callback; }, onFileTransfer: (callback: (value: FileTransfer) => void) => { onTransfer = callback; },
@@ -58,7 +58,7 @@ function fixture() {
     snapshot, decision, toasts, decisions,
     onOffer: (value: IncomingTransfer) => onOffer!(value), onTransfer: (value: FileTransfer) => onTransfer!(value),
     transferCount: () => vm.runInContext('incomingTransfers.size', context) as number,
-    renders: () => renders, rowElements: () => [...list.children],
+    renders: () => renders, peopleRenders: () => peopleRenders, rowElements: () => [...list.children],
     openThread: (thread: string) => { vm.runInContext(`state.thread = ${JSON.stringify(thread)}`, context); renderMessages(); },
     rows: () => list.children.map(row => {
       const elements = descendants(row);
@@ -73,6 +73,31 @@ function fixture() {
     },
   };
 }
+
+test('the contact list is redrawn when a file offer arrives or is answered, not on every progress update', async t => {
+  const f = fixture();
+  f.onOffer(offer('photo'));
+  assert.equal(f.peopleRenders(), 1, 'An incoming offer did not move its sender up the list');
+  f.onTransfer({ id: 'photo', status: 'receiving', received: 0, total: 100 });
+  assert.equal(f.peopleRenders(), 2, 'An offer accepted in Lumi or a notification kept its sender at the top');
+  for (const received of [40, 80]) f.onTransfer({ id: 'photo', status: 'receiving', received, total: 100 });
+  f.onTransfer({ id: 'photo', status: 'complete' });
+  assert.equal(f.peopleRenders(), 2, 'Progress or completion of an accepted file redrew the list; the snapshot does that');
+  for (const status of ['canceled', 'complete'] as const) await t.test(`expired or withdrawn offer: ${status}`, () => {
+    const g = fixture();
+    g.onOffer(offer('late'));
+    g.onTransfer({ id: 'late', status });
+    assert.equal(g.peopleRenders(), 2);
+  });
+  await t.test('answered in the window', async () => {
+    const g = fixture();
+    g.onOffer(offer('here'));
+    const clicking = g.click(false);
+    assert.equal(g.peopleRenders(), 2, 'Declining in the window kept the sender at the top until the answer returned');
+    g.decision.resolve(true);
+    await clicking;
+  });
+});
 
 test('a rejected pending decision preserves a transfer accepted by another surface', async t => {
   for (const accepted of [true, false]) await t.test(accepted ? 'Accept' : 'Decline', async () => {

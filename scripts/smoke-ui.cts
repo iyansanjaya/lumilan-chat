@@ -206,6 +206,19 @@ async function main() {
       `Top bar overflows a narrow window: ${JSON.stringify(narrowShell)}`);
     const narrowChatScreenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
     writeFileSync(join(dist, 'ui-audit-chat-narrow.png'), Buffer.from(narrowChatScreenshot.data, 'base64'));
+    // Search filters the conversation list, so it sits on the list: in the sidebar above the filter tabs, and the top
+    // bar stays one row at every width.
+    for (const [width, height] of [[1100, 800], [375, 812], [320, 700]] as const) {
+      await setViewport(width, height);
+      const search = await evaluate<{ inSidebar:boolean; aboveTabs:boolean; inside:boolean; topbarHeight:number }>(`(() => {
+        document.body.classList.add('show-list');
+        const box = document.querySelector('.search-box'), sidebar = document.querySelector('.sidebar');
+        const b = box.getBoundingClientRect(), t = sidebar.querySelector('.filter-bar').getBoundingClientRect(), s = sidebar.getBoundingClientRect();
+        return { inSidebar: sidebar.contains(box), aboveTabs: b.height > 0 && b.bottom <= t.top + 1, inside: b.left >= s.left && b.right <= s.right,
+          topbarHeight: document.querySelector('.topbar').getBoundingClientRect().height }; })()`);
+      assert(search.inSidebar && search.aboveTabs && search.inside && search.topbarHeight <= 57, `Search is not on the conversation list at ${width} px: ${JSON.stringify(search)}`);
+    }
+    await setViewport(375, 812);
     // Focus from the main window: the real setting, start, status broadcast and restore, plus the shared select style
     // and long translated text in light/dark narrow windows.
     // One request may outlast a slow frame (the first CJK font fallback on a fresh CI machine took over 5 s on Windows);
@@ -1115,6 +1128,30 @@ async function main() {
     await waitFor(`(() => { const image = ${receivedImage}; return image.complete && image.naturalWidth > 0 && image.src && image.src !== ${JSON.stringify(animatedSource)}; })()`, 'still sticker under reduced motion');
     await send('Emulation.setEmulatedMedia', { features: [] });
     await waitFor(`${receivedImage}.src === ${JSON.stringify(animatedSource)}`, 'animation back after reduced motion ends');
+    // An image waiting for Accept raises its sender with a badge while another conversation is open, as a message would;
+    // an answer from another surface (the same IPC Lumi and notifications use) takes the badge away.
+    const offeredImage = join(profile, 'smoke-offer.png');
+    writeFileSync(offeredImage, await sharp({ create: { width: 32, height: 32, channels: 3, background: { r: 10, g: 120, b: 90 } } }).png().toBuffer());
+    await evaluate("document.querySelector('#notes-button').click(); true");
+    const offering = peerSide.sendFilePath(offeredImage, stickerState.me.id);
+    offering.catch(() => {});
+    const peerRow = `document.querySelector('#people-list .person[data-peer=${JSON.stringify(peerSide.id)}]')`;
+    // The badge adds the waiting image to any message not yet read: the received sticker counts as read only while the
+    // window is really being watched, which a test window is not always. Only contacts with news may sit above it.
+    try {
+      await waitFor(`Promise.all([window.lumilan.fileOffers(), window.lumilan.state()]).then(([offers, s]) => { const rows = [...document.querySelectorAll('#people-list .person')], row = ${peerRow};
+        return Boolean(row) && offers.length === 1 && rows.slice(0, rows.indexOf(row)).every(other => other.querySelector('.unread-badge')) &&
+          row.querySelector('.unread-badge')?.textContent === String((s.unread[${peerId}] || 0) + 1); })`, 'an image offer raises its sender with a badge');
+    } catch (error) {
+      const seen = await evaluate<string>(`Promise.all([window.lumilan.fileOffers(), window.lumilan.state()]).then(([offers, s]) => JSON.stringify({ offers: offers.length, unread: s.unread[${peerId}] || 0,
+        rows: [...document.querySelectorAll('#people-list .person')].map(row => [row.dataset.peer === ${peerId} ? 'sender' : 'other', row.querySelector('.unread-badge')?.textContent || '']) }))`, true);
+      throw new Error(`${error instanceof Error ? error.message : String(error)}: ${seen}`);
+    }
+    await evaluate("window.lumilan.fileOffers().then(offers => window.lumilan.decideFile(offers[0].id, false))", true);
+    await waitFor(`window.lumilan.state().then(s => (${peerRow}.querySelector('.unread-badge')?.textContent || '0') === String(s.unread[${peerId}] || 0))`,
+      'an answered image offer leaves only unread messages in the badge');
+    await assert.rejects(offering, /menolak/);
+    await evaluate(`${peerRow}.click(); true`);
     // Save the received sticker, then send one back from the picker.
     await evaluate(`document.querySelector('#message-${received.message.id} .message-select-button').click(); document.querySelector('#selection-save-sticker').click(); true`);
     await waitFor("window.lumilan.stickers({ op: 'list' }).then(v => v.packs.length === 2 && v.packs.some(p => p.saved && p.count === 1))", 'received sticker saved to the Saved pack');
@@ -1152,7 +1189,7 @@ async function main() {
     await peerSide.stop();
     stickerPeer = undefined;
     assert.equal(failures.length, 0, `Renderer errors after stickers: ${failures.join('; ')}`);
-    console.log('Stickers: Settings import (PNG, GIF) with a named skip reason, picker tabs stay open, Manage stickers opens its category, picker in notes and for a contact, Escape, duplicate save, consent-free animated sticker from a loopback peer, reduced-motion still, saving, sending back, deleting packs, light/dark 1100/375/320 px passed');
+    console.log('Stickers: Settings import (PNG, GIF) with a named skip reason, picker tabs stay open, Manage stickers opens its category, an image offer raises its sender with a badge until answered, picker in notes and for a contact, Escape, duplicate save, consent-free animated sticker from a loopback peer, reduced-motion still, saving, sending back, deleting packs, light/dark 1100/375/320 px passed');
     // Everything a person can click says so: no arrow over a button, a select, a switch or a clickable row.
     assert.deepEqual(await cdp.arrowCursors(remote), [], 'Clickable controls keep the arrow cursor in the main window');
     assert.deepEqual(cdp.swallowedRejections(handlerErrors), [], 'The main process rejected requests the renderer hid');
