@@ -244,3 +244,56 @@ test('the summary uses Lumi when it can, and stays away for Do not disturb, disa
   empty.timer.start(25); empty.timer.end();
   assert.deepEqual([empty.banners[0]?.options.title, empty.banners[0]?.options.body], ['Sesi fokus selesai', 'Tidak ada pesan baru.']);
 });
+
+test('sesi fokus memperingatkan sekali semenit sebelum selesai, dengan satu timer', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const warns: number[] = [];
+  const make = (saved?: unknown) => {
+    const f = fixture(saved);
+    const timer = new FocusTimer({ ...f.timer.options, onWarn: () => warns.push(Date.now()) });
+    return { ...f, timer };
+  };
+  const f = make();
+  f.timer.start(25);
+  t.mock.timers.tick(24 * MINUTE - 1);
+  assert.equal(warns.length, 0, 'Warned early');
+  t.mock.timers.tick(1);
+  assert.deepEqual(warns, [1_000_000 + 24 * MINUTE]);
+  assert.notEqual(f.timer.timer, undefined, 'The timer was not aimed at the end after the warning');
+  t.mock.timers.tick(MINUTE);
+  assert.deepEqual([f.ends.length, warns.length], [1, 1], 'The end did not come, or warned twice');
+
+  // A resume with more than a minute left warns again; one with a minute or less never does.
+  warns.length = 0;
+  f.timer.start(25);
+  t.mock.timers.tick(23 * MINUTE);
+  f.timer.pause();
+  t.mock.timers.tick(10 * MINUTE);
+  assert.equal(warns.length, 0, 'Warned while paused');
+  f.timer.resume();
+  t.mock.timers.tick(MINUTE);
+  assert.equal(warns.length, 1, 'The resumed session did not warn at its new last minute');
+  t.mock.timers.tick(30_000);
+  f.timer.pause(); f.timer.resume();
+  t.mock.timers.tick(30_000);
+  assert.deepEqual([warns.length, f.ends.length], [1, 2], 'A resume inside the last minute warned again');
+
+  // Ending or disposing early leaves nothing to fire.
+  warns.length = 0;
+  f.timer.start(25); f.timer.end();
+  f.timer.start(25); f.timer.dispose();
+  t.mock.timers.tick(30 * MINUTE);
+  assert.equal(warns.length, 0, 'An ended or disposed session warned');
+
+  // A restart inside the last minute stays quiet; one with five minutes left warns once at its last minute.
+  const late = make({ minutes: 25, startedAt: 1, previous: 'active', until: Date.now() + 30_000 });
+  late.timer.restore();
+  t.mock.timers.tick(30_000);
+  assert.deepEqual([warns.length, late.ends.length], [0, 1]);
+  const early = make({ minutes: 25, startedAt: 1, previous: 'active', until: Date.now() + 5 * MINUTE });
+  early.timer.restore();
+  t.mock.timers.tick(4 * MINUTE);
+  assert.equal(warns.length, 1);
+  t.mock.timers.tick(MINUTE);
+  assert.deepEqual([warns.length, early.ends.length], [1, 1]);
+});

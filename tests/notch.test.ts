@@ -87,7 +87,7 @@ function fixture(pages: ConstructorParameters<typeof LumiNotch>[0]['pages'] = un
   const decisions: Array<[string, boolean]> = [], opens: Array<string | undefined> = [], accepts: string[] = [], pending = new Set(['f1']), ends: FocusEnd[] = [], firstOpens: number[] = [], pauses: number[] = [];
   // Wired like main: a status change reaches Lumi through the peer change event.
   const focus = new FocusTimer({ read: () => undefined, write: () => {}, getStatus: () => peer.state.status,
-    setStatus: status => { peer.state.status = status; notch.prune(); }, onChange: () => notch.sync(), onEnd: end => ends.push(end) });
+    setStatus: status => { peer.state.status = status; notch.prune(); }, onChange: () => notch.sync(), onEnd: end => ends.push(end), onWarn: () => { notch.focusEnding(); } });
   const notch = new LumiNotch({ BrowserWindow: Window, ipcMain, screen, powerMonitor: new EventEmitter(), idleClock: clock, preloadDir: '.', getMain: () => main,
     getSettings: () => settings, getPeer: () => peer, reveal: thread => opens.push(thread), acceptCall: id => accepts.push(id),
     decideFile: async (id, value) => { if (!pending.delete(id)) throw new Error('expired'); decisions.push([id, value]); },
@@ -963,4 +963,106 @@ test('Lumi refuses shelf drops when the shelf is not wired', () => {
     const drop = ipcMain.handlers.get('lumi:drop'); assert(drop);
     assert.throws(() => drop({ sender: windowOf(notch).webContents, senderFrame: windowOf(notch).webContents.mainFrame }, ['C:/a']), /ditolak/);
   } finally { notch.dispose(); }
+});
+
+test('Lumi "Hanya saat ada kabar" keeps the window as a peek strip, previews arrivals, and leaves no idle timer', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const { notch, settings, watch } = fixture();
+  try {
+    settings.notchIdle = 'events'; notch.sync();
+    // The window stays on screen: the renderer turns the idle pill into the strip a pointer can rest on.
+    assert.deepEqual([notch.mode, windowOf(notch).visible, notch.snapshot().idle, notch.dismissTimer], ['hidden', true, 'events', undefined]);
+    // A watched main window already shows the arrival: it only queues.
+    watch(true); notch.sync();
+    assert.equal(notch.message({}, 'alice', 'Alice', 'Halo'), false);
+    assert.deepEqual([notch.mode, notch.snapshot().count, windowOf(notch).visible], ['hidden', 1, true]);
+    // Nobody watching: the arrival previews, then Lumi hides again while the window stays for the strip.
+    watch(false); notch.sync();
+    notch.message({}, 'alice', 'Alice', 'Lagi');
+    assert.equal(notch.mode, 'compact');
+    t.mock.timers.tick(4000);
+    assert.deepEqual([notch.mode, windowOf(notch).visible], ['hidden', true], 'The strip window went away after the preview');
+    // Resting on the strip with something queued peeks at it; leaving closes it after the short grace.
+    pointer(notch, true);
+    await notch.action({ type: 'peek' });
+    assert.equal(notch.mode, 'compact');
+    pointer(notch, false);
+    t.mock.timers.tick(400);
+    assert.equal(notch.mode, 'hidden');
+    // 'away' still hides the whole window over a watched main window; 'events' brings the strip back.
+    settings.notchIdle = 'away'; watch(true); notch.sync();
+    assert.equal(windowOf(notch).visible, false);
+    settings.notchIdle = 'events'; notch.sync();
+    assert.equal(windowOf(notch).visible, true);
+  } finally { notch.dispose(); }
+});
+
+test('Lumi shortcut opens and closes the panel in every idle mode, and stays quiet when Lumi cannot show', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const { notch, settings, watch } = fixture();
+  try {
+    for (const idle of ['always', 'events'] as const) {
+      settings.notchIdle = idle; notch.sync();
+      assert.equal(notch.toggle(), true, idle);
+      assert.deepEqual([notch.mode, notch.held, notch.dismissTimer], ['expanded', true, undefined], `${idle}: the panel did not open held`);
+      if (process.platform !== 'linux') assert.equal(windowOf(notch).isFocused(), true, `${idle}: the panel did not take keyboard focus`);
+      assert.equal(notch.toggle(), false);
+      assert.equal(notch.mode, 'hidden', `${idle}: the second press did not close the panel`);
+    }
+    // A preview closes too.
+    notch.message({}, 'alice', 'Alice', 'Halo');
+    assert.equal(notch.mode, 'compact');
+    notch.toggle();
+    assert.equal(notch.mode, 'hidden');
+    // A paused Lumi comes back for the shortcut.
+    notch.pause(30 * 60_000);
+    assert.equal(notch.toggle(), true);
+    assert.deepEqual([notch.pausedUntil, notch.mode], [0, 'expanded']);
+    notch.toggle();
+    // Lock, and 'away' over a watched main window, keep Lumi off screen.
+    notch.powerMonitor.emit('lock-screen');
+    assert.deepEqual([notch.toggle(), notch.mode], [false, 'hidden']);
+    notch.powerMonitor.emit('unlock-screen');
+    settings.notchIdle = 'away'; watch(true); notch.sync();
+    assert.deepEqual([notch.toggle(), notch.mode], [false, 'hidden']);
+  } finally { notch.dispose(); }
+});
+
+test('Lumi previews a running focus session a minute before it ends, under its Do not disturb, without queuing anything', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const { notch, settings, peer, focus, ends, watch } = fixture();
+  try {
+    settings.focus = 25;
+    await notch.action({ type: 'expand' });
+    await notch.action({ type: 'focus', minutes: 25 });
+    await notch.action({ type: 'collapse' });
+    const items = notch.items.size;
+    assert.deepEqual([notch.mode, peer.state.status], ['hidden', 'dnd']);
+    t.mock.timers.tick(24 * 60_000 - 1);
+    assert.equal(notch.mode, 'hidden', 'The warning came early');
+    t.mock.timers.tick(1);
+    assert.deepEqual([notch.mode, selectedSnapshot(notch).key, notch.snapshot().count, notch.items.size], ['compact', 'focus', 0, items],
+      'The last minute did not preview the session card, or it queued or counted something');
+    t.mock.timers.tick(4000);
+    assert.equal(notch.mode, 'hidden', 'The warning preview stayed open');
+    t.mock.timers.tick(56_000);
+    assert.equal(ends.length, 1, 'The session did not end on time');
+
+    // Each gate keeps the warning back: a watched main window, a paused session, lock, and a panel the person holds open.
+    await notch.action({ type: 'focus', minutes: 25 });
+    watch(true); notch.sync();
+    assert.equal(notch.focusEnding(), false, 'Warned over a watched main window');
+    watch(false); notch.sync();
+    await notch.action({ type: 'focus-pause' });
+    assert.equal(notch.focusEnding(), false, 'Warned while paused');
+    await notch.action({ type: 'focus-resume' });
+    notch.powerMonitor.emit('lock-screen');
+    assert.equal(notch.focusEnding(), false, 'Warned while locked');
+    notch.powerMonitor.emit('unlock-screen');
+    await notch.action({ type: 'expand' });
+    assert.equal(notch.focusEnding(), false, 'Took over a panel the person held open');
+    await notch.action({ type: 'collapse' });
+    assert.equal(peer.state.status, 'dnd');
+    assert.equal(notch.focusEnding(), true, 'The session’s own Do not disturb held the warning back');
+  } finally { focus.dispose(); notch.dispose(); }
 });

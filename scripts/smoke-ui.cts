@@ -344,8 +344,18 @@ async function main() {
     const chooseIdle = (value: string) => evaluate(`document.querySelector('#notch-idle-select').value = ${JSON.stringify(value)}; document.querySelector('#notch-idle-select').dispatchEvent(new Event('change'))`);
     await chooseIdle(lumiBefore === 'away' ? 'always' : 'away');
     await waitFor(`window.lumilan.notificationSettings().then(s => s.notchIdle === ${JSON.stringify(lumiBefore === 'away' ? 'always' : 'away')})`, 'Lumi section saves at once');
+    await chooseIdle('events');
+    await waitFor("window.lumilan.notificationSettings().then(s => s.notchIdle === 'events')", 'Lumi "only when something arrives" saves at once');
     await chooseIdle(lumiBefore);
     await waitFor(`window.lumilan.notificationSettings().then(s => s.notchIdle === ${JSON.stringify(lumiBefore)})`, 'Lumi setting restored');
+    // The shortcut checkbox gives Ctrl/Cmd+Shift+L back and takes it again.
+    const shortcut = (on: boolean) => evaluate(`document.querySelector('#notch-shortcut').checked = ${on}; document.querySelector('#notch-shortcut').dispatchEvent(new Event('change'))`);
+    if (!await evaluate<boolean>("document.querySelector('#notch-shortcut').disabled")) {
+      await shortcut(false);
+      await waitFor("window.lumilan.notificationSettings().then(s => s.notchShortcut === false && s.notchShortcutActive === false)", 'Lumi shortcut released');
+      await shortcut(true);
+      await waitFor("window.lumilan.notificationSettings().then(s => s.notchShortcut === true)", 'Lumi shortcut restored');
+    }
     await evaluate("document.querySelector('#settings-dialog').close()");
     assert.equal(failures.length, 0, `Renderer errors after breaks: ${failures.join('; ')}`);
     console.log('Breaks: main-window lengths and toggle, shared select style, light/dark 375/320 px passed; sidebar tabs and footer in 8 languages at 1440–390 px passed; Lumi section fits and saves at once');

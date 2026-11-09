@@ -5,7 +5,7 @@ import { parseSettings } from '../src/main/settings.js';
 test('settings default safely for a missing, empty or non-object saved file', () => {
   for (const saved of [undefined, null, {}, [], 'text', 42]) {
     assert.deepEqual(parseSettings(saved, 'ID'), { enabled: true, preview: false, silent: false, background: true, notch: true,
-      notchPosition: undefined, languageMode: 'auto', language: 'id', linkPreviews: 'ask', focus: 0, notchIdle: 'always', notchOpen: 'click', notchOpened: false }, JSON.stringify(saved));
+      notchPosition: undefined, languageMode: 'auto', language: 'id', linkPreviews: 'ask', focus: 0, notchIdle: 'always', notchOpen: 'click', notchOpened: false, notchShortcut: true }, JSON.stringify(saved));
   }
   // Only an explicit false disables; only an explicit true enables privacy-sensitive previews and silence.
   const saved = parseSettings({ enabled: 0, preview: 'yes', silent: 1, background: null, notch: '' }, 'US');
@@ -41,7 +41,11 @@ test('focus sessions stay off unless one of the offered default lengths was save
 
 test('the Lumi pill stays on screen unless the earlier only-while-unwatched behavior was saved', () => {
   assert.equal(parseSettings({ notchIdle: 'away' }, 'ID').notchIdle, 'away');
-  for (const value of [undefined, 'always', 'ALWAYS', 'never', true, 1, null, { away: true }])
+  assert.equal(parseSettings({ notchIdle: 'events' }, 'ID').notchIdle, 'events');
+  // Only an explicit false gives Ctrl/Cmd+Shift+L back to other apps.
+  for (const value of [undefined, true, 0, 'false', null]) assert.equal(parseSettings({ notchShortcut: value }, 'ID').notchShortcut, true, JSON.stringify(value));
+  assert.equal(parseSettings({ notchShortcut: false }, 'ID').notchShortcut, false);
+  for (const value of [undefined, 'always', 'ALWAYS', 'never', 'EVENTS', 'event', true, 1, null, { away: true }])
     assert.equal(parseSettings({ notchIdle: value }, 'ID').notchIdle, 'always', JSON.stringify(value));
 });
 

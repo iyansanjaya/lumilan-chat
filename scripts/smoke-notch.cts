@@ -1019,6 +1019,28 @@ async function main() {
     await hoverSetting('click');
     assert.equal(await mainPage.evaluate('window.lumilan.notificationSettings().then(s=>s.notchOpen)'), 'click');
     console.log('Notch: one-time intro, empty pill hover hint without a card, opt-in hover opening without focus theft passed');
+    // 'events': the idle pill becomes an invisible 6px strip in the same window; the pointer on it reveals the pill and
+    // leaving hides it again. A global key press cannot be synthesized here: toggle() is unit tested, registration is checked.
+    const idleSetting = (idle: string) => mainPage.evaluate(`window.lumilan.notificationSettings().then(s=>window.lumilan.setNotificationSettings({enabled:s.enabled,preview:s.preview,silent:s.silent,background:s.background,notch:s.notch,notchIdle:${JSON.stringify(idle)}}))`);
+    await idleSetting('events');
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 200 });
+    await until(() => companionPage.evaluate(`document.body.dataset.idle==='events'&&document.body.dataset.mode==='hidden'&&${settled}&&(()=>{const e=document.getElementById('island');return Math.round(e.getBoundingClientRect().height)===Math.max(6,Math.round(parseFloat(getComputedStyle(e).paddingTop)))&&getComputedStyle(e).opacity==='0'&&getComputedStyle(document.body,'::before').opacity==='0'})()`), 'events strip hides the idle pill', 5000);
+    assert.equal(await nativeBrowser.evaluate("smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html').isVisible()"), true, 'The events strip hid the Lumi window');
+    if (process.platform === 'linux') {
+      const strip = await until(() => nativeBrowser.evaluate<Array<{height:number}> | undefined>('notchShapes.at(-1)').then(shape => shape?.[0]?.height === 6 && shape), 'events strip window shape', 5000);
+      assert.equal(strip[0]!.height, 6, `Unexpected strip shape: ${JSON.stringify(strip)}`);
+    }
+    const stripPoint = await companionPage.evaluate<{x:number;y:number}>(`(()=>{const b=${island};return {x:b.left+b.width/2,y:b.top+Math.max(1,b.height/2)}})()`);
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...stripPoint });
+    await until(() => companionPage.evaluate(`document.body.dataset.pointer==='true'&&document.body.dataset.mode==='hidden'&&${settled}&&window.lumi.state().then(s=>{const e=document.getElementById('island');return Math.round(e.getBoundingClientRect().height)===(s.bar||30)&&getComputedStyle(e).opacity==='1'})`), 'pointer on the strip reveals the pill', 5000);
+    await islandShot('ui-notch-events-peek.png');
+    await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 200 });
+    await until(() => companionPage.evaluate(`document.body.dataset.pointer==='false'&&${settled}&&getComputedStyle(document.getElementById('island')).opacity==='0'`), 'leaving the strip hides the pill again', 3000);
+    const shortcut = await nativeBrowser.evaluate<boolean>("smokeElectron.globalShortcut.isRegistered('CommandOrControl+Shift+L')");
+    assert.equal(shortcut, await mainPage.evaluate<boolean>('window.lumilan.notificationSettings().then(s=>s.notchShortcutActive===true)'), 'Settings misreport the Lumi shortcut');
+    await idleSetting('always');
+    await until(() => companionPage.evaluate(`document.body.dataset.idle==='always'&&${settled}&&window.lumi.state().then(s=>Math.round(document.getElementById('island').getBoundingClientRect().height)===(s.bar||30))`), 'always brings the pill back', 5000);
+    console.log(`Notch: events strip hides the pill, pointer reveals and re-hides it, window stays shown; shortcut registered: ${shortcut}`);
     const automaticNotificationContext = async () => {
       const [native, renderer] = await Promise.all([
         nativeBrowser.evaluate<{mainVisible:boolean;mainFocused:boolean;mainMinimized:boolean;notchVisible:boolean;notchFocused:boolean;events:unknown[]}>("(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');return{mainVisible:smokeMain.isVisible(),mainFocused:smokeMain.isFocused(),mainMinimized:smokeMain.isMinimized(),notchVisible:w.isVisible(),notchFocused:w.isFocused(),events:notchTrace.slice(-12)}})()"),
@@ -1470,6 +1492,28 @@ async function main() {
     await until(() => companionPage.evaluate("(t=>t.length>0&&!/\\d/.test(t))(document.getElementById('timer').textContent)"), 'paused pill');
     assert.equal(await companionPage.evaluate('document.body.dataset.mode'), 'hidden', 'Pausing reopened the hidden preview');
     await mainPage.evaluate("window.lumilan.focus({type:'resume'})");
+    // The last minute: Lumi previews the session card once and the pill counts seconds. Both clocks move to 40 s before
+    // the end, since the renderer counts down with its own Date.now; the renderer first, so its first repaint is right.
+    const focusUntil = await mainPage.evaluate<number>('window.lumilan.focusState().then(s=>s.until)');
+    const queuedBefore = await companionPage.evaluate<number>('window.lumi.state().then(s=>s.count)');
+    try {
+      const shift = `globalThis.smokeWarnNow=Date.now;const smokeShift=${focusUntil}-smokeWarnNow()-40000;Date.now=()=>smokeWarnNow()+smokeShift;`;
+      await companionPage.evaluate(`${shift}true`);
+      // The warning is for someone not looking at Lumilan; the focused main window above shows the end time instead.
+      await nativeBrowser.evaluate(`smokeIdleSeconds=600;${shift}smokeElectron.powerMonitor.emit('resume');true`);
+      await until(() => companionPage.evaluate("document.body.dataset.mode==='compact'&&/^0:\\d\\d/.test(document.getElementById('preview').textContent)"), 'last-minute preview of the session card');
+      await islandShot('notch-focus-ending.png');
+      assert.equal(await companionPage.evaluate('window.lumi.state().then(s=>s.count)'), queuedBefore, 'The last-minute preview counted as an activity');
+      await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'last-minute preview closes', 8000);
+      await until(() => companionPage.evaluate("/^0:\\d\\d$/.test(document.getElementById('timer').textContent)"), 'pill counts the last minute in seconds');
+      const before = await companionPage.evaluate<string>("document.getElementById('timer').textContent");
+      await delay(1300);
+      assert.notEqual(await companionPage.evaluate<string>("document.getElementById('timer').textContent"), before, 'The last-minute pill did not tick');
+    } finally {
+      await nativeBrowser.evaluate('smokeIdleSeconds=0;if(globalThis.smokeWarnNow){Date.now=smokeWarnNow;delete globalThis.smokeWarnNow}true');
+      await companionPage.evaluate('if(globalThis.smokeWarnNow){Date.now=smokeWarnNow;delete globalThis.smokeWarnNow}true');
+    }
+    console.log('Focus: last minute previews the session card once under its Do not disturb and the pill ticks in seconds');
     await nativeBrowser.evaluate('globalThis.smokeRealNow=Date.now;true');
     try {
       await setLocked(nativeBrowser, true); await nativeBrowser.evaluate("smokeElectron.powerMonitor.emit('suspend')");
