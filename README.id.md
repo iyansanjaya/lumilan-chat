@@ -39,7 +39,7 @@ Screenshot memakai profil demo terisolasi dan perangkat uji lokal; tidak memuat 
 > [!WARNING]
 > **Paket saat ini belum ditandatangani.** Windows atau macOS mungkin menampilkan peringatan penerbit. Unduh hanya dari halaman Releases resmi. Pengelola tidak dapat memverifikasi salinan pihak lain dan tidak bertanggung jawab atas kerusakan, kehilangan data, atau risiko keamanan yang ditimbulkannya.
 
-Ambil paket terbaru dari [halaman Releases resmi](https://github.com/iyansanjaya/lumilan-chat/releases/latest).
+Ambil paket terbaru dari [halaman Releases resmi](https://github.com/iyansanjaya/lumilan-chat/releases/latest). Setelah pembaruan, **Pengaturan → Aplikasi → Apa yang baru** terbuka sekali untuk menunjukkan apa yang berubah.
 
 | Sistem | Pilih paket ini |
 | --- | --- |

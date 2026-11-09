@@ -26,6 +26,9 @@ check();
 run([compiler, '-p', 'tsconfig.json']);
 for (const asset of ['index.html', 'notch.html', 'break.html', 'app.css', 'notch.css', 'break.css', 'fonts'])
   cpSync(join(root, 'src', 'renderer', asset), join(output, 'src', 'renderer', asset), { recursive: true });
+// What's new reads the changelogs from the package, beside the compiled app.
+mkdirSync(join(output, 'changelog'), { recursive: true });
+for (const name of ['CHANGELOG.md', 'CHANGELOG.id.md']) cpSync(join(root, name), join(output, 'changelog', name));
 mkdirSync(join(output, 'build'), { recursive: true });
 for (const asset of ['icon.png', 'icon.ico', 'trayTemplate.png', 'trayTemplate@2x.png'])
   cpSync(join(root, 'build', asset), join(output, 'build', asset));

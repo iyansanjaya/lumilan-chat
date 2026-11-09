@@ -5,7 +5,7 @@ import { parseSettings } from '../src/main/settings.js';
 test('settings default safely for a missing, empty or non-object saved file', () => {
   for (const saved of [undefined, null, {}, [], 'text', 42]) {
     assert.deepEqual(parseSettings(saved, 'ID'), { enabled: true, preview: false, silent: false, background: true, notch: true,
-      notchPosition: undefined, languageMode: 'auto', language: 'id', linkPreviews: 'ask', focus: 0, notchIdle: 'always', notchOpen: 'click', notchOpened: false, notchShortcut: true }, JSON.stringify(saved));
+      notchPosition: undefined, languageMode: 'auto', language: 'id', linkPreviews: 'ask', focus: 0, notchIdle: 'always', notchOpen: 'click', notchOpened: false, notchShortcut: true, seenVersion: undefined }, JSON.stringify(saved));
   }
   // Only an explicit false disables; only an explicit true enables privacy-sensitive previews and silence.
   const saved = parseSettings({ enabled: 0, preview: 'yes', silent: 1, background: null, notch: '' }, 'US');
@@ -45,6 +45,9 @@ test('the Lumi pill stays on screen unless the earlier only-while-unwatched beha
   // Only an explicit false gives Ctrl/Cmd+Shift+L back to other apps.
   for (const value of [undefined, true, 0, 'false', null]) assert.equal(parseSettings({ notchShortcut: value }, 'ID').notchShortcut, true, JSON.stringify(value));
   assert.equal(parseSettings({ notchShortcut: false }, 'ID').notchShortcut, false);
+  // The last version whose What's new was seen; anything else is forgotten, so the page opens for this version once.
+  assert.equal(parseSettings({ seenVersion: '1.4.2' }, 'ID').seenVersion, '1.4.2');
+  for (const value of ['1.4', 'v1.4.2', '1.4.2\n', 142, null]) assert.equal(parseSettings({ seenVersion: value }, 'ID').seenVersion, undefined, JSON.stringify(value));
   for (const value of [undefined, 'always', 'ALWAYS', 'never', 'EVENTS', 'event', true, 1, null, { away: true }])
     assert.equal(parseSettings({ notchIdle: value }, 'ID').notchIdle, 'always', JSON.stringify(value));
 });

@@ -1036,6 +1036,16 @@ async function main() {
     await islandShot('ui-notch-events-peek.png');
     await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 200 });
     await until(() => companionPage.evaluate(`document.body.dataset.pointer==='false'&&${settled}&&getComputedStyle(document.getElementById('island')).opacity==='0'`), 'leaving the strip hides the pill again', 3000);
+    // A closing panel shrinks straight to the strip. A delayed height once left a tall black column under a pill-wide
+    // top; the transitions are read the moment the mode changes, before the first frame of the shrink.
+    await companionPage.evaluate("window.lumi.action({type:'expand'})");
+    await until(() => companionPage.evaluate(`document.body.dataset.mode==='expanded'&&${settled}`), 'events panel opens', 5000);
+    await companionPage.evaluate("globalThis.smokeClosing=undefined;const smokeModes=new MutationObserver(()=>{if(document.body.dataset.mode!=='hidden')return;smokeModes.disconnect();globalThis.smokeClosing=document.getElementById('island').getAnimations().filter(a=>a instanceof CSSTransition).map(a=>({property:a.transitionProperty,delay:Number(a.effect.getTiming().delay)}))});smokeModes.observe(document.body,{attributes:true,attributeFilter:['data-mode']});true");
+    await companionPage.evaluate("window.lumi.action({type:'collapse'})");
+    const closing = await until(() => companionPage.evaluate<Array<{property:string;delay:number}> | undefined>('globalThis.smokeClosing'), 'events panel close transitions', 5000);
+    assert(['width', 'height', 'opacity'].every(property => closing.some(a => a.property === property)) && closing.every(a => a.delay === 0),
+      `Closing in events mode does not shrink straight to the strip: ${JSON.stringify(closing)}`);
+    await until(() => companionPage.evaluate(`document.body.dataset.mode==='hidden'&&${settled}&&(()=>{const e=document.getElementById('island');return getComputedStyle(e).opacity==='0'&&Math.round(e.getBoundingClientRect().height)===Math.max(6,Math.round(parseFloat(getComputedStyle(e).paddingTop)))})()`), 'events panel closes to the strip', 5000);
     const shortcut = await nativeBrowser.evaluate<boolean>("smokeElectron.globalShortcut.isRegistered('CommandOrControl+Shift+L')");
     assert.equal(shortcut, await mainPage.evaluate<boolean>('window.lumilan.notificationSettings().then(s=>s.notchShortcutActive===true)'), 'Settings misreport the Lumi shortcut');
     await idleSetting('always');

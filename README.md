@@ -39,7 +39,7 @@ Screenshots use isolated demo profiles and local test devices; they contain no u
 > [!WARNING]
 > **Current packages are unsigned.** Windows or macOS may show a publisher warning. Download only from the official Releases page. Third-party copies cannot be verified by the maintainer; the maintainer accepts no responsibility for damage, data loss, or security risks caused by them.
 
-Get the latest package from the [official Releases page](https://github.com/iyansanjaya/lumilan-chat/releases/latest).
+Get the latest package from the [official Releases page](https://github.com/iyansanjaya/lumilan-chat/releases/latest). After an update, **Settings → App → What's new** opens once to show what changed.
 
 | System | Choose this package |
 | --- | --- |

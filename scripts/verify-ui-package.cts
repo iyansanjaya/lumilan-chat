@@ -32,7 +32,9 @@ const packed = (entry: string) => extractFile(asar, join(...entry.split('/')));
 const pages = ['out/src/renderer/index.html', 'out/src/renderer/notch.html', 'out/src/renderer/break.html'];
 for (const entry of [...pages, 'out/src/renderer/app.css', 'out/src/renderer/notch.css', 'out/src/renderer/break.css', 'out/src/renderer/fonts/PublicSans.ttf',
   'out/src/preload/preload.cjs', 'out/src/preload/notch-preload.cjs', 'out/src/preload/break-preload.cjs',
-  'out/build/icon.png', 'out/build/icon.ico', 'out/build/trayTemplate.png', 'out/build/trayTemplate@2x.png'])
+  'out/build/icon.png', 'out/build/icon.ico', 'out/build/trayTemplate.png', 'out/build/trayTemplate@2x.png',
+  // Read by path for What's new.
+  'out/changelog/CHANGELOG.md', 'out/changelog/CHANGELOG.id.md'])
   if (!files.has(entry)) throw new Error(`Missing ${entry} in ${asar}`);
 // Every packaged compiled file, including those matched by the renderer glob, must be the current build output.
 // The archive listing also names directories; any entry that is a parent of another entry is one.

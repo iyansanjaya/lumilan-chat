@@ -356,6 +356,35 @@ async function main() {
       await shortcut(true);
       await waitFor("window.lumilan.notificationSettings().then(s => s.notchShortcut === true)", 'Lumi shortcut restored');
     }
+    // What's new: a new profile starts at this version and opens nothing by itself; Settings → App opens the packaged
+    // changelog, newest version open, built from text only and without the developers' build notes.
+    const appVersion = await evaluate<string>('window.lumilan.notificationSettings().then(s => s.version)', true);
+    assert.equal(JSON.parse(readFileSync(join(profile, 'lumilan', 'notifications.json'), 'utf8')).seenVersion, appVersion, 'A new profile did not start at this version');
+    assert.equal(await evaluate<boolean>("document.querySelector('#changelog-dialog').open"), false, "What's new opened by itself on a new profile");
+    await evaluate("document.querySelector('#settings-tab-app').click(); document.querySelector('#whats-new-button').click(); true");
+    await waitFor("document.querySelector('#changelog-dialog').open && document.querySelectorAll('#changelog-list > details').length > 1", "What's new opens from Settings");
+    const changelog = await evaluate<{ first: string; open: boolean[]; badge: string | undefined; items: number; build: boolean; markup: number }>(`(() => {
+      const dialog = document.querySelector('#changelog-dialog'), releases = [...dialog.querySelectorAll('#changelog-list > details')], first = releases[0];
+      return { first: first.querySelector('summary strong').textContent, open: releases.map(release => release.open), badge: first.querySelector('.changelog-badge')?.dataset.kind,
+        items: first.querySelectorAll('li').length, build: [...dialog.querySelectorAll('h3')].some(heading => /^Build/.test(heading.textContent)),
+        markup: dialog.querySelectorAll('#changelog-list :is(script, img, a, iframe, style)').length }; })()`);
+    assert(changelog.first.includes(appVersion) && changelog.open[0] && changelog.open.slice(1).every(open => !open) && changelog.badge === 'current' &&
+      changelog.items > 0 && !changelog.build && !changelog.markup, `Unexpected What's new: ${JSON.stringify(changelog)}`);
+    for (const theme of ['light', 'dark']) for (const [width, height] of [[1100, 800], [320, 700]] as const) {
+      await evaluate(`document.documentElement.dataset.theme = '${theme}'`);
+      await setViewport(width, height);
+      const fit = await evaluate<{ inside: boolean; overflow: boolean; badge: boolean; contrast: boolean }>(`(() => {
+        const dialog = document.querySelector('#changelog-dialog'), box = dialog.getBoundingClientRect(), summary = dialog.querySelector('#changelog-list summary');
+        const badge = summary.querySelector('.changelog-badge').getBoundingClientRect(), row = summary.getBoundingClientRect();
+        const ink = getComputedStyle(dialog.querySelector('#changelog-list li')).color, surface = getComputedStyle(dialog).backgroundColor;
+        return { inside: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight, overflow: dialog.scrollWidth > dialog.clientWidth + 1,
+          badge: badge.right <= row.right + 1 && badge.left >= row.left, contrast: ink !== surface }; })()`);
+      assert(fit.inside && !fit.overflow && fit.badge && fit.contrast, `What's new does not fit (${theme}, ${width}px): ${JSON.stringify(fit)}`);
+    }
+    await setViewport(1100, 800);
+    await evaluate("document.documentElement.dataset.theme = 'light'; document.querySelector('#changelog-close').click()");
+    await waitFor("!document.querySelector('#changelog-dialog').open", "What's new closes");
+    console.log(`What's new: new profile starts at ${appVersion} without opening it; Settings opens the packaged changelog, light/dark 1100/320 px passed`);
     await evaluate("document.querySelector('#settings-dialog').close()");
     assert.equal(failures.length, 0, `Renderer errors after breaks: ${failures.join('; ')}`);
     console.log('Breaks: main-window lengths and toggle, shared select style, light/dark 375/320 px passed; sidebar tabs and footer in 8 languages at 1440–390 px passed; Lumi section fits and saves at once');
