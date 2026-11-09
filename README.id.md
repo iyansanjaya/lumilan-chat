@@ -64,8 +64,6 @@ Pada pembukaan pertama, paket terpasang yang mendukung fitur ini mengaktifkan bu
 
 Koneksi memakai **libp2p Noise** untuk mengenkripsi lalu lintas dan mengautentikasi identitas perangkat. Nama profil dipilih sendiri dan tidak memverifikasi identitas orang. Riwayat, file, dan pengaturan lokal **belum terenkripsi**; gunakan jaringan tepercaya dan enkripsi disk sesuai kebutuhan.
 
-Penemuan perangkat bergantung pada mDNS lokal, dan lalu lintas langsung harus diizinkan firewall serta aturan Wi-Fi/VLAN. Lumilan tidak memakai relay internet untuk melewati isolasi jaringan. Panggilan suara memerlukan izin mikrofon dan lalu lintas UDP lokal langsung.
-
 ## Bantu Lumilan berkembang
 
 Dikembangkan oleh [Iyan Sanjaya](https://iyansanjaya.com/). Menemukan masalah? Gunakan **Laporkan bug** di header aplikasi atau [buka issue](https://github.com/iyansanjaya/lumilan-chat/issues).

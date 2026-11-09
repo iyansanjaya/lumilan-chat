@@ -7,6 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
+import { open } from 'node:fs/promises';
 import { createServer, connect } from 'node:net';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -14,7 +15,7 @@ import { dirname, join } from 'node:path';
 import { generateKeyPair } from '@libp2p/crypto/keys';
 import { peerIdFromPrivateKey } from '@libp2p/peer-id';
 import { multiaddr } from '@multiformats/multiaddr';
-import { LanDiscovery, lanInterfaces } from '../src/main/discovery.js';
+import { LanDiscovery, lanInterfaces, lanTargets } from '../src/main/discovery.js';
 import { LumilanPeer } from '../src/main/peer.js';
 import { stageClipboardImage } from '../src/main/clipboard-image.js';
 import { SENDER_PIXELS, prepareThumbnail, wirePreview } from '../src/main/link-preview.js';
@@ -112,7 +113,8 @@ test('persetujuan file yang gagal disiapkan mengakhiri kartu transfer penerima',
   }
 });
 
-test('mDNS mengirim pada setiap antarmuka LAN, bukan adaptor VPN saja', async () => {
+test('mDNS mengirim pada setiap antarmuka LAN, bukan adaptor VPN saja', async t => {
+  t.mock.method(console, 'warn', () => {});
   const interfaces = lanInterfaces({
     Tailscale: [{ family: 'IPv4', address: '100.91.124.75', internal: false }],
     VirtualBox: [{ family: 'IPv4', address: '192.168.56.1', internal: false }],
@@ -120,17 +122,17 @@ test('mDNS mengirim pada setiap antarmuka LAN, bukan adaptor VPN saja', async ()
   });
   assert.deepEqual(interfaces, ['192.168.56.1', '192.168.1.9']);
   const id = peerIdFromPrivateKey(await generateKeyPair('Ed25519')).toString();
-  const sockets: (EventEmitter & { interface: string | undefined; bind: string | false | undefined; queries: unknown[]; responses: Answer[][]; query(packet: unknown): void; respond(packet: unknown): void; destroy(callback?: () => void): void })[] = [];
+  const sockets: (EventEmitter & { interface: string | undefined; bind: string | false | undefined; queries: unknown[]; responses: Answer[][]; destroyed: boolean; query(packet: unknown): void; respond(packet: unknown): void; destroy(callback?: () => void): void })[] = [];
   const discovery = new LanDiscovery({ addressManager: { getAddresses: () => [
     multiaddr(`/ip4/192.168.56.1/tcp/1234/p2p/${id}`),
     multiaddr(`/ip4/192.168.1.9/tcp/1234/p2p/${id}`),
     multiaddr(`/ip4/100.91.124.75/tcp/1234/p2p/${id}`),
   ] } }, () => interfaces, options => {
     const socket = Object.assign(new EventEmitter(), {
-      interface: options.interface, bind: options.bind, queries: [] as unknown[], responses: [] as Answer[][],
+      interface: options.interface, bind: options.bind, queries: [] as unknown[], responses: [] as Answer[][], destroyed: false,
       query(packet: unknown) { this.queries.push(packet); },
       respond(packet: unknown) { assert(Array.isArray(packet)); this.responses.push(packet as Answer[]); },
-      destroy(callback?: () => void) { callback?.(); },
+      destroy(callback?: () => void) { this.destroyed = true; callback?.(); },
     });
     sockets.push(socket);
     return socket;
@@ -141,11 +143,13 @@ test('mDNS mengirim pada setiap antarmuka LAN, bukan adaptor VPN saja', async ()
     assert.ok(sockets.every(socket => socket.bind === '0.0.0.0'));
     for (const socket of sockets) socket.emit('ready');
     assert.ok(sockets.every(socket => socket.queries.length === 1));
+    // Each socket announces itself unasked, so peers that miss our queries' answers still find this device.
+    assert.ok(sockets.every(socket => socket.responses.length === 1));
     sockets[1]!.emit('query', { questions: [{ name: '_p2p._udp.local', type: 'PTR' }] });
-    assert.equal(sockets[1]!.responses[0]!.filter(answer => answer.type === 'TXT').length, 1);
-    const txt = sockets[1]!.responses[0]![1]!; assert(txt.type === 'TXT' && 'data' in txt && typeof txt.data === 'string');
+    assert.equal(sockets[1]!.responses[1]!.filter(answer => answer.type === 'TXT').length, 1);
+    const txt = sockets[1]!.responses[1]![1]!; assert(txt.type === 'TXT' && 'data' in txt && typeof txt.data === 'string');
     assert.match(txt.data, /\/ip4\/192\.168\.1\.9\/tcp\//);
-    const response = sockets[1]!.responses[0]!;
+    const response = sockets[1]!.responses[1]!;
     let discovered: PeerInfo | undefined;
     discovery.addEventListener('peer', event => { discovered = event.detail; });
     discovery.receive({ answers: response.map((answer): Answer => {
@@ -154,7 +158,27 @@ test('mDNS mengirim pada setiap antarmuka LAN, bukan adaptor VPN saja', async ()
     }) });
     assert.equal(discovered!.id.toString(), id);
     assert.equal(discovered!.multiaddrs.length, 1);
+    // The 15-second tick queries and announces again on every socket.
+    discovery.tick();
+    assert.ok(sockets.every(socket => socket.queries.length === 2));
+    assert.deepEqual(sockets.map(socket => socket.responses.length), [2, 3]);
+    // A socket error (a failed bind of UDP 5353) rebuilds the sockets once, after a delay.
+    sockets[0]!.emit('error', new Error('EADDRINUSE'));
+    sockets[0]!.emit('error', new Error('EADDRINUSE'));
+    assert.ok(discovery.retry);
+    clearTimeout(discovery.retry!); discovery.retry = null;
+    // Every twentieth tick rebuilds the sockets, so the switch sees a fresh multicast join.
+    for (let tick = discovery.ticks + 1; tick % 20; tick++) discovery.tick();
+    assert.equal(sockets.length, 2);
+    discovery.tick();
+    assert.equal(sockets.length, 4);
+    assert.ok(sockets[0]!.destroyed && sockets[1]!.destroyed && !sockets[2]!.destroyed && !sockets[3]!.destroyed);
+    assert.deepEqual(discovery.sockets.map(item => item.address), interfaces);
+    // An error from a socket that was already replaced changes nothing.
+    sockets[0]!.emit('error', new Error('late'));
+    assert.equal(discovery.retry, null);
   } finally { await discovery.stop(); }
+  assert.ok(sockets.every(socket => socket.destroyed));
 });
 
 test('tanda pribadi tetap lokal dan bertahan saat kontak mengganti nama', async () => {
@@ -1249,4 +1273,129 @@ test('link previews travel with messages; receivers re-decode thumbnails beside 
   await b.deleteArchivedHistory(`room:${roomId}`);
   assert(!existsSync(file(b, room.message.id)), 'Permanent history deletion left a thumbnail');
   assert.deepEqual(b.state.pendingFileDeletes, []);
+});
+
+test('kontak tersimpan tersambung ulang tanpa multicast dan alamat barunya disimpan', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-reconnect-'));
+  const a = new LumilanPeer({ dataDir: join(root, 'a'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const b = new LumilanPeer({ dataDir: join(root, 'b'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const saved = (peer: LumilanPeer, id: string) => peer.state.trusted.find(contact => contact.id === id)!;
+  try {
+    await a.start(); await b.start();
+    a.rename('Andi'); b.rename('Budi');
+    a.discovered.set(b.id, b.addresses);
+    await a.probePeer(b.id);
+    await until(() => a.online.has(b.id) && b.trusted.has(a.id));
+
+    // B restarts on a new port and dials A; its hello carries the new address, which A saves.
+    await b.stop();
+    await until(() => !a.online.has(b.id));
+    await b.start();
+    await until(() => a.online.has(b.id) && saved(a, b.id).addresses?.[0] === b.addresses[0]);
+
+    // B restarts again but cannot dial A, and A has no discovery result: only A's saved-contact retry can reconnect.
+    saved(b, a.id).addresses = [];
+    b.save();
+    await b.stop();
+    await until(() => !a.online.has(b.id));
+    await b.start();
+    a.discovered.clear();
+    a.storeAddresses(b.id, b.addresses);
+    assert.equal(saved(a, b.id).addresses?.[0], b.addresses[0]);
+    assert.equal(JSON.parse(readFileSync(a.path, 'utf8')).trusted.find((contact: { id: string }) => contact.id === b.id).addresses[0], b.addresses[0]);
+    a.maintenanceTicks = 0;
+    for (let tick = 0; tick < 3; tick++) a.maintainConnections();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(a.online.has(b.id), false, 'Saved contacts are retried once a minute, not on every tick');
+    a.maintainConnections();
+    await until(() => a.online.has(b.id) && b.online.has(a.id));
+  } finally {
+    await a.stop(); await b.stop();
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test('alamat dari hello hanya diterima untuk LAN dan Peer ID pengirim', async () => {
+  const id = peerIdFromPrivateKey(await generateKeyPair('Ed25519')).toString();
+  const other = peerIdFromPrivateKey(await generateKeyPair('Ed25519')).toString();
+  const lan = new LumilanPeer({ dataDir: join(tmpdir(), 'unused-hello-lan'), discovery: false });
+  const loopback = new LumilanPeer({ dataDir: join(tmpdir(), 'unused-hello-loopback'), discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  const valid = `/ip4/192.168.1.20/tcp/40754/p2p/${id}`, local = `/ip4/127.0.0.1/tcp/40754/p2p/${id}`;
+  const addresses = [valid, `/ip4/8.8.8.8/tcp/40754/p2p/${id}`, `/ip4/192.168.1.21/tcp/40754/p2p/${other}`, local, 42, `/ip4/192.168.1.20/tcp/0/p2p/${id}`];
+  assert.deepEqual(lan.remoteAddresses(addresses, id), [valid]);
+  assert.deepEqual(loopback.remoteAddresses(addresses, id), [valid, local]);
+  assert.deepEqual(lan.remoteAddresses(undefined, id), [], 'Older builds send no addresses');
+  assert.equal(lan.remoteAddresses(Array.from({ length: 20 }, (_, port) => `/ip4/192.168.1.20/tcp/${port + 1000}/p2p/${id}`), id).length, 12);
+});
+
+test('lanTargets membentuk alamat dial LAN yang sama untuk semua jalur', async () => {
+  const id = peerIdFromPrivateKey(await generateKeyPair('Ed25519')).toString();
+  const other = peerIdFromPrivateKey(await generateKeyPair('Ed25519')).toString();
+  const valid = `/ip4/192.168.1.20/tcp/40754/p2p/${id}`;
+  // A discovery result without the Peer ID gets it appended; a repeat is dropped.
+  assert.deepEqual(lanTargets(['/ip4/192.168.1.20/tcp/40754', valid], id, false), [valid]);
+  // Another Peer ID, a public address, port 0, and a non-string are refused.
+  assert.deepEqual(lanTargets([`/ip4/192.168.1.21/tcp/40754/p2p/${other}`, '/ip4/8.8.8.8/tcp/40754', '/ip4/10.0.0.5/tcp/0', 7], id, false), []);
+  // Loopback, saved by an older build, is kept only for a device that listens on loopback.
+  assert.deepEqual(lanTargets(['/ip4/127.0.0.1/tcp/40754'], id, false), []);
+  assert.deepEqual(lanTargets(['/ip4/127.0.0.1/tcp/40754'], id, true), [`/ip4/127.0.0.1/tcp/40754/p2p/${id}`]);
+  // A private address comes before loopback, and at most 12 are kept.
+  const many = Array.from({ length: 15 }, (_, port) => `/ip4/127.0.0.1/tcp/${port + 1000}`);
+  const targets = lanTargets([...many, '/ip4/10.0.0.5/tcp/40754'], id, true);
+  assert.equal(targets.length, 12);
+  assert.equal(targets[0], `/ip4/10.0.0.5/tcp/40754/p2p/${id}`);
+});
+
+test('port yang sudah dipakai aplikasi lain diganti dengan port acak', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-port-'));
+  const server = createServer();
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  const peer = new LumilanPeer({ dataDir: root, discovery: false, listen: `/ip4/127.0.0.1/tcp/${port}` });
+  t.mock.method(console, 'warn', () => {});
+  t.after(async () => {
+    await peer.stop();
+    await new Promise(resolve => server.close(resolve));
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+  await peer.start();
+  assert.equal(peer.listen, '/ip4/127.0.0.1/tcp/0');
+  assert.ok(peer.node!.getMultiaddrs().length);
+  assert.ok(peer.node!.getMultiaddrs().every(address => !address.toString().includes(`/tcp/${port}/`)));
+});
+
+test('file-end yang diulang selagi file pertama disimpan menghasilkan satu pesan', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'lumilan-file-end-'));
+  const peer = new LumilanPeer({ dataDir: root, discovery: false, listen: '/ip4/127.0.0.1/tcp/0' });
+  t.after(async () => { await peer.stop(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
+  await peer.start();
+  peer.rename('Andi');
+  const from = peerIdFromPrivateKey(await generateKeyPair('Ed25519')).toString();
+  peer.state.trusted.push({ id: from, name: 'Budi', addresses: [] });
+  const id = randomUUID(), bytes = Buffer.from('isi dokumen'), path = join(peer.filesDir, `.upload-${id}.part`);
+  const handle = await open(path, 'w');
+  await handle.write(bytes);
+  peer.incomingFiles.set(id, { id, to: peer.id, name: 'dokumen.txt', size: bytes.length, from, path, handle,
+    hash: createHash('sha256').update(bytes), received: bytes.length, timer: null });
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  await Promise.all([peer.finishIncomingFile(from, { id, sha256 }), peer.finishIncomingFile(from, { id, sha256 })]);
+  assert.equal(peer.state.messages.filter(message => message.id === id).length, 1);
+  assert.equal(readFileSync(join(peer.filesDir, id), 'utf8'), 'isi dokumen');
+  // A retry after the transfer finished is acknowledged from history.
+  await peer.finishIncomingFile(from, { id, sha256 });
+});
+
+test('pesan masuk dibatalkan dari memori jika riwayat gagal disimpan', () => {
+  const peer = new LumilanPeer({ dataDir: join(tmpdir(), 'unused-incoming-rollback'), discovery: false });
+  const from = 'a'.repeat(52);
+  const message: Message = { id: randomUUID(), from, to: '', text: 'halo', kind: 'text', at: Date.now() };
+  peer.state.unread[from] = 2;
+  peer.state.messages.push(message);
+  const events: Message[] = [];
+  peer.on('incoming', item => events.push(item));
+  peer.save = () => { throw new Error('Disk penuh'); };
+  assert.throws(() => peer.recordIncoming(message), /Disk penuh/);
+  assert.equal(peer.state.messages.length, 0);
+  assert.equal(peer.state.unread[from], 2);
+  assert.equal(events.length, 0);
 });

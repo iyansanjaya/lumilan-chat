@@ -24,12 +24,39 @@ Changes from version 1.4.1.
 
 - **Incoming images and files are no longer easy to miss.** A file or image waiting for **Accept file** now moves its sender to the top of the contact list with a badge, as a new message does. Before, the sender moved up only after the file was accepted, and not at all if the request expired unanswered. The sender returns to the usual order once the request is answered here, in Lumi, or in a notification, or once it expires.
 - Clicking a pack tab in the sticker picker no longer closes the picker, and keyboard focus stays on the tab you clicked.
+- **All active devices appear after a computer starts.** On a large office LAN, a computer that started before its network was fully ready could list only some of the active devices (for example 23 of 35) until Lumilan was closed in Task Manager. It heard no multicast at startup, dialed each saved contact only once, and kept old addresses for contacts whose IP had changed. Now each device announces itself every 15 seconds, so the others find and connect to a computer that cannot receive multicast; saved contacts are retried about once a minute; a contact's new address is saved whenever it is found or connects; and the discovery sockets are rebuilt every 5 minutes, and 10 seconds after an error, so a failed bind of UDP 5353 or a switch that stopped forwarding multicast heals itself. Older builds see the announcements as ordinary answers.
+- A VPN, Tailscale, or link-local adapter connecting or disconnecting no longer restarts the connection to every device, which used to end calls and file transfers.
+- When another program, such as Lumilan for a second Windows user on the same computer, already uses TCP 40754, Lumilan starts on another port instead of failing to start.
+- A network change no longer deletes the temporary copy of a file that is still being sent.
+- Accepting a reminder request now works when the two computers' clocks are a few minutes apart. Before, the answer was refused and retried every 30 seconds.
+- When saving fails while a reminder is due, Lumilan now waits 30 seconds before trying again, instead of retrying about every millisecond.
+- A large received file is no longer reported as failed to its sender when saving it to disk takes more than 30 seconds.
+- An incoming sticker can no longer delete the partial file of a transfer that has the same ID, and a sticker no longer leaves the sender's typing indicator showing.
+- A message received while history cannot be saved is no longer kept in memory and saved later, which caused a duplicate when the sender sent it again.
+- **Settings → App → When the computer starts** on Windows now shows off when Lumilan is turned off in Task Manager or Windows Settings.
+- On Linux, opening at sign-in keeps working after an AppImage update saves the app under a new file name.
+- If installing an update fails after Lumilan prepared to quit, the app now quits instead of staying open without its network connection.
+- Clicking **Check for updates** while an automatic check is running now shows the result.
+- Lumilan no longer starts with notifications un-held when Windows signs in automatically with the screen locked.
+- A second incoming call no longer leaves the first call's notification behind.
+- The window reloads by itself after its page crashes, at most once a minute.
+- On Windows shutdown, restart, or sign-out, a Lumi position change made in the last moment is saved.
+- A conversation file chosen to send can no longer be one of Lumilan's own identity, history, or settings files.
+- A half-written message is kept when its contact goes offline, and restored when the contact returns.
+- **Show older messages** can be clicked again right after it loads a page.
+- Deleting selected messages also removes them from pages loaded with **Show older messages**.
+- New reactions on a message loaded with an older page or from a reminder are shown.
+- Two contacts with the same name are told apart on the home map and in the conversation list.
+- **View all files** no longer opens empty when reopened for another conversation while the first list was loading.
+- A private label is saved to the contact whose dialog was opened, even if another conversation opened meanwhile.
+- The mention list starts at its first name each time, Escape returns focus to the conversation menu button, and **/** no longer moves focus behind an open dialog.
 
 ### Build and validation
 
 - New unit tests cover the reason given for each kind of skipped image, a 200-frame GIF shortened to 100 frames with the same total duration, and a full pack.
 - New unit tests cover the contact list with waiting files: a waiting request raises its sender and counts in the badge, answering it from any surface or letting it expire lowers the sender again, and progress updates do not redraw the list.
 - A new unit test checks that files dropped on **Settings → Shelf** and **Settings → Sticker packs** reach their own drop zones, while every other drop outside an open conversation is still refused. The sticker drop zone had no test before.
+- New unit tests cover discovery announcing itself and rebuilding its sockets after an error and every 5 minutes; a saved contact reconnecting with no discovery result and only on the once-a-minute retry; the new address carried by hello and saved; hello addresses outside the LAN or for another Peer ID being ignored; a busy port replaced by a random one; a repeated file-end producing one message; an incoming message rolled back when saving fails; a reminder save failure waiting 30 seconds; and a reminder answer from a clock five minutes ahead.
 - The packaged UI smoke test now also checks, in light and dark themes at 1100, 375, and 320 px:
   - The Settings categories: keyboard navigation, a fixed window size, equal margins, the narrow tab row, and category labels that fit in all 8 languages.
   - The search box in the sidebar above the filter tabs, with a one-row top bar.

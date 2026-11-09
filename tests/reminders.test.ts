@@ -142,3 +142,25 @@ test('peer LAN retries an in-flight request after restart, synchronizes decision
     a!.reminders.create({title:'Decline',to:b!.id,dueAt:Date.now()+3600000});const declined=a!.state.reminders.at(-1)!.id;await until(()=>b!.state.reminders.some(r=>r.id===declined));b!.reminders.change(declined,'decline');await until(()=>a!.state.reminders.at(-1)!.status==='declined');
   }finally{await Promise.allSettled([a?.stop(),b?.stop()]);rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});}
 });
+
+test('gagal simpan saat jatuh tempo menunggu 30 detik, tidak berulang setiap milidetik',async t=>{
+  const f=fixture(t);
+  f.reminders.create({title:'Minum air',dueAt:f.now+1000});
+  let attempts=0;
+  f.peer.save=()=>{attempts++;throw new Error('Disk penuh');};
+  t.mock.method(console,'warn',()=>{});
+  f.advance(2000);f.reminders.schedule();
+  await new Promise(resolve=>setTimeout(resolve,150));
+  assert.equal(attempts,1);
+  assert.equal(f.reminders.records[0]!.status,'scheduled');
+});
+
+test('jawaban penerima diterima walau jam kedua perangkat berbeda beberapa menit',t=>{
+  const f=fixture(t);
+  f.peer.online.add('other');
+  t.mock.method(console,'warn',()=>{});
+  f.reminders.create({title:'Rapat',to:'other',dueAt:f.now+3600_000});
+  const r=f.reminders.records[0]!;
+  f.reminders.receiveStatus('other',{id:r.id,status:'accepted',dueAt:f.now+3600_000,decidedAt:f.now+5*60_000});
+  assert.equal(r.status,'accepted');
+});

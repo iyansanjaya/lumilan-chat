@@ -60,6 +60,8 @@ function fixture({ send = cancelable, dispose = async () => {}, stage, inspect, 
     AbortController, Date, clearTimeout, randomUUID, ArrayBuffer, Uint8Array, MAX_CLIPBOARD_IMAGE: 20 * 1024 * 1024,
     errorCode, errorMessage,
     inputString: (value: unknown) => { if (typeof value !== 'string') throw new Error('Permintaan tidak valid.'); return value; },
+    // main.ts refuses Lumilan's own data files here; these tests only send stand-in paths.
+    userFile: (value: unknown) => { if (typeof value !== 'string') throw new Error('Permintaan tidak valid.'); return value; },
     quitWaiting: false, quitCompleted: false, quitShutdown: undefined, refreshingNetwork: undefined as Promise<void> | undefined, quitting: false,
     window: { isDestroyed: () => false, webContents: { send: (channel: string, value: Record<string, unknown>) => {
       assert.equal(channel, 'lumilan:file-progress'); progress.push({ ...value });

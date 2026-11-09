@@ -24,12 +24,39 @@ Perubahan dari versi 1.4.1.
 
 - **Gambar dan file masuk tidak lagi mudah terlewat.** File atau gambar yang menunggu **Terima file** kini menaikkan pengirimnya ke atas daftar kontak lengkap dengan badge, seperti pesan baru. Sebelumnya pengirim baru naik setelah file diterima, dan tidak naik sama sekali jika permintaan kedaluwarsa tanpa jawaban. Pengirim kembali ke urutan biasa setelah permintaan dijawab di jendela ini, di Lumi, atau di notifikasi, atau setelah kedaluwarsa.
 - Mengeklik tab paket di pemilih stiker tidak lagi menutup pemilih, dan fokus keyboard tetap di tab yang diklik.
+- **Semua perangkat aktif muncul setelah komputer menyala.** Di LAN kantor yang besar, komputer yang menyala sebelum jaringannya siap dapat hanya menampilkan sebagian perangkat aktif (misalnya 23 dari 35) sampai Lumilan ditutup lewat Task Manager. Komputer itu tidak mendengar multicast saat mulai, menghubungi setiap kontak tersimpan hanya sekali, dan menyimpan alamat lama kontak yang IP-nya sudah berubah. Kini setiap perangkat mengumumkan dirinya setiap 15 detik, sehingga perangkat lain menemukan dan menghubungi komputer yang tidak dapat menerima multicast; kontak tersimpan dicoba ulang kira-kira sekali per menit; alamat baru kontak disimpan setiap kali kontak ditemukan atau tersambung; dan socket penemuan dibuat ulang setiap 5 menit serta 10 detik setelah error, sehingga UDP 5353 yang gagal dipakai atau switch yang berhenti meneruskan multicast pulih sendiri. Build lama membaca pengumuman ini sebagai jawaban biasa.
+- Adaptor VPN, Tailscale, atau link-local yang tersambung atau terputus tidak lagi memulai ulang koneksi ke semua perangkat, yang sebelumnya mengakhiri panggilan dan transfer file.
+- Jika program lain, misalnya Lumilan milik pengguna Windows kedua di komputer yang sama, sudah memakai TCP 40754, Lumilan memakai port lain alih-alih gagal dimulai.
+- Perubahan jaringan tidak lagi menghapus salinan sementara file yang masih dikirim.
+- Menerima permintaan pengingat kini berhasil walau jam kedua komputer berbeda beberapa menit. Sebelumnya jawaban ditolak dan dicoba ulang setiap 30 detik.
+- Jika penyimpanan gagal saat pengingat jatuh tempo, Lumilan kini menunggu 30 detik sebelum mencoba lagi, bukan mengulang kira-kira setiap milidetik.
+- File besar yang diterima tidak lagi dilaporkan gagal kepada pengirim saat penyimpanannya ke disk lebih dari 30 detik.
+- Stiker masuk tidak lagi dapat menghapus file sementara transfer dengan ID yang sama, dan tidak lagi meninggalkan indikator mengetik pengirim.
+- Pesan yang diterima saat riwayat gagal disimpan tidak lagi tertahan di memori lalu tersimpan kemudian, yang membuat pesan ganda saat pengirim mengirim ulang.
+- **Pengaturan → Aplikasi → Saat komputer menyala** di Windows kini menunjukkan nonaktif jika Lumilan dimatikan lewat Task Manager atau Pengaturan Windows.
+- Di Linux, membuka saat masuk tetap berfungsi setelah pembaruan AppImage menyimpan aplikasi dengan nama file baru.
+- Jika pemasangan pembaruan gagal setelah Lumilan bersiap keluar, aplikasi kini keluar alih-alih tetap terbuka tanpa koneksi jaringan.
+- Mengeklik **Periksa pembaruan** saat pemeriksaan otomatis sedang berjalan kini menampilkan hasilnya.
+- Lumilan tidak lagi mulai dengan notifikasi yang tidak ditahan saat Windows masuk otomatis dengan layar terkunci.
+- Panggilan masuk kedua tidak lagi meninggalkan notifikasi panggilan pertama.
+- Jendela memuat ulang sendiri setelah halamannya crash, paling banyak sekali per menit.
+- Saat Windows dimatikan, dimulai ulang, atau keluar akun, perubahan posisi Lumi pada saat terakhir tetap tersimpan.
+- File yang dipilih untuk dikirim di percakapan tidak lagi dapat berupa file identitas, riwayat, atau pengaturan Lumilan sendiri.
+- Pesan yang setengah ditulis tetap disimpan saat kontaknya offline, dan muncul lagi saat kontak kembali.
+- **Tampilkan pesan lebih lama** dapat diklik lagi tepat setelah memuat satu halaman.
+- Menghapus pesan terpilih juga menghapusnya dari halaman yang dimuat lewat **Tampilkan pesan lebih lama**.
+- Reaksi baru pada pesan dari halaman lama atau dari pengingat kini ditampilkan.
+- Dua kontak dengan nama sama kini dapat dibedakan di peta beranda dan daftar percakapan.
+- **Lihat semua file** tidak lagi terbuka kosong saat dibuka ulang untuk percakapan lain ketika daftar pertama masih dimuat.
+- Tanda pribadi disimpan ke kontak yang dialognya dibuka, walau percakapan lain terbuka sementara itu.
+- Daftar mention selalu mulai dari nama pertama, Escape mengembalikan fokus ke tombol menu percakapan, dan **/** tidak lagi memindahkan fokus ke belakang dialog yang terbuka.
 
 ### Build dan validasi
 
 - Tes unit baru mencakup alasan untuk setiap jenis gambar yang dilewati, GIF 200 frame yang dipersingkat menjadi 100 frame dengan durasi total yang sama, dan paket yang penuh.
 - Tes unit baru mencakup daftar kontak dengan file yang menunggu: permintaan yang menunggu menaikkan pengirimnya dan ikut dihitung di badge, menjawabnya dari mana pun atau membiarkannya kedaluwarsa menurunkannya kembali, dan pembaruan progres tidak menggambar ulang daftar.
 - Tes unit baru memastikan file yang dijatuhkan ke **Pengaturan → Rak** dan **Pengaturan → Paket stiker** sampai ke area jatuhkan masing-masing, sementara drop lain di luar percakapan yang terbuka tetap ditolak. Area jatuhkan stiker sebelumnya belum punya tes.
+- Tes unit baru mencakup penemuan yang mengumumkan dirinya dan membuat ulang socket setelah error serta setiap 5 menit; kontak tersimpan yang tersambung ulang tanpa hasil penemuan dan hanya pada percobaan sekali per menit; alamat baru yang dibawa hello lalu disimpan; alamat hello di luar LAN atau untuk Peer ID lain yang diabaikan; port terpakai yang diganti port acak; file-end berulang yang menghasilkan satu pesan; pesan masuk yang dibatalkan saat penyimpanan gagal; kegagalan simpan pengingat yang menunggu 30 detik; dan jawaban pengingat dari jam yang lima menit lebih cepat.
 - Smoke UI paket kini juga memeriksa, pada tema terang dan gelap di lebar 1100, 375, dan 320 px:
   - Kategori Pengaturan: navigasi keyboard, ukuran jendela tetap, margin yang sama, deretan tab di jendela sempit, dan label kategori yang muat dalam 8 bahasa.
   - Kotak pencarian di sidebar di atas tab filter, dengan bilah atas satu baris.
