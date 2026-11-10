@@ -55,6 +55,8 @@
       "out/src/main/link-preview.js",
       "out/src/main/discovery.js",
       "out/src/main/changelog.js",
+      "out/src/main/devices.js",
+      "out/src/main/device-watch.js",
       "out/changelog/CHANGELOG.md",
       "out/changelog/CHANGELOG.id.md",
       "out/src/preload/preload.cjs",

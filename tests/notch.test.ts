@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import { LumiNotch, notchBounds } from '../src/main/notch.js';
 import type { NotchIpcEvent, NotchPeer, NotchReminder } from '../src/main/notch.js';
 import type { BrowserWindowConstructorOptions, Rectangle } from 'electron';
-import type { BreakView, NotchSettings, NotchSnapshot, RoutineView, ShelfDropResult, ShelfView, TasksView } from '../src/shared/notch.js';
+import type { BreakView, DevicesView, NotchSettings, NotchSnapshot, RoutineView, ShelfDropResult, ShelfView, TasksView } from '../src/shared/notch.js';
 import { FocusTimer, type FocusEnd } from '../src/main/focus.js';
 import type { Status } from '../src/shared/model.js';
 
@@ -95,7 +95,7 @@ function fixture(pages: ConstructorParameters<typeof LumiNotch>[0]['pages'] = un
     focusAction: (type, minutes) => type === 'enable' ? settings.focus ||= 25 : type === 'start' ? focus.start(minutes) : type === 'pause' ? focus.pause() : type === 'resume' ? focus.resume() : focus.end(), ...(pages ? { pages } : {}), ...(addToShelf ? { addToShelf } : {}),
     onOpened: () => { settings.notchOpened = true; firstOpens.push(Date.now()); }, onPause: () => pauses.push(notch.pausedUntil) });
   notch.sync(); notch.ready = true;
-  return { notch, settings, peer, main, watch, clock, ipcMain, decisions, opens, accepts, pending, focus, ends, firstOpens, pauses };
+  return { notch, settings, peer, main, watch, clock, ipcMain, decisions, opens, accepts, pending, focus, ends, firstOpens, pauses, screen };
 }
 
 test('Lumi bounds remain inside small, negative-coordinate and scaled display work areas', () => {
@@ -809,6 +809,50 @@ test('Lumi stays open under the pointer after the person opens it and closes sho
   } finally { notch.dispose(); }
 });
 
+test('Lumi live device notices: a short volume bar on every change, named Bluetooth and Wi-Fi notices, held as before', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const { notch, peer, settings, focus } = fixture();
+  try {
+    assert.equal(notch.device('volume', 'on', '', undefined, 0, { progress: 42 }), true);
+    assert.deepEqual([notch.mode, selectedSnapshot(notch).key, selectedSnapshot(notch).progress, selectedSnapshot(notch).title], ['compact', 'device:volume', 42, 'Volume']);
+    assert.equal(notch.snapshot().count, 0, 'The volume bar counted as activity');
+    t.mock.timers.tick(1000);
+    notch.device('volume', 'on', '', undefined, 0, { progress: 44 });
+    t.mock.timers.tick(1000);
+    assert.deepEqual([notch.mode, selectedSnapshot(notch).progress], ['compact', 44], 'A volume change did not renew the bar');
+    t.mock.timers.tick(500); assert.equal(notch.mode, 'hidden', 'The volume bar stayed longer than the system OSD');
+    t.mock.timers.tick(10_000);
+    notch.device('volume', 'muted', '', undefined, 0, { progress: 44 });
+    assert.deepEqual([notch.mode, selectedSnapshot(notch).status], ['compact', 'muted'], 'A later change was rate-limited');
+    t.mock.timers.tick(1500);
+    notch.device('bluetooth', 'connected', '{name} tersambung', undefined, 0, { name: 'Galaxy Buds' });
+    assert.deepEqual([selectedSnapshot(notch).key, selectedSnapshot(notch).name, selectedSnapshot(notch).body], ['device:bluetooth', 'Galaxy Buds', '{name} tersambung']);
+    settings.preview = false;
+    assert.equal(notch.snapshot().selected?.name, 'Galaxy Buds', 'A device name of this computer was redacted like a message');
+    t.mock.timers.tick(4000); assert.equal(notch.mode, 'hidden');
+    // A call on screen keeps its card: the volume updates quietly behind it.
+    peer.activeCall = { id: 'call1', peerId: 'alice', phase: 'incoming' };
+    notch.call({ type: 'offer', id: 'call1', peerId: 'alice', sdp: 'PRIVATE SDP' });
+    const revision = notch.revision;
+    notch.device('volume', 'on', '', undefined, 0, { progress: 50 });
+    assert.deepEqual([selectedSnapshot(notch).key, notch.revision], ['call:call1', revision], 'The volume bar covered an incoming call');
+    peer.activeCall = null; notch.call({ type: 'end', id: 'call1' }); notch.collapse(); t.mock.timers.tick(8000);
+    // Manual Do not disturb hides Lumi, so nothing shows. A focus session holds Bluetooth and Wi-Fi but not the person's
+    // own volume change; a lock holds all.
+    peer.state.status = 'dnd';
+    assert.equal(notch.device('volume', 'on', '', undefined, 0, { progress: 30 }), false, 'A volume bar showed while Lumi is hidden by Do not disturb');
+    peer.state.status = 'active'; settings.focus = 25; focus.start(25);
+    assert.equal(peer.state.status, 'dnd', 'The focus fixture no longer sets Do not disturb');
+    assert.equal(notch.device('bluetooth', 'connected', '{name} tersambung', undefined, 0, { name: 'Mouse' }), false, 'A Bluetooth notice interrupted a focus session');
+    assert.equal(notch.device('wifi', 'connected', 'Tersambung ke {name}', undefined, 30_000, { name: 'Kantor' }), false, 'A Wi-Fi notice interrupted a focus session');
+    assert.equal(notch.device('volume', 'on', '', undefined, 0, { progress: 30 }), true, 'A focus session hid the volume bar');
+    t.mock.timers.tick(1500);
+    focus.end(); settings.focus = 0; peer.state.status = 'active';
+    notch.powerMonitor.emit('lock-screen');
+    assert.equal(notch.device('volume', 'on', '', undefined, 0, { progress: 31 }), false, 'The volume bar showed on a locked screen');
+  } finally { focus.dispose(); notch.dispose(); }
+});
+
 test('Lumi device notices are passing, rate-limited, and quiet under lock and Do not disturb', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
   const { notch, peer, settings, focus } = fixture();
@@ -1065,4 +1109,36 @@ test('Lumi previews a running focus session a minute before it ends, under its D
     assert.equal(peer.state.status, 'dnd');
     assert.equal(notch.focusEnding(), true, 'The session’s own Do not disturb held the warning back');
   } finally { focus.dispose(); notch.dispose(); }
+});
+
+test('Lumi Perangkat page reads on request only, refuses other actions, and a display plugged in is a passing notice', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const calls: string[] = [];
+  const view: DevicesView = { displays: [{ width: 1920, height: 1080, scale: 1, primary: true, internal: true, label: '' }], wifi: { connected: true, ssid: 'Kantor' },
+    bluetooth: undefined, volume: null, pending: ['bluetooth'] };
+  const { notch, peer, screen } = fixture({ devices: { view: () => view, act: action => { if (action !== 'read' && action !== 'refresh') throw new Error('unknown'); calls.push(action); } } });
+  try {
+    assert.deepEqual(notch.snapshot().pages, { devices: view });
+    for (const action of ['read', 'refresh']) assert.equal(await notch.action({ type: 'devices', action }), true);
+    assert.deepEqual(calls, ['read', 'refresh']);
+    for (const action of [{ type: 'devices' }, { type: 'devices', action: 'set-volume', value: 100 }, { type: 'devices', action: 'refresh', value: 'x'.repeat(5000) },
+      { type: 'devices', action: 'refresh', command: 'netsh' }, { type: 'devices', action: 'Refresh()' }])
+      await assert.rejects(notch.action(action), JSON.stringify(action).slice(0, 80));
+    assert.equal(calls.length, 2, 'A refused action reached the module');
+    // Plugging in a monitor or projector: a passing notice that never counts as activity; a resolution change is silent.
+    screen.emit('display-added');
+    assert.deepEqual([notch.mode, selectedSnapshot(notch).key, selectedSnapshot(notch).title, selectedSnapshot(notch).body, notch.snapshot().count],
+      ['compact', 'device:display', 'Layar', 'Layar tersambung', 0]);
+    t.mock.timers.tick(4000);
+    assert.deepEqual([notch.mode, notch.items.has('device:display')], ['hidden', false]);
+    screen.emit('display-metrics-changed');
+    assert.equal(notch.mode, 'hidden', 'A resolution change was announced');
+    t.mock.timers.tick(5000);
+    screen.emit('display-removed');
+    assert.equal(selectedSnapshot(notch).body, 'Layar dilepas');
+    notch.collapse(); t.mock.timers.tick(5000);
+    peer.state.status = 'dnd';
+    screen.emit('display-added');
+    assert.equal(notch.items.has('device:display'), false, 'A display notice appeared under Do not disturb');
+  } finally { notch.dispose(); }
 });

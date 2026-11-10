@@ -1443,7 +1443,7 @@ async function main() {
     await background();
     await companionPage.evaluate("window.lumi.action({type:'expand'})");
     // Focus is offered while off, so it can be found without opening Settings.
-    await until(() => companionPage.evaluate("document.body.dataset.mode==='expanded'&&!document.getElementById('dots').hidden&&[...document.querySelectorAll('#dots button')].map(b=>b.dataset.page).join()==='activity,focus,break,routine,tasks,shelf'"), 'deck offers Activity, Focus, Breaks, Routine, Tasks and Shelf');
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='expanded'&&!document.getElementById('dots').hidden&&[...document.querySelectorAll('#dots button')].map(b=>b.dataset.page).join()==='activity,focus,break,routine,tasks,shelf,devices'"), 'deck offers Activity, Focus, Breaks, Routine, Tasks, Shelf and Perangkat');
     await click('tab-focus');
     await until(() => companionPage.evaluate("document.getElementById('page-focus').dataset.current==='true'&&document.getElementById('focus').hidden&&!document.getElementById('focus-enable').hidden"), 'focus page offers Turn on while off');
     await tightPanel('Focus page while off');
@@ -1590,6 +1590,86 @@ async function main() {
     await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'panel closes once typing ends', 3000);
     await mainPage.evaluate("window.lumilan.routine({action:'settings',value:{enabled:false,servingMl:250,goalMl:2000,startHour:8,endHour:22,intervalMinutes:60}})");
     console.log('Routine and Tasks: water reminder after a resume, Drink from Lumi with chart, add/done/delete while typing holds the panel, refused page actions passed');
+    // Perangkat reads the real system when the page comes into view; every row is filled once the probes finish (a part
+    // this system cannot read shows Tidak tersedia). Names stay out of the log: only what was readable is printed.
+    await companionPage.evaluate("window.lumi.action({type:'expand'})");
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='expanded'"), 'panel opens for Perangkat');
+    await click('tab-devices');
+    await until(() => companionPage.evaluate("document.getElementById('page-devices').dataset.current==='true'&&document.querySelectorAll('#devices-list li').length>=4"), 'Perangkat page');
+    const devicesView = await until(() => mainPage.evaluate<{displays:unknown[];wifi:unknown;bluetooth:unknown;volume:unknown;pending:string[]} | false>(
+      'window.lumilan.devicesState().then(v=>v.pending.length===0&&v.wifi!==undefined&&v.bluetooth!==undefined&&v.volume!==undefined&&v)'), 'device probes finish', 30000);
+    await until(() => companionPage.evaluate(`![...document.querySelectorAll('#devices-list .title')].some(e=>e.textContent==='Memuat…')&&document.getElementById('devices-count').textContent==='${devicesView.displays.length}'&&!document.getElementById('devices-refresh').disabled`), 'Perangkat rows filled');
+    await tightPanel('Perangkat page');
+    await islandShot('notch-devices.png');
+    for (const action of ["{type:'devices',action:'refresh',value:1}", "{type:'devices',action:'set-volume'}", "{type:'devices',action:'read',command:'netsh'}"])
+      await assert.rejects(companionPage.evaluate(`window.lumi.action(${action})`), action);
+    await companionPage.evaluate("window.lumi.action({type:'collapse'})");
+    await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'Perangkat panel closes', 3000);
+    console.log(`Perangkat: ${devicesView.displays.length} display(s); Wi-Fi ${devicesView.wifi === null ? 'unavailable' : 'read'}, Bluetooth ${devicesView.bluetooth === null ? 'unavailable' : 'read'}, volume ${devicesView.volume === null ? 'unavailable' : 'read'}; refused page actions passed`);
+
+    // Live device notices. The wheel action is validated on every system; on Windows the real helper is driven end to
+    // end: an outside volume change (as a volume key does) shows the bar, the wheel sets the system volume, turning the
+    // setting off stops the helper, and the machine's volume is restored. A muted machine is left alone.
+    for (const value of ['11', "'2'", '1.5', '0', '-11'])
+      await assert.rejects(companionPage.evaluate(`window.lumi.action({type:'devices',action:'volume',value:${value}})`), `volume ${value}`);
+    // Settings → App stays read-only: the wheel is Lumi's alone.
+    await assert.rejects(mainPage.evaluate("window.lumilan.devices({action:'volume',value:1})"), 'The main window changed the system volume');
+    const startVolume = devicesView.volume as { level: number; muted: boolean } | null;
+    if (process.platform === 'win32' && startVolume && !startVolume.muted) {
+      const appPid = await nativeBrowser.evaluate<number>('process.pid');
+      const helpers = async () => {
+        const out = await new Promise<string>((done, fail) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+          `Get-CimInstance Win32_Process -Filter "ParentProcessId=${appPid} AND Name='powershell.exe'" | Where-Object { $_.CommandLine -match '-EncodedCommand' } | ForEach-Object { "$($_.ProcessId) $($_.WorkingSetSize)" }`],
+          { windowsHide: true }, (error, stdout) => error ? fail(error) : done(String(stdout))));
+        return out.split(/\r?\n/).filter(Boolean).map(line => line.split(' ').map(Number) as [number, number]);
+      };
+      // Sets the default output volume the way another app or a volume key would, outside Lumilan.
+      const setOutside = (level: number) => new Promise<void>((done, fail) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+[ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] interface IAudioEndpointVolume { [PreserveSig] int RegisterControlChangeNotify(IntPtr p); [PreserveSig] int UnregisterControlChangeNotify(IntPtr p); [PreserveSig] int GetChannelCount(out uint n); [PreserveSig] int SetMasterVolumeLevel(float db, IntPtr ctx); [PreserveSig] int SetMasterVolumeLevelScalar(float level, IntPtr ctx); }
+[ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] interface IMMDevice { [PreserveSig] int Activate(ref Guid iid, int ctx, IntPtr p, [MarshalAs(UnmanagedType.IUnknown)] out object o); }
+[ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] interface IMMDeviceEnumerator { [PreserveSig] int EnumAudioEndpoints(int f, int s, out IntPtr c); [PreserveSig] int GetDefaultAudioEndpoint(int flow, int role, out IMMDevice dev); }
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class SmokeEnumerator {}
+public static class SmokeVolume { public static void Set(float level) { var e = (IMMDeviceEnumerator)(new SmokeEnumerator()); IMMDevice d; Marshal.ThrowExceptionForHR(e.GetDefaultAudioEndpoint(0, 1, out d)); var g = typeof(IAudioEndpointVolume).GUID; object o; Marshal.ThrowExceptionForHR(d.Activate(ref g, 23, IntPtr.Zero, out o)); Marshal.ThrowExceptionForHR(((IAudioEndpointVolume)o).SetMasterVolumeLevelScalar(level, IntPtr.Zero)); } }
+'@; [SmokeVolume]::Set(${level / 100})`], { windowsHide: true }, error => error ? fail(error) : done()));
+      const card = (level: number) => until(async () => { const item = await selected(); return item?.key === 'device:volume' && item.progress === level && await companionPage.evaluate(`document.body.dataset.mode==='compact'&&!document.getElementById('level').hidden&&document.getElementById('badge').textContent==='${level}%'`); }, `volume bar at ${level}%`, 8000);
+      const systemLevel = async () => { await mainPage.evaluate("window.lumilan.devices({action:'refresh'})"); return until(() => mainPage.evaluate<number | false>('window.lumilan.devicesState().then(v=>!v.pending.includes("volume")&&v.volume?v.volume.level:false)'), 'volume probe', 20000); };
+      const up = startVolume.level <= 90, outside = startVolume.level + (up ? 6 : -6), wheeled = outside + (up ? 4 : -4);
+      try {
+        await until(async () => (await helpers()).length === 1, 'one device helper runs', 15000);
+        await background();
+        await setOutside(outside);
+        await card(outside);
+        // The island morphs from the pill to the card and the fill eases: measure once both settle.
+        await islandShot('notch-volume.png');
+        const bar = await companionPage.evaluate<{track:number;fill:number}>("(()=>{const t=document.getElementById('level').getBoundingClientRect(),f=document.querySelector('#level i').getBoundingClientRect();return{track:t.width,fill:f.width}})()");
+        assert(bar.track > 100 && Math.abs(bar.fill / bar.track - outside / 100) < 0.03, `The volume bar did not show the level: ${JSON.stringify(bar)}`);
+        await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'volume bar closes like the system OSD', 3000);
+        const box = await companionPage.evaluate<{x:number;y:number}>(`(()=>{const r=${island};return{x:r.left+r.width/2,y:r.top+r.height/2}})()`);
+        await companionPage.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: box.x, y: box.y, deltaX: 0, deltaY: up ? -100 : 100 });
+        await card(wheeled);
+        assert.equal(await systemLevel(), wheeled, 'The wheel did not set the system volume');
+        // Off: the helper stops, and an outside change shows nothing.
+        await mainPage.evaluate('window.lumilan.setNotificationSettings({notchDevices:false})');
+        await until(async () => (await helpers()).length === 0, 'device helper stops with the setting', 10000);
+        await companionPage.evaluate("window.lumi.action({type:'collapse'})");
+        await setOutside(outside); await delay(1500);
+        assert.notEqual((await selected())?.key, 'device:volume', 'A volume bar showed with the setting off');
+        await assert.rejects(companionPage.evaluate("window.lumi.action({type:'devices',action:'volume',value:1})"), 'The wheel changed the volume with the setting off');
+        await mainPage.evaluate('window.lumilan.setNotificationSettings({notchDevices:true})');
+        await until(async () => (await helpers()).length === 1, 'device helper restarts with the setting', 15000);
+        await delay(1500);
+        await setOutside(startVolume.level);
+        await card(startVolume.level);
+        const [[, bytes] = [0, 0]] = await helpers();
+        console.log(`Live devices: outside change shows the bar, wheel sets the system volume, setting off stops the helper; volume restored to ${startVolume.level}%; helper ${(bytes / 1048576).toFixed(1)} MiB working set`);
+      } finally {
+        await setOutside(startVolume.level).catch(error => console.warn('Volume restore failed:', error));
+        await mainPage.evaluate('window.lumilan.setNotificationSettings({notchDevices:true})').catch(() => {});
+      }
+      assert.equal(await systemLevel(), startVolume.level, 'The machine volume was not restored');
+      await companionPage.evaluate("window.lumi.action({type:'collapse'})");
+    } else console.log(`Live devices: wheel validation passed; native volume path skipped (${process.platform}${startVolume?.muted ? ', muted' : startVolume ? '' : ', volume unreadable'})`);
 
     // Breaks: the page is in the deck while off; Break now on the real clock is measured and ended with Back to work; a
     // reminder due after a resume previews in Lumi and opens the Breaks page; Snooze answers it; the next reminder starts

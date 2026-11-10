@@ -356,6 +356,21 @@ async function main() {
       await shortcut(true);
       await waitFor("window.lumilan.notificationSettings().then(s => s.notchShortcut === true)", 'Lumi shortcut restored');
     }
+    // Device updates and the volume wheel: on by default, with a note naming what this system can do; it saves both ways.
+    const devicesToggle = await evaluate<{ checked: boolean; disabled: boolean; note: string; overlap: boolean }>(`(() => {
+      const box = document.querySelector('#notch-devices'), note = document.querySelector('#notch-devices-note'), b = box.getBoundingClientRect(), n = note.getBoundingClientRect();
+      return { checked: box.checked, disabled: box.disabled, note: note.textContent, overlap: n.right > b.left && n.bottom > b.top && n.top < b.bottom };
+    })()`);
+    assert(devicesToggle.note.length > 80 && devicesToggle.note.includes('Lumi') && !devicesToggle.overlap, `Device updates row: ${JSON.stringify(devicesToggle)}`);
+    if (!devicesToggle.disabled) {
+      assert.equal(devicesToggle.checked, true, 'Device updates were off on a new profile');
+      const devicesSetting = (on: boolean) => evaluate(`document.querySelector('#notch-devices').checked = ${on}; document.querySelector('#notch-devices').dispatchEvent(new Event('change'))`);
+      await devicesSetting(false);
+      await waitFor("window.lumilan.notificationSettings().then(s => s.notchDevices === false)", 'device updates turned off');
+      await devicesSetting(true);
+      await waitFor("window.lumilan.notificationSettings().then(s => s.notchDevices === true)", 'device updates turned on');
+    }
+    console.log(`Settings → Lumi device updates: ${devicesToggle.disabled ? 'shown disabled without Lumi' : 'saved off and on'}, note beside the toggle`);
     // What's new: a new profile starts at this version and opens nothing by itself; Settings → App opens the packaged
     // changelog, newest version open, built from text only and without the developers' build notes.
     const appVersion = await evaluate<string>('window.lumilan.notificationSettings().then(s => s.version)', true);
@@ -373,18 +388,47 @@ async function main() {
     for (const theme of ['light', 'dark']) for (const [width, height] of [[1100, 800], [320, 700]] as const) {
       await evaluate(`document.documentElement.dataset.theme = '${theme}'`);
       await setViewport(width, height);
-      const fit = await evaluate<{ inside: boolean; overflow: boolean; badge: boolean; contrast: boolean }>(`(() => {
+      const fit = await evaluate<{ inside: boolean; overflow: boolean; badge: boolean; contrast: boolean; width: number; expected: number }>(`(() => {
         const dialog = document.querySelector('#changelog-dialog'), box = dialog.getBoundingClientRect(), summary = dialog.querySelector('#changelog-list summary');
         const badge = summary.querySelector('.changelog-badge').getBoundingClientRect(), row = summary.getBoundingClientRect();
         const ink = getComputedStyle(dialog.querySelector('#changelog-list li')).color, surface = getComputedStyle(dialog).backgroundColor;
         return { inside: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight, overflow: dialog.scrollWidth > dialog.clientWidth + 1,
-          badge: badge.right <= row.right + 1 && badge.left >= row.left, contrast: ink !== surface }; })()`);
-      assert(fit.inside && !fit.overflow && fit.badge && fit.contrast, `What's new does not fit (${theme}, ${width}px): ${JSON.stringify(fit)}`);
+          badge: badge.right <= row.right + 1 && badge.left >= row.left, contrast: ink !== surface, width: Math.round(box.width),
+          expected: Math.min(document.documentElement.clientWidth - 40, 720) }; })()`);
+      // Wide enough to read: 720px, or the page less margins of 16-20px a side (the browser caps a modal dialog at
+      // 100% - 2em - 6px). Another dialog rule once held it at 400px.
+      assert(fit.inside && !fit.overflow && fit.badge && fit.contrast && fit.width >= fit.expected - 1 && fit.width <= 721,
+        `What's new does not fit (${theme}, ${width}px): ${JSON.stringify(fit)}`);
     }
     await setViewport(1100, 800);
     await evaluate("document.documentElement.dataset.theme = 'light'; document.querySelector('#changelog-close').click()");
     await waitFor("!document.querySelector('#changelog-dialog').open", "What's new closes");
+    // Shared files had the same override: 520px, or the page less margins of 16-20px a side.
+    for (const [width, height] of [[1100, 800], [320, 700]] as const) {
+      await setViewport(width, height);
+      const files = await evaluate<{ width: number; expected: number; inside: boolean }>(`(() => { const dialog = document.querySelector('#files-dialog'); dialog.showModal();
+        const box = dialog.getBoundingClientRect(), result = { width: Math.round(box.width), expected: Math.min(document.documentElement.clientWidth - 40, 520),
+          inside: box.left >= 0 && box.right <= innerWidth }; dialog.close(); return result; })()`);
+      assert(files.inside && files.width >= files.expected - 1 && files.width <= 521, `Shared files dialog width is off (${width}px): ${JSON.stringify(files)}`);
+    }
+    await setViewport(1100, 800);
     console.log(`What's new: new profile starts at ${appVersion} without opening it; Settings opens the packaged changelog, light/dark 1100/320 px passed`);
+    // Settings → App → Perangkat, the home of Lumi's page: read when the section comes into view, filled once the
+    // system probes finish, and no wider than the pane on a narrow window.
+    await evaluate("document.querySelector('#settings-tab-app').click(); document.querySelector('#devices-section').scrollIntoView(); true");
+    await waitFor("window.lumilan.devicesState().then(v => v.pending.length === 0 && v.wifi !== undefined && v.bluetooth !== undefined && v.volume !== undefined)", 'Settings reads the device status', 30000);
+    await waitFor("document.querySelectorAll('#devices-items li').length === 4 && ![...document.querySelectorAll('#devices-items small')].some(e => e.textContent === 'Memuat…') && !document.querySelector('#devices-refresh-button').disabled", 'Settings shows the device rows');
+    for (const theme of ['light', 'dark']) for (const [width, height] of [[1100, 800], [320, 700]] as const) {
+      await evaluate(`document.documentElement.dataset.theme = '${theme}'`);
+      await setViewport(width, height);
+      await evaluate("document.querySelector('#devices-section').scrollIntoView(); true");
+      const rows = await evaluate<{ overflow: boolean; button: boolean }>(`(() => { const list = document.querySelector('#devices-items'), button = document.querySelector('#devices-refresh-button').getBoundingClientRect(), section = document.querySelector('#devices-section').getBoundingClientRect();
+        return { overflow: list.scrollWidth > list.clientWidth + 1, button: button.left >= section.left - 1 && button.right <= section.right + 1 }; })()`);
+      assert(!rows.overflow && rows.button, `Settings → Perangkat does not fit (${theme}, ${width}px): ${JSON.stringify(rows)}`);
+    }
+    await setViewport(1100, 800);
+    await evaluate("document.documentElement.dataset.theme = 'light'");
+    console.log('Settings → Perangkat: read on view, rows filled, light/dark 1100/320 px passed');
     await evaluate("document.querySelector('#settings-dialog').close()");
     assert.equal(failures.length, 0, `Renderer errors after breaks: ${failures.join('; ')}`);
     console.log('Breaks: main-window lengths and toggle, shared select style, light/dark 375/320 px passed; sidebar tabs and footer in 8 languages at 1440–390 px passed; Lumi section fits and saves at once');
