@@ -1907,6 +1907,198 @@ public static class SmokeVolume { public static void Set(float level) { var e = 
       ? await nativeBrowser.evaluate<number>("(()=>{const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html');const s=process.getBuiltinModule('fs').readFileSync('/proc/'+w.webContents.getOSProcessId()+'/status','utf8');return Number(s.match(/^VmRSS:\\s+(\\d+) kB/m)?.[1])})()")
       : nativeMetrics.memory?.workingSetSize;
     console.log(`Notch native process: ${nativeMetrics.cpu.percentCPUUsage.toFixed(2)}% CPU; ${typeof nativeMemory === 'number' && Number.isFinite(nativeMemory) ? (nativeMemory / 1024).toFixed(1) + ' MiB ' + (process.platform === 'linux' ? 'RSS' : 'working set') : 'native memory unavailable'}`);
+    if (process.env.LUMILAN_README_SCREENSHOTS === '1') {
+      // README and website images from this disposable, loopback-only demo: real application pixels, demo names, and
+      // fixture device data, so no Wi-Fi, Bluetooth or monitor name of the test machine reaches a picture.
+      const shots = join(root, 'docs', 'screenshots'); mkdirSync(shots, { recursive: true });
+      let own: string[] = [];
+      // Every picture is checked against this machine's real device names first; the names themselves are never printed.
+      const save = async (name: string, data: string, page: Awaited<ReturnType<typeof connect>>) => {
+        const text = await page.evaluate<string>('document.body.innerText');
+        assert(!own.some(item => text.includes(item)), `${name}: a device name of the test machine would reach a picture`);
+        writeFileSync(join(shots, name), Buffer.from(data, 'base64'));
+      };
+      const notchSettings = (value: string) => mainPage.evaluate(`window.lumilan.setNotificationSettings(${value})`);
+      await notchSettings("{enabled:true,preview:true,silent:true,background:true,notch:true,notchIdle:'always',notchDevices:false}");
+      // Catch Lumilan's DeviceStatus on its next publish and answer its probes from fixtures. The helper's volume and radio
+      // reports are dropped, so the machine's own state never reaches a card; the devices notice is off while this is set up.
+      await nativeBrowser.evaluate(`(async()=>{
+        const url=process.getBuiltinModule('url').pathToFileURL(process.getBuiltinModule('path').join(smokeElectron.app.getAppPath(),'out','src','main','devices.js')).href;
+        const vm=process.getBuiltinModule('vm');
+        const proto=(await vm.runInThisContext('import('+JSON.stringify(url)+')',{importModuleDynamically:vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER})).DeviceStatus.prototype;
+        const publish=proto.publish;
+        globalThis.smokeDevicesCaught=new Promise(r=>{proto.publish=function(...a){proto.publish=publish;r(this);return publish.apply(this,a)}});
+        return true})()`);
+      // This machine's own device names, kept in memory only, to prove none reaches a picture.
+      await mainPage.evaluate("window.lumilan.devices({action:'refresh'})");
+      own = await until(() => mainPage.evaluate<string[] | false>("window.lumilan.devicesState().then(v=>!v.pending.length&&[v.wifi?.ssid,...(v.bluetooth?.devices||[]),...v.displays.map(d=>d.label)].filter(n=>typeof n==='string'&&n.length>2))"), 'own device names', 30000);
+      await nativeBrowser.evaluate(`(async()=>{
+        const d=globalThis.smokeDevices=await smokeDevicesCaught;delete globalThis.smokeDevicesCaught;
+        globalThis.smokeDeviceFixture={wifi:{connected:true,ssid:'Studio Wi-Fi',signal:86,band:'5 GHz'},bluetooth:{devices:[]},volume:{level:40,muted:false}};
+        globalThis.smokeRealDisplays=d.options.displays;
+        d.options.displays=()=>[{width:2560,height:1600,scale:2,primary:true,internal:true,label:'Built-in display'}];
+        d.probe=async part=>structuredClone(smokeDeviceFixture[part]);
+        d.set=()=>{};d.link=()=>{};d.addresses.clear();d.links.clear();
+        await d.refresh(['wifi','bluetooth','volume'],true);return true})()`);
+      const devicesShown = await mainPage.evaluate<string>('window.lumilan.devicesState().then(v=>JSON.stringify(v))');
+      assert(devicesShown.includes('Studio Wi-Fi') && devicesShown.includes('Built-in display'), `Device fixture not in use: ${devicesShown}`);
+      // A demo sticker: Lumi itself, encoded the way an import is.
+      const { encodeSticker } = await import('../src/main/sticker-image.js');
+      const sticker = await encodeSticker(await require('sharp')(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 140" width="320" height="280"><defs><radialGradient id="g" cx="38%" cy="25%" r="80%"><stop offset="0" stop-color="#fff0bd"/><stop offset=".55" stop-color="#ffd36d"/><stop offset="1" stop-color="#f2ad38"/></radialGradient><linearGradient id="f" x2="0" y2="1"><stop stop-color="#f3b24a"/><stop offset="1" stop-color="#d98b2c"/></linearGradient></defs><ellipse cx="62" cy="123" rx="13" ry="8" fill="url(#f)"/><ellipse cx="98" cy="123" rx="13" ry="8" fill="url(#f)"/><path d="M34 78C18 70 8 84 14 98C18 106 28 106 34 100Z" fill="url(#g)"/><path d="M126 78C142 70 152 84 146 98C142 106 132 106 126 100Z" fill="url(#g)" transform="rotate(-38 126 78)"/><path d="M80 15C117 15 138 40 138 78C138 108 113 121 80 121C47 121 22 108 22 78C22 40 43 15 80 15Z" fill="url(#g)"/><path d="M80 16c-1-7 3-12 9-11c-4 2-6 6-5 11" fill="none" stroke="#f2ad38" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><ellipse cx="50" cy="38" rx="11" ry="6" fill="#fff" opacity=".4" transform="rotate(-30 50 38)"/><ellipse cx="60" cy="74" rx="9" ry="11.5" fill="#2b2d31"/><ellipse cx="100" cy="74" rx="9" ry="11.5" fill="#2b2d31"/><circle cx="63.5" cy="69" r="3.5" fill="#fff"/><circle cx="103.5" cy="69" r="3.5" fill="#fff"/><path d="M73 90q7 7 14 0" fill="none" stroke="#3a3335" stroke-width="3" stroke-linecap="round"/><ellipse cx="44" cy="88" rx="8" ry="4.5" fill="#ff8d8d" opacity=".45"/><ellipse cx="116" cy="88" rx="8" ry="4.5" fill="#ff8d8d" opacity=".45"/></svg>`)).png().toBuffer(), 'import');
+      const demo = {
+        en: { team: 'Design team', hello: 'Good morning! The design review is ready. Everything stays on our local network.',
+          plan: 'Perfect. Let’s review the updates together.\n\n1. Check the new layout\n2. Share feedback\n3. Plan our next steps',
+          lumi: 'The new mockups are in. Take a look when you have a minute?',
+          tasks: ['Send the review notes', 'Book the meeting room', 'Update the mockups'], files: ['Design review.pdf', 'Moodboard.png'] },
+        id: { team: 'Tim desain', hello: 'Selamat pagi! Review desain sudah siap. Semuanya tetap di jaringan lokal kita.',
+          plan: 'Sip. Kita tinjau perubahannya bersama.\n\n1. Cek tata letak baru\n2. Beri masukan\n3. Susun langkah berikutnya',
+          lumi: 'Mockup barunya sudah masuk. Lihat kalau sempat, ya?',
+          tasks: ['Kirim catatan review', 'Pesan ruang rapat', 'Perbarui mockup'], files: ['Review desain.pdf', 'Moodboard.png'] },
+      } as const;
+      const fileDir = join(profile, 'readme-files'); mkdirSync(fileDir);
+      // Read both demo conversations in the focused window, which also clears their Lumi cards. A thread an earlier check
+      // asked to open would keep the app from marking anything read, so that is reset first.
+      const readDemo = async (label: string) => {
+        await nativeBrowser.evaluate('smokeMain.show();smokeMain.focus()');
+        await until(() => nativeBrowser.evaluate('smokeMain.isVisible()&&smokeMain.isFocused()'), `${label}: focused demo window`);
+        for (const peer of [testThird.id, testPeer.id]) {
+          await mainPage.evaluate('window.lumilan.currentThread(null)');
+          await nativeBrowser.evaluate(`smokeMain.webContents.send('lumilan:open-thread',${JSON.stringify(peer)})`);
+          await until(() => mainPage.evaluate(`window.lumilan.currentThread(${JSON.stringify(peer)}).then(()=>window.lumilan.state()).then(s=>!s.unread[${JSON.stringify(peer)}])`), `${label}: demo conversation read`);
+        }
+      };
+      const theme = await mainPage.evaluate<string | undefined>('document.documentElement.dataset.theme');
+      await companionPage.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+      try {
+        for (const language of ['en', 'id'] as const) {
+          const text = demo[language];
+          await nativeBrowser.evaluate(`smokeMain.show();smokeMain.focus();smokeMain.webContents.send('lumilan:open-thread',${JSON.stringify(testPeer.id)})`);
+          // Start each language from an empty demo: no messages, unread badges, tasks or shelf items from the checks above.
+          await mainPage.evaluate(`(async()=>{const l=document.querySelector('#language-select');l.value=${JSON.stringify(language)};l.dispatchEvent(new Event('change'));await window.lumilan.rename('Design Studio');const s=await window.lumilan.state();
+            for(const peer of ${JSON.stringify([testPeer.id, testThird.id])}){const ids=s.messages.filter(m=>!m.roomId&&!m.note&&((m.from===peer&&m.to===s.me.id)||(m.to===peer&&m.from===s.me.id))).map(m=>m.id);if(ids.length)await window.lumilan.deleteMessages(peer,ids)}
+            for(const t of (await window.lumilan.tasksState()).items)await window.lumilan.tasks({action:'delete',value:t.id});
+            for(const f of (await window.lumilan.shelf({op:'list'})).items)await window.lumilan.shelf({op:'remove',id:f.id});
+            document.querySelectorAll('dialog[open]').forEach(d=>d.close());return true})()`);
+          testPeer.rename(text.team); testThird.rename('Maya');
+          await until(() => mainPage.evaluate(`document.documentElement.lang===${JSON.stringify(language)}`), `main window in ${language}`);
+          await until(() => mainPage.evaluate(`document.getElementById('message-input').placeholder.includes(${JSON.stringify(text.team)})`), `${language} demo conversation open`)
+            .catch(async (error: unknown) => { throw new Error(`${error instanceof Error ? error.message : String(error)}: ${await mainPage.evaluate("document.getElementById('message-input').placeholder")}`); });
+          await mainPage.evaluate("document.getElementById('call-dismiss')?.click()");
+          await testPeer.sendMessage(text.hello, appState.me.id);
+          const mine = await mainPage.evaluate<string>(`window.lumilan.message(${JSON.stringify(text.plan)},${JSON.stringify(testPeer.id)}).then(r=>r.message.id)`);
+          await testPeer.react(appState.me.id, mine, '❤️');
+          await testPeer.sendSticker(sticker.bytes, sticker, appState.me.id);
+          await until(() => mainPage.evaluate(`(()=>{const m=document.getElementById('messages'),s=m.querySelector('.sticker-image');return m.textContent.includes(${JSON.stringify(text.hello.slice(0, 12))})&&!!m.querySelector('#message-${mine} .message-reactions button')&&!!s&&s.complete&&s.naturalWidth>0})()`), `${language} demo conversation`);
+          await readDemo(language);
+          await until(() => mainPage.evaluate(`document.getElementById('message-input').placeholder.includes(${JSON.stringify(text.team)})`), `${language} demo conversation still open`);
+          await until(() => mainPage.evaluate("[...document.querySelectorAll('#messages .bubble')].every(e=>getComputedStyle(e).opacity==='1')&&!document.getElementById('toast')?.classList.contains('visible')"), 'demo message animations completed and no toast', 15000);
+          await mainPage.send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 760, deviceScaleFactor: 1, mobile: false });
+          for (const theme of ['light', 'dark']) {
+            await mainPage.evaluate(`document.documentElement.dataset.theme='${theme}';document.getElementById('messages').scrollTop=1e6;new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+            await waitUiAnimations();
+            await save(`chat-${theme}-${language}.png`, (await mainPage.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, mainPage);
+          }
+          // Settings → Lumi as it ships: the device notices switch on (the fixture stays in place), the dialog fully faded in.
+          await notchSettings('{notchDevices:true}');
+          await mainPage.evaluate("document.documentElement.dataset.theme='light';document.getElementById('settings-button').click();document.getElementById('settings-tab-lumi').click();new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))");
+          await waitUiAnimations();
+          await until(() => mainPage.evaluate("(d=>d.open&&getComputedStyle(d).opacity==='1'&&!document.getAnimations().some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity)&&document.getElementById('notch-devices').checked)(document.getElementById('settings-dialog'))"), 'Settings fully shown', 8000);
+          await delay(300);
+          await save(`settings-${language}.png`, (await mainPage.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, mainPage);
+          await mainPage.evaluate("document.querySelectorAll('dialog[open]').forEach(d=>d.close());true");
+          await mainPage.send('Emulation.clearDeviceMetricsOverride', {});
+        }
+        // Lumi, with the main window away as in daily use. Every chat picture is taken first: a focus session and the
+        // hidden window below would otherwise leave a toast and unread badges in them.
+        await background();
+        const page = companionPage;
+        for (const language of ['en', 'id'] as const) {
+          const text = demo[language];
+          await mainPage.evaluate(`(()=>{const l=document.querySelector('#language-select');l.value=${JSON.stringify(language)};l.dispatchEvent(new Event('change'));return true})()`);
+          testPeer.rename(text.team);
+          await until(() => page.evaluate(`document.documentElement.lang===${JSON.stringify(language)}`), `Lumi in ${language}`);
+          // Only this demo's cards and items: older ones from the checks above (or the English pass) are read or removed.
+          await readDemo(`Lumi ${language}`);
+          await mainPage.evaluate(`(async()=>{for(const t of (await window.lumilan.tasksState()).items)await window.lumilan.tasks({action:'delete',value:t.id});
+            for(const f of (await window.lumilan.shelf({op:'list'})).items)await window.lumilan.shelf({op:'remove',id:f.id});return true})()`);
+          for (const key of await page.evaluate<string[]>('window.lumi.state().then(s=>s.items.filter(i=>i.kind!=="message").map(i=>i.key))'))
+            await page.evaluate(`window.lumi.action({type:'open',key:${JSON.stringify(key)}}).then(()=>true,()=>false)`);
+          await background();
+          await until(() => page.evaluate('window.lumi.state().then(s=>s.items.length===0)'), 'empty Lumi queue', 10000)
+            .catch(async () => console.warn('README: Lumi still lists', await page.evaluate('window.lumi.state().then(s=>s.items.map(i=>i.kind))')));
+          // The island hangs from the top edge of a transparent window: shoot the whole window width on a plain backdrop, at 2x.
+          const shot = async (name: string, ready: string) => {
+            await until(() => page.evaluate(`(${ready})&&${settled}`), `${name} ready`);
+            await page.evaluate("document.documentElement.style.background='linear-gradient(180deg,#d8d5ce,#ebe8e2)';new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))");
+            try {
+              const height = await page.evaluate<number>(`Math.min(innerHeight,Math.ceil(${island}.bottom+36))`);
+              await save(`lumi-${name}-${language}.png`, (await page.send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: await page.evaluate<number>('innerWidth'), height, scale: 2 } })).data, page);
+            } finally { await page.evaluate("document.documentElement.style.removeProperty('background');true"); }
+          };
+          const expanded = (tab: string) => page.evaluate(`window.lumi.action({type:'expand'}).then(()=>{document.getElementById('tab-${tab}').click();return true})`);
+          const collapse = async () => { await page.evaluate("window.lumi.action({type:'collapse'})"); await until(() => page.evaluate("document.body.dataset.mode==='hidden'"), 'Lumi closed', 5000); };
+          await until(() => page.evaluate("document.body.dataset.mode==='hidden'"), 'Lumi idle', 20000);
+          await testPeer.sendMessage(text.lumi, appState.me.id);
+          await shot('message', `document.body.dataset.mode==='compact'&&document.getElementById('body').textContent.includes(${JSON.stringify(text.lumi.slice(0, 10))})`);
+          await page.evaluate("window.lumi.action({type:'expand'})");
+          await shot('message-open', "document.body.dataset.mode==='expanded'");
+          // Read it, so the device notices below carry no activity count.
+          await readDemo(`Lumi ${language} message`);
+          await background();
+          await until(() => page.evaluate("document.body.dataset.mode==='hidden'"), 'Lumi idle after the message', 10000);
+          await until(() => page.evaluate('window.lumi.state().then(s=>s.items.length===0)'), 'demo message read', 8000).catch(() => console.warn('README: the demo message stayed in Lumi'));
+          // Device notices from the fixture: the volume bar as a key press shows it, then headphones connecting.
+          await notchSettings('{notchDevices:true}');
+          await delay(1500);
+          await nativeBrowser.evaluate("Object.getPrototypeOf(smokeDevices).set.call(smokeDevices,'volume',{level:64,muted:false});true");
+          await shot('volume', "document.body.dataset.mode==='compact'&&!document.getElementById('level').hidden&&document.getElementById('badge').textContent==='64%'");
+          await until(() => page.evaluate("document.body.dataset.mode==='hidden'"), 'volume bar closes', 5000);
+          await nativeBrowser.evaluate("smokeDeviceFixture.bluetooth={devices:['Studio Headphones']};smokeDevices.refresh(['bluetooth'],true).then(()=>true)");
+          await shot('bluetooth', "document.body.dataset.mode==='compact'&&document.getElementById('island').textContent.includes('Studio Headphones')");
+          await until(() => page.evaluate("document.body.dataset.mode==='hidden'"), 'Bluetooth notice closes', 10000);
+          // Back to the starting fixture without a card, for the next language.
+          await notchSettings('{notchDevices:false}');
+          await nativeBrowser.evaluate("smokeDeviceFixture.bluetooth={devices:[]};Object.getPrototypeOf(smokeDevices).set.call(smokeDevices,'volume',{level:40,muted:false});smokeDevices.refresh(['bluetooth'],true).then(()=>true)");
+          // Pages: a running focus session, tasks, the shelf and Perangkat.
+          await mainPage.evaluate("window.lumilan.setFocus(25).then(()=>window.lumilan.focus({type:'start',minutes:25}))");
+          await expanded('focus');
+          await shot('focus', "document.getElementById('page-focus').dataset.current==='true'&&!document.getElementById('clock').hidden");
+          await mainPage.evaluate("window.lumilan.focus({type:'end'}).then(()=>window.lumilan.setFocus(0))");
+          await collapse();
+          for (const title of text.tasks) await mainPage.evaluate(`window.lumilan.tasks({action:'add',value:{title:${JSON.stringify(title)}}})`);
+          await mainPage.evaluate("window.lumilan.tasksState().then(v=>window.lumilan.tasks({action:'toggle',value:v.items.at(-1).id}))");
+          await expanded('tasks');
+          await shot('tasks', `document.getElementById('page-tasks').dataset.current==='true'&&document.querySelectorAll('#tasks-list li').length===${text.tasks.length}`);
+          await collapse();
+          const files = text.files.map(name => join(fileDir, name));
+          writeFileSync(files[0]!, Buffer.alloc(240 * 1024, 32)); writeFileSync(files[1]!, Buffer.alloc(1200 * 1024, 7));
+          await page.evaluate("(()=>{if(!document.getElementById('smoke-readme-files')){const i=document.createElement('input');i.type='file';i.multiple=true;i.id='smoke-readme-files';i.hidden=true;document.body.append(i)}return true})()");
+          const dom = await page.send('DOM.getDocument');
+          const input = await page.send('DOM.querySelector', { nodeId: dom.root.nodeId, selector: '#smoke-readme-files' });
+          await page.send('DOM.setFileInputFiles', { nodeId: input.nodeId, files });
+          for (const type of ['dragenter', 'drop']) {
+            if (type === 'drop') await until(() => page.evaluate(`document.getElementById('page-shelf').dataset.current==='true'&&${settled}`), 'shelf open for the drop');
+            await page.evaluate(`(()=>{const d=new DataTransfer();for(const f of document.getElementById('smoke-readme-files').files)d.items.add(f);const b=document.getElementById('island').getBoundingClientRect();document.getElementById('island').dispatchEvent(new DragEvent('${type}',{bubbles:true,cancelable:true,dataTransfer:d,clientX:b.left+b.width/2,clientY:b.top+Math.min(20,b.height/2)}));return true})()`);
+          }
+          await shot('shelf', `document.getElementById('page-shelf').dataset.current==='true'&&document.querySelectorAll('#shelf-list li').length===${files.length}`);
+          await collapse();
+          await expanded('devices');
+          await shot('devices', "document.getElementById('page-devices').dataset.current==='true'&&document.getElementById('devices-list').textContent.includes('Studio Wi-Fi')&&!document.getElementById('devices-refresh').disabled");
+          await collapse();
+        }
+        console.log('README: chat light/dark, Settings → Lumi and Lumi screenshots in English and Indonesian written to docs/screenshots');
+      } finally {
+        await nativeBrowser.evaluate("(()=>{const d=globalThis.smokeDevices;if(d){delete d.probe;delete d.set;delete d.link;d.options.displays=smokeRealDisplays}for(const k of ['smokeDevices','smokeDeviceFixture','smokeRealDisplays'])delete globalThis[k];return true})()");
+        // Hand the checks below the state they expect: their names, theme, settings, and no demo items.
+        await companionPage.send('Emulation.setEmulatedMedia', { features: [] });
+        testPeer.rename('Alice LAN'); testThird.rename('Citra LAN');
+        await mainPage.evaluate(`(async()=>{await window.lumilan.rename(${JSON.stringify(appState.me.name)});${theme === undefined ? "delete document.documentElement.dataset.theme" : `document.documentElement.dataset.theme=${JSON.stringify(theme)}`};
+          for(const t of (await window.lumilan.tasksState()).items)await window.lumilan.tasks({action:'delete',value:t.id});
+          for(const f of (await window.lumilan.shelf({op:'list'})).items)await window.lumilan.shelf({op:'remove',id:f.id});
+          await window.lumilan.setNotificationSettings({enabled:true,preview:true,silent:true,background:true,notch:true,notchIdle:'always',notchDevices:true});return true})()`);
+        await background();
+      }
+    }
     await companionPage.evaluate("window.lumi.action({type:'peek'})");
     await click('mascot'); await click('more'); await click('pause');
     // Trusted input completion does not await IPC or Chromium's visibility update.
@@ -1982,32 +2174,6 @@ public static class SmokeVolume { public static void Set(float level) { var e = 
     console.log('Notifications: background system fallback routing and focused conversation suppression passed (OS banner delivery not asserted)');
     await nativeBrowser.evaluate('smokeMain.show();smokeMain.focus()');
     await assertMainMotionVisible();
-    if (process.env.LUMILAN_README_SCREENSHOTS === '1') {
-      // Export real application pixels from this disposable, loopback-only demo.
-      await nativeBrowser.evaluate(`smokeMain.show();smokeMain.focus();smokeMain.webContents.send('lumilan:open-thread',${JSON.stringify(testPeer.id)})`);
-      await mainPage.evaluate(`(async()=>{const s=await window.lumilan.state();const ids=s.messages.filter(m=>!m.roomId&&!m.note&&((m.from===${JSON.stringify(testPeer.id)}&&m.to===s.me.id)||(m.to===${JSON.stringify(testPeer.id)}&&m.from===s.me.id))).map(m=>m.id);if(ids.length)await window.lumilan.deleteMessages(${JSON.stringify(testPeer.id)},ids);await window.lumilan.rename('Design Studio');document.querySelectorAll('dialog[open]').forEach(d=>d.close());document.querySelector('#language-select').value='en';document.querySelector('#language-select').dispatchEvent(new Event('change'));})()`);
-      testPeer.rename('Design team');
-      await until(()=>mainPage.evaluate("document.getElementById('message-input').placeholder.includes('Design team')"),'demo peer name');
-      await mainPage.evaluate("document.getElementById('call-dismiss').click()");
-      assert.match(await mainPage.evaluate("document.getElementById('composer-key-hint').textContent"),/Enter to send/,'Composer hint did not follow the current language');
-      await testPeer.sendMessage('Good morning! The design review is ready. Everything stays on our local network.',appState.me.id);
-      await mainPage.evaluate(`window.lumilan.message(${JSON.stringify('Perfect. Let’s review the updates together.\n\n1. Check the new layout\n2. Share feedback\n3. Plan our next steps')},${JSON.stringify(testPeer.id)})`);
-      await testPeer.sendMessage('Sounds good. You can also send files or start a voice call here.',appState.me.id);
-      await until(()=>mainPage.evaluate("document.getElementById('messages').textContent.includes('Sounds good.')"),'demo conversation');
-      await until(()=>mainPage.evaluate("[...document.querySelectorAll('#messages .bubble')].every(e=>getComputedStyle(e).opacity==='1')"),'demo message animations completed');
-      await mainPage.send('Emulation.setDeviceMetricsOverride',{width:1100,height:760,deviceScaleFactor:1,mobile:false});
-      for (const theme of ['light','dark']) {
-        await mainPage.evaluate(`document.documentElement.dataset.theme='${theme}';new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
-        await waitUiAnimations();
-        const shot=await mainPage.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
-        writeFileSync(join(dist,`readme-chat-${theme}.png`),Buffer.from(shot.data,'base64'));
-      }
-      await mainPage.evaluate("document.getElementById('settings-button').click();new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))");
-      await waitUiAnimations();
-      const shot=await mainPage.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
-      writeFileSync(join(dist,'readme-settings.png'),Buffer.from(shot.data,'base64'));
-      console.log('README: real light/dark chat and settings screenshots exported from isolated demo');
-    }
     const unexpected = failures.filter(text => text !== 'Permissions policy violation: microphone is not allowed in this document.');
     assert.deepEqual(unexpected, [], `Renderer errors: ${unexpected.join('; ')}`);
     assert.deepEqual(cdp.swallowedRejections(handlerErrors), [], 'The main process rejected requests Lumi or the main window hid');

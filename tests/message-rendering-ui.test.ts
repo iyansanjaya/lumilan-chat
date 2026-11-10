@@ -86,3 +86,33 @@ test('line breaks keep list items separate and preserve safe inline formatting a
   assert.equal(nodes.some(node => node.tag === 'script'), false);
   assert.equal(nodes.filter(node => node.tag === 'br').length, 1);
 });
+
+test('people shown in a Room get a one-click private message button only when they are someone else and online', () => {
+  const helpers = section('function canMessage(', '\nfunction renderDetails(');
+  class Button {
+    type = ''; className = ''; title = ''; attributes = new Map<string, string>(); listeners = new Map<string, () => void>();
+    setAttribute(name: string, value: string) { this.attributes.set(name, value); }
+    addEventListener(type: string, listener: () => void) { this.listeners.set(type, listener); }
+  }
+  const opened: (string | null)[] = [];
+  const context = vm.createContext({
+    state: { me: { id: 'me' }, thread: 'room:design', users: [{ id: 'nopools' }, { id: 'ucok' }] },
+    document: { createElement: () => new Button() },
+    t: (key: string, values: Record<string, string>) => key.replace('{name}', values.name ?? ''),
+    selectThread: (id: string | null) => opened.push(id),
+  });
+  vm.runInContext(helpers, context);
+  const run = <T>(code: string) => vm.runInContext(code, context) as T;
+  assert.equal(run('canMessage("nopools")'), true);
+  assert.equal(run('canMessage("me")'), false, 'Offered a private message to yourself');
+  assert.equal(run('canMessage("offline")'), false, 'Offered a private message to someone offline');
+  run('state.thread = "nopools"');
+  assert.equal(run('canMessage("nopools")'), false, 'Offered the conversation that is already open');
+  const button = run<Button>('messageButton("ucok", "Ucok", "member-message-button")');
+  assert.equal(button.type, 'button');
+  assert.equal(button.className, 'member-message-button');
+  assert.equal(button.title, 'Kirim pesan ke Ucok');
+  assert.equal(button.attributes.get('aria-label'), 'Kirim pesan ke Ucok');
+  button.listeners.get('click')?.();
+  assert.deepEqual(opened, ['ucok'], 'The button did not open the private conversation');
+});

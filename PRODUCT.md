@@ -23,7 +23,7 @@ Lumilan Chat adalah aplikasi pesan jaringan lokal. Perangkat saling menemukan di
 
 ## Positioning
 
-Privat sejak dirancang. Tanpa akun, tanpa server chat pusat, tanpa relay internet. Percakapan dan file tetap di LAN; satu-satunya koneksi keluar adalah pengambilan pratinjau tautan opsional (opt-in) dari perangkat pengirim. Lumi, sang pendamping, adalah bonus di atas janji itu, bukan alasan produk ini ada.
+Privat sejak dirancang. Tanpa akun, tanpa server chat pusat, tanpa relay internet. Percakapan dan file tetap di LAN; satu-satunya koneksi keluar adalah pengambilan pratinjau tautan opsional (opt-in) dari perangkat pengirim. Lumi, sang pendamping, adalah fitur unggulan yang paling membedakan Lumilan dan menjadi pesan utama situs serta README untuk calon pengguna; Lumi berdiri di atas janji privasi LAN itu, tidak pernah menggantikannya.
 
 ## Operating Context
 
@@ -48,7 +48,7 @@ Fungsi yang dikonfirmasi:
 - Panggilan suara satu-ke-satu melalui jaringan lokal.
 - Pengingat: jadwal pribadi, atau permintaan ke kontak online yang harus memilih waktu dan menerima.
 - Pratinjau tautan: kartu statis (judul, akun, thumbnail kecil, Buka di browser) untuk YouTube, Shorts, dan Instagram saat tersedia tanpa login; Facebook, Threads, dan X mendapat kartu tautan lokal. Pengambilan bersifat opt-in dan hanya terjadi di perangkat pengirim.
-- Halaman Lumi: Aktivitas, Fokus (sesi 25/45/60 menit yang mengatur Jangan Ganggu), Rutinitas (asupan air dan pengingatnya), Tugas, dan Rak (hingga 10 file yang disimpan dekat untuk ditarik keluar, dikirim, atau disimpan ke Catatan pribadi). Kabar perangkat untuk charger, jaringan, dan perangkat yang online.
+- Halaman Lumi: Aktivitas, Fokus (sesi 25/45/60 menit yang mengatur Jangan Ganggu), Rehat (layar rehat dengan hitung mundur), Rutinitas (asupan air dan pengingatnya), Tugas, Rak (hingga 10 file yang disimpan dekat untuk ditarik keluar, dikirim, atau disimpan ke Catatan pribadi), dan Perangkat (layar, Wi-Fi, Bluetooth, volume; hanya dibaca). Kabar perangkat untuk charger, layar, jaringan, dan perangkat yang online, serta kabar langsung bar volume, Bluetooth tersambung/terputus, dan Wi-Fi berganti; gulir roda di atas Lumi mengubah volume (macOS: tanpa kabar tombol volume dan Bluetooth langsung).
 - Rehat kerja: siklus kerja/istirahat dengan pengingat jatuh tempo satu menit, lalu setiap layar meredup dengan hitung mundur; tunda, lewati, atau akhiri lebih awal. Rehat menunggu selama Jangan Ganggu, panggilan, lock, dan sleep.
 - Setiap halaman Lumi juga punya rumah di Pengaturan jendela utama, untuk Wayland dan untuk pengguna yang menonaktifkan Lumi.
 
@@ -76,7 +76,7 @@ Belum diputuskan: belum ada rencana yang dikonfirmasi untuk penandatanganan kode
 
 ## Evidence on Hand
 
-- Tangkapan layar: `docs/screenshots/chat-light.png`, `docs/screenshots/chat-dark.png`, `docs/screenshots/settings.png`. Diambil pada profil demo terisolasi dan perangkat uji lokal; tidak berisi percakapan pengguna.
+- Tangkapan layar di `docs/screenshots/`, masing-masing dalam bahasa Inggris (`-en`) dan Indonesia (`-id`): `chat-light`, `chat-dark`, `settings` (kategori Lumi), dan Lumi (`lumi-message`, `lumi-message-open`, `lumi-volume`, `lumi-bluetooth`, `lumi-focus`, `lumi-tasks`, `lumi-shelf`, `lumi-devices`). Dibuat dari build Windows oleh `LUMILAN_README_SCREENSHOTS=1 bun run smoke:notch` pada profil demo terisolasi, peer loopback, dan data perangkat fixture; tidak berisi percakapan pengguna atau nama perangkat milik penguji.
 - Changelog: `CHANGELOG.md` dan `CHANGELOG.id.md`, riwayat fitur per rilis.
 - Dokumentasi: `README.md`, `README.id.md` (pengembang), `README.public.md`, `README.public.id.md` (untuk pengguna), `LICENSE`, `LICENSE.id.md`.
 - Distribusi: repo publik `iyansanjaya/lumilan-chat` dengan GitHub Releases untuk paket Windows, macOS, dan Linux.

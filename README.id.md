@@ -8,7 +8,26 @@
 
 Lumilan menghubungkan perangkat secara langsung melalui LAN atau Wi-Fi yang sama. Tanpa akun, server chat pusat, atau relay internet. Buka aplikasi, pilih nama, lalu mulai percakapan.
 
-![Lumilan Chat dalam tema terang — percakapan langsung pada jaringan demo terisolasi](docs/screenshots/chat-light.png)
+![Lumilan Chat dalam tema terang — percakapan langsung pada jaringan demo terisolasi](docs/screenshots/chat-light-id.png)
+
+## Kenalan dengan Lumi
+
+Lumi adalah pulau hitam kecil yang menggantung dari tepi atas layar. Saat ada kabar ketika Anda sedang di aplikasi lain, Lumi membesar menjadi kartu, lalu mengecil lagi menjadi pill berisi jam. Lumi tidak pernah merebut keyboard dari aplikasi yang sedang Anda pakai, dan menunggu saat Jangan ganggu, bisu, layar terkunci, dan tidur.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/lumi-message-open-id.png" alt="Lumi terbuka pada pesan dari Tim desain"><br><sub><b>Pesan, file, dan panggilan</b>: buka percakapan, terima atau tolak file, jawab panggilan.</sub></td>
+<td width="50%"><img src="docs/screenshots/lumi-volume-id.png" alt="Bar volume Lumi pada 64%"><br><img src="docs/screenshots/lumi-bluetooth-id.png" alt="Lumi: Studio Headphones tersambung"><br><sub><b>Perangkat Anda</b>: bar volume mengikuti tombol volume, gulir di atas Lumi untuk mengubahnya, dan perubahan headphone atau Wi-Fi tampil sekilas.</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/lumi-focus-id.png" alt="Halaman Fokus Lumi dengan sesi berjalan"><br><sub><b>Fokus</b>: 25, 45, atau 60 menit; kontak melihat Jangan ganggu.</sub></td>
+<td><img src="docs/screenshots/lumi-tasks-id.png" alt="Halaman Tugas Lumi"><br><sub><b>Tugas</b>: tambah dan centang tugas tanpa membuka jendela.</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/lumi-shelf-id.png" alt="Halaman Rak Lumi dengan dua file"><br><sub><b>Rak</b>: jatuhkan file ke Lumi, seret keluar, atau kirim ke kontak.</sub></td>
+<td><img src="docs/screenshots/lumi-devices-id.png" alt="Halaman Perangkat Lumi"><br><sub><b>Perangkat</b>: layar, Wi-Fi, Bluetooth, dan volume, hanya dibaca di komputer Anda.</sub></td>
+</tr>
+</table>
 
 ## Ruang kerja yang dekat dengan Anda
 
@@ -26,11 +45,11 @@ Lumilan menghubungkan perangkat secara langsung melalui LAN atau Wi-Fi yang sama
 <details>
 <summary><strong>Lihat tema gelap dan pengaturan</strong></summary>
 
-![Lumilan Chat dalam tema gelap](docs/screenshots/chat-dark.png)
+![Lumilan Chat dalam tema gelap](docs/screenshots/chat-dark-id.png)
 
-![Profil dan pengaturan tampilan](docs/screenshots/settings.png)
+![Pengaturan, kategori Lumi](docs/screenshots/settings-id.png)
 
-Screenshot memakai profil demo terisolasi dan perangkat uji lokal; tidak memuat percakapan pengguna.
+Screenshot berasal dari build Windows dengan profil demo terisolasi, perangkat uji lokal, dan nama perangkat demo; tidak memuat percakapan pengguna.
 
 </details>
 

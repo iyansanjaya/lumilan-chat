@@ -8,7 +8,26 @@
 
 Lumilan connects devices directly on the same LAN or Wi-Fi. No accounts, central chat server, or internet relay. Open the app, choose a name, and start a conversation.
 
-![Lumilan Chat in light mode — direct conversation on an isolated demo network](docs/screenshots/chat-light.png)
+![Lumilan Chat in light mode — direct conversation on an isolated demo network](docs/screenshots/chat-light-en.png)
+
+## Meet Lumi
+
+Lumi is a small black island that hangs from the top edge of your screen. When something arrives while you are in another app, it grows into a card, then shrinks back to a pill with the time. It never takes the keyboard from the app you are using, and it waits during Do not disturb, mute, a locked screen, and sleep.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/lumi-message-open-en.png" alt="Lumi open on a message from Design team"><br><sub><b>Messages, files, and calls</b>: open the conversation, accept or decline a file, answer a call.</sub></td>
+<td width="50%"><img src="docs/screenshots/lumi-volume-en.png" alt="Lumi's volume bar at 64%"><br><img src="docs/screenshots/lumi-bluetooth-en.png" alt="Lumi: Studio Headphones connected"><br><sub><b>Your devices</b>: the volume bar follows your volume keys, scroll over Lumi to change it, and headphones or Wi-Fi changes show at a glance.</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/lumi-focus-en.png" alt="Lumi's Focus page with a running session"><br><sub><b>Focus</b>: 25, 45, or 60 minutes; contacts see Do not disturb.</sub></td>
+<td><img src="docs/screenshots/lumi-tasks-en.png" alt="Lumi's Tasks page"><br><sub><b>Tasks</b>: add and tick off tasks without opening the window.</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/lumi-shelf-en.png" alt="Lumi's Shelf page with two files"><br><sub><b>Shelf</b>: drop files on Lumi, drag them out, or send them to a contact.</sub></td>
+<td><img src="docs/screenshots/lumi-devices-en.png" alt="Lumi's Devices page"><br><sub><b>Devices</b>: displays, Wi-Fi, Bluetooth, and volume, read on your computer only.</sub></td>
+</tr>
+</table>
 
 ## A workspace that stays close
 
@@ -26,11 +45,11 @@ Lumilan connects devices directly on the same LAN or Wi-Fi. No accounts, central
 <details>
 <summary><strong>See dark mode and settings</strong></summary>
 
-![Lumilan Chat in dark mode](docs/screenshots/chat-dark.png)
+![Lumilan Chat in dark mode](docs/screenshots/chat-dark-en.png)
 
-![Profile and appearance settings](docs/screenshots/settings.png)
+![Settings, Lumi category](docs/screenshots/settings-en.png)
 
-Screenshots use isolated demo profiles and local test devices; they contain no user conversations.
+Screenshots come from the Windows build with isolated demo profiles, local test devices, and demo device names; they contain no user conversations.
 
 </details>
 

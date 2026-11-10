@@ -2,7 +2,7 @@
 
 [Bahasa Indonesia](CHANGELOG.id.md)
 
-## 1.4.2
+## 1.5.0
 
 Changes from version 1.4.1.
 
@@ -14,6 +14,7 @@ Changes from version 1.4.1.
 - **Live device notices and volume wheel.** Like a phone's island, Lumi now reacts as things happen: a short volume bar when the volume or mute changes, a Bluetooth device's name when it connects or disconnects, and the network name when this computer joins another Wi-Fi. Scroll over Lumi to change the volume. On Windows a small hidden PowerShell process holds the system's audio and device events while Lumi shows; on Linux `pactl` and BlueZ are used. macOS does not detect volume keys or Bluetooth live yet, but the wheel works. **Settings → Lumi → Device updates and volume wheel** turns it off.
 - **What's new.** **Settings → App → What's new** lists what changed in each version, newest first, with the new ones marked **New**. After an update it opens once by itself; a fresh install does not open it. It reads the changelog that ships with the app, in Indonesian or English (other languages read the English one and say so), and leaves out the build and test notes meant for developers.
 - **The last minute of a focus session.** The pill counts down in seconds during the last minute, and Lumi shows the session card once a minute before the end, also under the session's own Do not disturb, so you can wrap up. It does not appear while you are watching the main window, while the screen is locked or asleep, or while the session is paused, and it does not count as activity.
+- **Message someone from a Room.** In a Conversation Room or Announcements, the message button next to a person under **Active people**, or the sender's name above their message, opens your private conversation with them. You no longer need to find them in the conversation list. It appears for people who are online, since a private message needs a reachable recipient.
 - **Why a sticker was skipped.** After an import, **Settings → Sticker packs** lists each skipped file by name with the reason: an unsupported format, a file over 20 MB, too many pixels, still over 500 KB after shrinking to 256 px, a damaged file, a file that cannot be opened, or a full pack. The first 20 are listed and the rest are counted. Only file names are shown, never their folders.
 
 ### Changed
@@ -72,13 +73,14 @@ Changes from version 1.4.1.
   - The search box in the sidebar above the filter tabs, with a one-row top bar.
   - An image sent from a loopback device raising its sender with a badge until it is answered.
   - The sticker picker staying open on a real pointer click on a pack tab, the skip reason for a file that is not an image, and **Manage stickers…** opening its category.
-- On Windows: 330 unit tests, packaging, package verification, the UI smoke test (3 runs), and the Lumi smoke test (3 runs) passed.
+- New README screenshots in English and Indonesian: chat in light and dark, **Settings → Lumi**, and Lumi's states and pages. `LUMILAN_README_SCREENSHOTS=1` on the Lumi smoke test takes them from the packaged build with an isolated demo profile, loopback peers, and fixture device data, and fails if a device name of the test machine would appear.
+- On Windows: 364 unit tests (1 skipped), packaging, package verification, the UI smoke test, and the Lumi smoke test passed on the final package.
 
 ### Platform notes
 
 - No new native dependency. Sticker images use the same image library bundled for Windows, macOS, and Linux, and the Settings, search, and contact list changes use no platform-specific code.
-- When these notes were written, version 1.4.2 had been tested on Windows only. The macOS (Intel and Apple Silicon) and Linux (X11 and Wayland) packages had not yet been tested.
-- The sticker network format is unchanged, so stickers sent from 1.4.2 still reach 1.4.1, and shortened animations arrive as ordinary stickers.
+- When these notes were written, version 1.5.0 had been tested on Windows only. The macOS (Intel and Apple Silicon) and Linux (X11 and Wayland) packages had not yet been tested.
+- The sticker network format is unchanged, so stickers sent from 1.5.0 still reach 1.4.1, and shortened animations arrive as ordinary stickers.
 - Current packages are unsigned. Windows or macOS may display a publisher warning; macOS system notifications require a signed application. Download packages from the [official Releases page](https://github.com/iyansanjaya/lumilan-chat/releases).
 
 ## 1.4.1

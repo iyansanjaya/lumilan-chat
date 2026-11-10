@@ -2,7 +2,7 @@
 
 [English](CHANGELOG.md)
 
-## 1.4.2
+## 1.5.0
 
 Perubahan dari versi 1.4.1.
 
@@ -14,6 +14,7 @@ Perubahan dari versi 1.4.1.
 - **Kabar perangkat langsung dan roda volume.** Seperti island di ponsel, Lumi kini bereaksi saat kejadiannya terjadi: bar volume singkat saat volume atau bisu berubah, nama perangkat Bluetooth saat tersambung atau terputus, dan nama jaringan saat komputer ini berpindah ke Wi-Fi lain. Gulir di atas Lumi untuk mengubah volume. Di Windows, proses PowerShell kecil yang tersembunyi memegang event audio dan perangkat dari sistem selama Lumi tampil; di Linux memakai `pactl` dan BlueZ. macOS belum mendeteksi tombol volume dan Bluetooth secara langsung, tetapi roda tetap berfungsi. **Pengaturan → Lumi → Kabar perangkat dan roda volume** mematikannya.
 - **Apa yang baru.** **Pengaturan → Aplikasi → Apa yang baru** menampilkan perubahan setiap versi, dari yang terbaru, dengan versi baru ditandai **Baru**. Setelah pembaruan, halaman ini terbuka sekali dengan sendirinya; instalasi baru tidak membukanya. Isinya dibaca dari changelog yang ikut dalam aplikasi, dalam bahasa Indonesia atau Inggris (bahasa lain membaca versi Inggris dan diberi tahu), tanpa catatan build dan pengujian untuk pengembang.
 - **Menit terakhir sesi fokus.** Pill menghitung mundur per detik pada menit terakhir, dan Lumi menampilkan kartu sesi sekali, semenit sebelum selesai, juga di bawah Jangan ganggu milik sesi, agar Anda sempat merapikan pekerjaan. Kartu ini tidak muncul saat Anda melihat jendela utama, saat layar terkunci atau tidur, atau saat sesi dijeda, dan tidak dihitung sebagai aktivitas.
+- **Kirim pesan dari Ruang.** Di Ruang Percakapan atau Ruang Pengumuman, tombol pesan di samping seseorang di **Orang aktif**, atau nama pengirim di atas pesannya, membuka percakapan pribadi Anda dengannya. Anda tidak perlu lagi mencarinya di daftar percakapan. Tombol ini muncul untuk orang yang sedang online, karena pesan pribadi memerlukan penerima yang dapat dijangkau.
 - **Alasan stiker dilewati.** Setelah impor, **Pengaturan → Paket stiker** menampilkan setiap file yang dilewati beserta nama dan alasannya: format tidak didukung, file lebih dari 20 MB, piksel terlalu banyak, masih lebih dari 500 KB setelah diperkecil ke 256 px, file rusak, file tidak dapat dibuka, atau paket sudah penuh. 20 file pertama ditampilkan dan sisanya dihitung. Yang ditampilkan hanya nama file, tidak pernah foldernya.
 
 ### Perubahan
@@ -72,13 +73,14 @@ Perubahan dari versi 1.4.1.
   - Kotak pencarian di sidebar di atas tab filter, dengan bilah atas satu baris.
   - Gambar dari perangkat loopback yang menaikkan pengirimnya dengan badge sampai dijawab.
   - Pemilih stiker yang tetap terbuka saat tab paket diklik dengan pointer sungguhan, alasan untuk file yang bukan gambar, dan **Kelola stiker…** yang membuka kategorinya.
-- Di Windows: 330 tes unit, packaging, verifikasi paket, smoke UI (3 kali), dan smoke Lumi (3 kali) lulus.
+- Screenshot README diperbarui dalam bahasa Inggris dan Indonesia: chat terang/gelap, **Pengaturan → Lumi**, serta keadaan dan halaman Lumi. `LUMILAN_README_SCREENSHOTS=1` pada smoke Lumi membuatnya dari build terpaket dengan profil demo terisolasi, peer loopback, dan data perangkat fixture, lalu gagal bila nama perangkat milik mesin penguji muncul.
+- Di Windows: 364 tes unit (1 dilewati), packaging, verifikasi paket, smoke UI, dan smoke Lumi lulus pada paket akhir.
 
 ### Catatan platform
 
 - Tidak ada dependensi native baru. Gambar stiker memakai pustaka gambar yang sama yang dibundel untuk Windows, macOS, dan Linux, dan perubahan Pengaturan, pencarian, serta daftar kontak tidak memakai kode khusus platform.
-- Saat catatan ini ditulis, versi 1.4.2 baru diuji di Windows. Paket macOS (Intel dan Apple Silicon) serta Linux (X11 dan Wayland) belum diuji.
-- Format jaringan stiker tidak berubah, sehingga stiker dari 1.4.2 tetap sampai ke 1.4.1, dan animasi yang dipersingkat diterima sebagai stiker biasa.
+- Saat catatan ini ditulis, versi 1.5.0 baru diuji di Windows. Paket macOS (Intel dan Apple Silicon) serta Linux (X11 dan Wayland) belum diuji.
+- Format jaringan stiker tidak berubah, sehingga stiker dari 1.5.0 tetap sampai ke 1.4.1, dan animasi yang dipersingkat diterima sebagai stiker biasa.
 - Paket saat ini belum ditandatangani. Windows atau macOS mungkin menampilkan peringatan penerbit; notifikasi sistem macOS memerlukan aplikasi bertanda tangan. Unduh paket dari [halaman Releases resmi](https://github.com/iyansanjaya/lumilan-chat/releases).
 
 ## 1.4.1

@@ -1269,6 +1269,41 @@ async function main() {
     await evaluate("document.querySelector('#settings-dialog').close(); true");
     assert(existsSync(join(profile, 'lumilan', 'files', received.message.id)), 'A received sticker lost its file with the library');
     assert.match(await evaluate<string>(`window.lumilan.stickerImage(${JSON.stringify(received.message.id)})`, true), /^data:image\/webp;base64,/);
+    // From a Room, one click opens a private conversation with someone shown there: the Active people button and the
+    // sender's name over their message. You get neither for yourself.
+    const roomId = (await peerSide.createRoom('Ruang smoke', [stickerState.me.id])).id;
+    await waitFor(`window.lumilan.state().then(s => s.rooms.some(r => r.id === ${JSON.stringify(roomId)} && r.pending))`, 'Room invite from the peer');
+    await evaluate(`window.lumilan.acceptRoom(${JSON.stringify(roomId)})`, true);
+    for (const end = Date.now() + 15_000; !peerSide.state.rooms.find(r => r.id === roomId)?.members.includes(stickerState.me.id); await delay(100))
+      assert(Date.now() < end, 'The peer did not see the Room accepted');
+    const roomGreeting = await peerSide.sendRoomMessage('Halo dari Ruang smoke', roomId);
+    const dmButton = `document.querySelector('#active-members .member-message-button')`;
+    const author = `document.querySelector('#message-${roomGreeting.message.id} .message-author-button')`;
+    const openRoom = async () => {
+      await evaluate(`document.querySelector('#rooms-list [data-thread="room:${roomId}"]').click(); true`);
+      await waitFor(`document.getElementById('detail-title').textContent === 'Ruang smoke' && document.querySelectorAll('#active-members .detail-row').length === 2 && !!${dmButton} && !!${author}`, 'Room with a message button per person');
+    };
+    await openRoom();
+    assert.equal(await evaluate<number>("document.querySelectorAll('#active-members .member-message-button').length"), 1, 'Active people offered a private message to yourself');
+    // The label follows the app language, which this part of the smoke runs in English.
+    assert.match(await evaluate<string>(`${dmButton}.getAttribute('aria-label') + '|' + ${author}.getAttribute('aria-label')`), /^(Message|Kirim pesan ke) Stiker LAN\|(Message|Kirim pesan ke) Stiker LAN$/);
+    for (const [theme, width, height] of [['light', 1100, 800], ['dark', 1100, 800], ['light', 320, 700], ['dark', 320, 700]] as const) {
+      await setViewport(width, height);
+      const layout = await evaluate<{ overflow: boolean; author: number[] }>(`(() => { document.documentElement.dataset.theme = '${theme}'; ${author}.scrollIntoView({ block: 'center' });
+        const a = ${author}.getBoundingClientRect(), time = ${author}.nextElementSibling.getBoundingClientRect();
+        return { overflow: document.documentElement.scrollWidth > innerWidth, author: [Math.round(a.right), Math.round(time.left), Math.round(a.height)] }; })()`);
+      assert(!layout.overflow && layout.author[0]! <= layout.author[1]! && layout.author[2]! > 0, `Sender name button overlaps at ${width} px in ${theme}: ${JSON.stringify(layout)}`);
+      await settleAnimations();
+      const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 15_000);
+      writeFileSync(join(dist, `ui-room-direct-${theme}-${width}.png`), Buffer.from(shot.data, 'base64'));
+    }
+    await setViewport(1100, 800);
+    await evaluate("document.documentElement.dataset.theme = 'light'; true");
+    for (const [label, button] of [['Active people button', dmButton], ['sender name', author]] as const) {
+      await evaluate(`${button}.click(); true`);
+      await waitFor(`document.getElementById('detail-title').textContent === 'Stiker LAN' && !document.querySelector('#active-members .member-message-button')`, `${label} opens the private conversation`);
+      await openRoom();
+    }
     await peerSide.stop();
     stickerPeer = undefined;
     assert.equal(failures.length, 0, `Renderer errors after stickers: ${failures.join('; ')}`);
