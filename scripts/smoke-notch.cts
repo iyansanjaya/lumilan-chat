@@ -47,6 +47,8 @@ async function main() {
   if (process.env.LUMILAN_SMOKE_SOFTWARE_RENDERING === '1') console.log('Notch smoke: software rendering (sandbox enabled)');
   const child = spawn(executable, [`--remote-debugging-port=${port}`, `--inspect=127.0.0.1:${inspectorPort}`, `--user-data-dir=${profile}`, '--lumilan-ui-smoke', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream',
     ...(process.env.LUMILAN_SMOKE_SOFTWARE_RENDERING === '1' ? ['--disable-gpu'] : []),
+    // Hosted Windows and macOS runners report reduced motion natively; this reproduces them on any desktop.
+    ...(process.env.LUMILAN_SMOKE_REDUCED_MOTION === '1' ? ['--force-prefers-reduced-motion'] : []),
     ...(process.platform === 'linux' ? [`--ozone-platform=${process.env.XDG_SESSION_TYPE === 'wayland' ? 'wayland' : 'x11'}`] : [])], {
     cwd: root, env: { ...process.env, APPDATA: profile, LOCALAPPDATA: profile, ELECTRON_ENABLE_LOGGING: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -963,9 +965,11 @@ async function main() {
     await nativeBrowser.evaluate("(()=>{const proto=smokeElectron.BrowserWindow.prototype,original=proto.setShape;globalThis.notchShapes=[];proto.setShape=function(rects){if(this.webContents.getURL()==='lumilan://app/notch.html')notchShapes.push(rects);return original.call(this,rects)};return true})()");
     await companionPage.evaluate("globalThis.smokeInputs=[]; for(const type of ['pointermove','pointerdown','click','keydown']) document.addEventListener(type,e=>{smokeInputs.push([Date.now(),type,e.target.id,e.clientX,e.clientY,e.isTrusted]); if(smokeInputs.length>30)smokeInputs.shift()})");
     await nativeBrowser.evaluate("globalThis.notchTrace=[]; const w=smokeElectron.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='lumilan://app/notch.html'); ['focus','blur','resize','show','hide'].forEach(e=>w.on(e,()=>notchTrace.push([e,Date.now(),w.getBounds(),w.isFocused()])))");
-    // Lumi's eyes blink once when the pill returns. Real pointer motion on this desktop must not decide the check, and
-    // the OS animation preference is pinned to "no preference" only for it.
-    await companionPage.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
+    // The island's morphs and Lumi's blink are measured below, so the renderer runs with motion allowed whatever the OS says:
+    // CI runners report reduced motion natively. The reduced-motion checks set 'reduce' themselves and return here.
+    const motion = () => companionPage.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
+    // Lumi's eyes blink once when the pill returns. Real pointer motion on this desktop must not decide the check.
+    await motion();
     await companionPage.evaluate("globalThis.smokeBlink=false;document.getElementById('pill-eyes').addEventListener('animationstart',e=>{if(e.animationName==='blink')smokeBlink=true});true");
     // First appearance: Lumi introduces itself once with a queued card, so the badge invites a look until the panel opens.
     await until(() => companionPage.evaluate("window.lumi.state().then(s=>s.items.some(i=>i.key==='lumi:intro'))"), 'one-time Lumi intro queued');
@@ -978,7 +982,6 @@ async function main() {
     // Exact 4/7-second deadlines are tested with mock timers. Allow real pointer activity to renew them on an active desktop.
     await until(() => companionPage.evaluate(`document.body.dataset.mode==='hidden'&&${settled}&&window.lumi.state().then(s=>{const e=document.getElementById('island'),b=e.getBoundingClientRect();return Math.round(b.width)===(s.inset?330:120)&&Math.round(b.height)===(s.bar||30)&&getComputedStyle(e).borderBottomLeftRadius==='10px'&&getComputedStyle(e).backgroundColor==='rgb(0, 0, 0)'&&['::before','::after'].every(p=>{const c=getComputedStyle(document.body,p);return c.width==='10px'&&c.height==='10px'&&c.backgroundImage.startsWith('radial-gradient')})})`), 'manual peek auto hides to the idle pill', 20000);
     await until(() => companionPage.evaluate('globalThis.smokeBlink'), 'pill blink when the pill returns', 2000);
-    await companionPage.send('Emulation.setEmulatedMedia', { features: [] });
     await fixedWindow('Idle pill');
     const pill = await companionPage.evaluate<{clock:string;badge:boolean;eyes:number;display:string}>("({clock:document.getElementById('pill-clock').textContent,badge:document.getElementById('pill-badge').hidden,eyes:document.querySelectorAll('#pill-eyes ellipse').length,display:getComputedStyle(document.getElementById('pill')).display})");
     const expectedClock = await companionPage.evaluate<string[]>("(()=>{const l={id:'id-ID',en:'en-US',ms:'ms-MY',es:'es-ES',ja:'ja-JP',ko:'ko-KR','zh-Hans':'zh-CN','zh-Hant':'zh-TW'}[document.documentElement.lang]||'id-ID',f=new Intl.DateTimeFormat(l,{hour:'2-digit',minute:'2-digit',hourCycle:'h23'}),n=Date.now();return [f.format(n),f.format(n-60000),f.format(n+60000)]})()");
@@ -1845,7 +1848,7 @@ public static class SmokeVolume { public static void Set(float level) { var e = 
     await until(() => companionPage.evaluate("!document.hidden&&document.body.dataset.mode==='expanded'&&getComputedStyle(document.querySelector('header')).visibility==='visible'"), 'reduced-motion panel expanded');
     await hoverNotchHeader();
     assert.equal(await companionPage.evaluate('document.getAnimations().length'), 0, 'Reduced motion ignored');
-    await companionPage.send('Emulation.setEmulatedMedia', { features: [] });
+    await motion();
     // The options menu opens from the bar with focus on its first item, inside the island that grows to hold it; Escape
     // closes the menu, not the panel, and returns focus to its button. Activity is the shortest page.
     await click('tab-activity'); await click('more');
@@ -2094,7 +2097,7 @@ public static class SmokeVolume { public static void Set(float level) { var e = 
       } finally {
         await nativeBrowser.evaluate("(()=>{const d=globalThis.smokeDevices;if(d){delete d.probe;delete d.set;delete d.link;d.options.displays=smokeRealDisplays}for(const k of ['smokeDevices','smokeDeviceFixture','smokeRealDisplays'])delete globalThis[k];return true})()");
         // Hand the checks below the state they expect: their names, theme, settings, and no demo items.
-        await companionPage.send('Emulation.setEmulatedMedia', { features: [] });
+        await motion();
         testPeer.rename('Alice LAN'); testThird.rename('Citra LAN');
         await mainPage.evaluate(`(async()=>{await window.lumilan.rename(${JSON.stringify(appState.me.name)});${theme === undefined ? "delete document.documentElement.dataset.theme" : `document.documentElement.dataset.theme=${JSON.stringify(theme)}`};
           for(const t of (await window.lumilan.tasksState()).items)await window.lumilan.tasks({action:'delete',value:t.id});

@@ -39,6 +39,8 @@ async function main() {
   if (process.env.LUMILAN_SMOKE_SOFTWARE_RENDERING === '1') console.log('Smoke: software rendering (sandbox enabled)');
   const child = spawn(executable, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--lumilan-ui-smoke',
     ...(process.env.LUMILAN_SMOKE_SOFTWARE_RENDERING === '1' ? ['--disable-gpu'] : []),
+    // Hosted Windows and macOS runners report reduced motion natively; this reproduces them on any desktop.
+    ...(process.env.LUMILAN_SMOKE_REDUCED_MOTION === '1' ? ['--force-prefers-reduced-motion'] : []),
     ...(platform === 'linux' ? [`--ozone-platform=${process.env.XDG_SESSION_TYPE === 'wayland' ? 'wayland' : 'x11'}`] : [])], {
     cwd: root,
     env: { ...process.env, APPDATA: profile, LOCALAPPDATA: profile, ELECTRON_ENABLE_LOGGING: '1' },
