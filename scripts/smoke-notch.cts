@@ -21,6 +21,10 @@ const setLocked = async (browser: cdp.CdpConnection, locked: boolean) => {
     await until(() => browser.evaluate(`smokeLocked===${locked}`), 'native D-Bus lock event');
   } else await browser.evaluate(`smokeElectron.powerMonitor.emit('${locked ? 'lock' : 'unlock'}-screen')`);
 };
+// Wakes the app's timers the way a resume does, for checks that only need a timer to fire. On Linux a resume also
+// makes LinuxScreenLock re-read the lock state and count the screen as locked until the desktop answers, which rightly
+// holds notices; the lock and suspend checks emit a real 'resume' and cover that.
+const wakeTimers = "for(const listener of smokeElectron.powerMonitor.listeners('resume'))if(!String(listener).includes('this.refresh()'))listener.call(smokeElectron.powerMonitor);true";
 async function until<T>(check: () => T | Promise<T>, label: string, ms = 12000): Promise<Exclude<T, false | null | undefined | 0 | ''>> {
   const end = Date.now() + ms;
   while (Date.now() < end) { const value = await check(); if (value) return value as Exclude<T, false | null | undefined | 0 | ''>; await delay(100); }
@@ -1510,7 +1514,7 @@ async function main() {
       const shift = `globalThis.smokeWarnNow=Date.now;const smokeShift=${focusUntil}-smokeWarnNow()-40000;Date.now=()=>smokeWarnNow()+smokeShift;`;
       await companionPage.evaluate(`${shift}true`);
       // The warning is for someone not looking at Lumilan; the focused main window above shows the end time instead.
-      await nativeBrowser.evaluate(`smokeIdleSeconds=600;${shift}smokeElectron.powerMonitor.emit('resume');true`);
+      await nativeBrowser.evaluate(`smokeIdleSeconds=600;${shift}${wakeTimers}`);
       await until(() => companionPage.evaluate("document.body.dataset.mode==='compact'&&/^0:\\d\\d/.test(document.getElementById('preview').textContent)"), 'last-minute preview of the session card');
       await islandShot('notch-focus-ending.png');
       assert.equal(await companionPage.evaluate('window.lumi.state().then(s=>s.count)'), queuedBefore, 'The last-minute preview counted as an activity');
@@ -1553,7 +1557,7 @@ async function main() {
     await nativeBrowser.evaluate('globalThis.smokeRealNow=Date.now;true');
     try {
       // One interval later: move the main-process clock and wake the timer the way a resume does.
-      await nativeBrowser.evaluate("Date.now=()=>smokeRealNow()+16*60000;smokeElectron.powerMonitor.emit('resume');true");
+      await nativeBrowser.evaluate(`Date.now=()=>smokeRealNow()+16*60000;${wakeTimers}`);
       const water = await until(async () => { const item = await selected(); return item?.key === 'routine:water' && item; }, 'water reminder in Lumi');
       assert(water.kind === 'routine' && water.title === 'Waktunya minum' && /0[.,]0 \/ 0[.,]5 L/.test(water.body), `Unexpected water card: ${JSON.stringify(water)}`);
       await until(() => companionPage.evaluate("document.body.dataset.mode==='compact'"), 'water reminder previewed');
@@ -1690,7 +1694,7 @@ public static class SmokeVolume { public static void Set(float level) { var e = 
     await until(() => companionPage.evaluate("document.body.dataset.mode==='hidden'"), 'panel closed before the break is due');
     await nativeBrowser.evaluate('globalThis.smokeRealNow=Date.now;true');
     try {
-      const at = async (minutes: number) => nativeBrowser.evaluate(`Date.now=()=>smokeRealNow()+${minutes}*60000;smokeElectron.powerMonitor.emit('resume');true`);
+      const at = async (minutes: number) => nativeBrowser.evaluate(`Date.now=()=>smokeRealNow()+${minutes}*60000;${wakeTimers}`);
       await at(26);
       const due = await until(async () => { const item = await selected(); return item?.key === 'break:due' && item; }, 'break reminder in Lumi');
       assert(due.kind === 'break' && due.title === 'Waktunya rehat' && due.body === 'Istirahat 30 menit', `Unexpected break card: ${JSON.stringify(due)}`);

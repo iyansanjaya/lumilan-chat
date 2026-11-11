@@ -1205,12 +1205,15 @@ async function main() {
     const receivedImage = `document.querySelector('#message-${received.message.id} .sticker-image')`;
     await waitFor(`(() => { const image = ${receivedImage}; return Boolean(image && image.dataset.animated === 'true' && image.complete && image.naturalWidth > 0 && !document.querySelector('#message-${received.message.id} .file-bubble')); })()`, 'received animated sticker shown without a file bubble');
     await waitFor("!document.querySelector('#sticker-button').hidden", 'sticker button for a capable contact');
-    // Reduced motion shows the first frame of an animated sticker instead of the animation.
-    const animatedSource = await evaluate<string>(`${receivedImage}.src`);
-    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
-    await waitFor(`(() => { const image = ${receivedImage}; return image.complete && image.naturalWidth > 0 && image.src && image.src !== ${JSON.stringify(animatedSource)}; })()`, 'still sticker under reduced motion');
+    // Reduced motion shows the first frame of an animated sticker instead of the animation. CI runners can already report
+    // reduced motion natively, so the sticker may start as its still frame: motion is allowed explicitly first, the
+    // animated source is the one main hands out, and the runner's own preference comes back at the end.
+    const animatedSource = await evaluate<string>(`window.lumilan.stickerImage(${JSON.stringify(received.message.id)})`, true);
+    for (const [value, label] of [['no-preference', 'animated sticker with motion allowed'], ['reduce', 'still sticker under reduced motion'], ['no-preference', 'animation back after reduced motion ends']] as const) {
+      await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value }] });
+      await waitFor(`(() => { const image = ${receivedImage}, src = image.getAttribute('src'); return Boolean(src && image.complete && image.naturalWidth > 0 && (src === ${JSON.stringify(animatedSource)}) === ${value === 'no-preference'}); })()`, label);
+    }
     await send('Emulation.setEmulatedMedia', { features: [] });
-    await waitFor(`${receivedImage}.src === ${JSON.stringify(animatedSource)}`, 'animation back after reduced motion ends');
     // An image waiting for Accept raises its sender with a badge while another conversation is open, as a message would;
     // an answer from another surface (the same IPC Lumi and notifications use) takes the badge away.
     const offeredImage = join(profile, 'smoke-offer.png');
